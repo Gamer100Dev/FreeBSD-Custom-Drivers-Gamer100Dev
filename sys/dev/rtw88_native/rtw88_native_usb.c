@@ -166,6 +166,8 @@ rtw88_native_usb_setup(struct rtw88_native_softc *sc)
 	}
 
 	sc->xfers_initialized = 1;
+	/* All three descriptor-indexed bulk-OUT transfers were allocated. */
+	sc->bulkout_num = 3;
 	return (USB_ERR_NORMAL_COMPLETION);
 }
 

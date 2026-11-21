@@ -44,6 +44,7 @@
 
 #define RTW88_NATIVE_REG_CR			0x0100
 #define RTW88_NATIVE_REG_TXDMA_PQ_MAP		0x010c
+#define RTW88_NATIVE_REG_RXFF_BNDY		0x011c
 #define RTW88_NATIVE_REG_FIFOPAGE_CTRL_2		0x0204
 #define RTW88_NATIVE_REG_RQPN_CTRL_2		0x022c
 #define RTW88_NATIVE_REG_FIFOPAGE_INFO_1		0x0230
@@ -136,6 +137,20 @@ struct rtw88_native_softc {
 	uint16_t		tx_len[RTW88_NATIVE_TX_QUEUES];
 	const struct firmware	*firmware;
 	struct rtw88_native_fw_layout fw_layout;
+	uint8_t			cut_version;
+	uint8_t			bulkout_num;
+	uint8_t			qsel_to_ep[20];
+	uint16_t		txff_pg_num;
+	uint16_t		rsvd_pg_num;
+	uint16_t		rsvd_boundary;
+	uint16_t		rsvd_drv_addr;
+	uint16_t		rsvd_h2c_info_addr;
+	uint16_t		rsvd_h2c_sta_info_addr;
+	uint16_t		rsvd_h2cq_addr;
+	uint16_t		rsvd_fw_txbuf_addr;
+	int			powered;
+	int			firmware_running;
+	int			mac_initialized;
 };
 
 usb_error_t	rtw88_native_usb_setup(struct rtw88_native_softc *);
@@ -166,5 +181,11 @@ usb_error_t	rtw88_native_reg_write32(struct rtw88_native_softc *,
 int		rtw88_native_firmware_get(struct rtw88_native_softc *);
 void		rtw88_native_firmware_put(struct rtw88_native_softc *);
 int		rtw88_native_firmware_download(struct rtw88_native_softc *);
+int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
+int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
+int		rtw88_native_mac_init(struct rtw88_native_softc *);
+void		rtw88_native_mac_stop(struct rtw88_native_softc *);
+int		rtw88_native_hw_start(struct rtw88_native_softc *);
+void		rtw88_native_hw_stop(struct rtw88_native_softc *);
 
 #endif /* _IF_RTW88_NATIVE_H_ */

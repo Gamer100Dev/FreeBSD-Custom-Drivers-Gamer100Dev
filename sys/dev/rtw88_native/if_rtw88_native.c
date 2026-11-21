@@ -137,6 +137,13 @@ rtw88_native_detach(device_t dev)
 	int i;
 
 	sc = device_get_softc(dev);
+
+	/*
+	 * Give the explicit hardware stop path a chance to pause TX and power
+	 * down while control requests are still admitted. The future net80211
+	 * stop method must quiesce its queues before detach reaches this point.
+	 */
+	rtw88_native_hw_stop(sc);
 	if (sc->mtx_initialized) {
 		mtx_lock(&sc->mtx);
 		sc->dying = 1;

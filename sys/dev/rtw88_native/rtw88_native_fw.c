@@ -559,7 +559,7 @@ rtw88_native_fw_backup_and_prepare(struct rtw88_native_softc *sc,
 
 	/* Map high queue to high priority and enable only TX DMA for FW loading. */
 	if (rtw88_native_fw_write8(sc, RTW88_NATIVE_REG_TXDMA_PQ_MAP + 1,
-	    0) != 0 ||
+	    (uint8_t)(3U << 6)) != 0 ||
 	    rtw88_native_fw_write8(sc, RTW88_NATIVE_REG_CR,
 	    RTW88_NATIVE_BIT_HCI_TXDMA_EN | RTW88_NATIVE_BIT_TXDMA_EN) != 0 ||
 	    rtw88_native_fw_write32(sc, RTW88_NATIVE_REG_H2CQ_CSR,
@@ -680,8 +680,12 @@ rtw88_native_firmware_download(struct rtw88_native_softc *sc)
 	bool backup_valid;
 	int error, restore_error;
 
-	if (sc == NULL || sc->firmware == NULL || !sc->xfers_initialized)
+	if (sc == NULL || sc->firmware == NULL || !sc->xfers_initialized ||
+	    !sc->powered || sc->dying)
 		return (EINVAL);
+	if (sc->firmware_running)
+		return (EALREADY);
+	sc->firmware_running = 0;
 
 	/* The 8822B image parser supports EMEM, but this hardware sequence is
 	 * only validated here for the standard DMEM+IMEM image layout. */
@@ -729,10 +733,14 @@ rtw88_native_firmware_download(struct rtw88_native_softc *sc)
 		return (error);
 	error = rtw88_native_fw_poll16(sc, RTW88_NATIVE_REG_MCUFW_CTRL,
 	    RTW88_NATIVE_FW_READY_MASK, RTW88_NATIVE_FW_READY);
-	if (error != 0)
+	if (error != 0) {
 		device_printf(sc->dev, "firmware did not reach READY state: %d\n",
 		    error);
-	return (error);
+		(void)rtw88_native_fw_cpu_enable(sc, false);
+		return (error);
+	}
+	sc->firmware_running = 1;
+	return (0);
 
 fail_cpu:
 	/* Leave the MCU download-enable bit clear and return CPU control. */
