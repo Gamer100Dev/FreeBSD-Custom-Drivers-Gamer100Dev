@@ -490,6 +490,7 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define BIT_DMA_BURST_SIZE_512		1U
 #define BIT_DMA_BURST_SIZE_1024		0U
 #define BIT_RXDMA_AGG_PG_TH_RESERVED	(1U << 7)
+#define BIT_DROP_DATA_EN		(1U << 9)
 
 static int rtw88_native_write_mask8(struct rtw88_native_softc *, uint16_t,
     uint8_t, uint8_t);
@@ -505,7 +506,7 @@ rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *sc)
 {
 	enum usb_dev_speed speed;
 	uint8_t rxdma, burst_size;
-	uint16_t agg;
+	uint16_t agg, txdma_offset_chk;
 
 	speed = usbd_get_speed(sc->udev);
 	rxdma = BIT_DMA_BURST_CNT | BIT_DMA_MODE;
@@ -528,6 +529,19 @@ rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *sc)
 	rxdma |= (uint8_t)(burst_size << 4);
 	if (rtw88_native_reg_write8(sc, RTW88_NATIVE_REG_RXDMA_MODE,
 	    rxdma) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/*
+	 * Linux rtw_usb_init_burst_pkt_len() sets BIT_DROP_DATA_EN in
+	 * REG_TXDMA_OFFSET_CHK as part of USB interface configuration.
+	 * Preserve the other offset-check controls while enabling it.
+	 */
+	if (rtw88_native_reg_read16(sc, 0x020c, &txdma_offset_chk) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	txdma_offset_chk |= BIT_DROP_DATA_EN;
+	if (rtw88_native_reg_write16(sc, 0x020c, txdma_offset_chk) !=
+	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
 	if (rtw88_native_write_mask8(sc, RTW88_NATIVE_REG_TXDMA_PQ_MAP,
