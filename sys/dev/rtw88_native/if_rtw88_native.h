@@ -49,6 +49,8 @@
 #define RTW88_NATIVE_USB_REQUEST_INDEX		0x0000
 #define RTW88_NATIVE_USB_TIMEOUT		1000
 #define RTW88_NATIVE_USB_TX_TIMEOUT		5000
+#define RTW88_NATIVE_RX_URB_COUNT		4
+#define RTW88_NATIVE_RX_BUFFER_SIZE		(32 * 1024)
 #define RTW88_NATIVE_MAX_CONTROL_DATA		254
 
 #define RTW88_NATIVE_REG_SYS_CFG1		0x00f0
@@ -136,7 +138,10 @@
 #define RTW88_NATIVE_OCPBASE_DMEM		0x00200000U
 
 enum {
-	RTW88_NATIVE_BULK_RX,
+	RTW88_NATIVE_BULK_RX0,
+	RTW88_NATIVE_BULK_RX1,
+	RTW88_NATIVE_BULK_RX2,
+	RTW88_NATIVE_BULK_RX3,
 	RTW88_NATIVE_BULK_TX0,
 	RTW88_NATIVE_BULK_TX1,
 	RTW88_NATIVE_BULK_TX2,
@@ -268,7 +273,7 @@ struct rtw88_native_softc {
 	uint64_t		intr_count;
 	usb_error_t		intr_error;
 	int			rx_started;
-	uint8_t			rx_buf[32 * 1024];
+	uint8_t			rx_buf[RTW88_NATIVE_RX_URB_COUNT][RTW88_NATIVE_RX_BUFFER_SIZE];
 	uint8_t			rx_last[32 * 1024];
 	uint32_t		rx_last_len;
 	uint64_t		rx_count;
