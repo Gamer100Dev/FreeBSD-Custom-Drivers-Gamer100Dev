@@ -316,10 +316,12 @@ static int
 rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 {
 	struct rtw88_native_softc *sc;
-	char status[512];
+	char status[768];
 	uint8_t cr, rxdma_mode;
 	uint16_t pq_map, agg, rxfltmap2, cck_fa, ofdm_fa;
-	uint32_t rcr, rxfltmap0, cck_crc, ofdm_crc, ht_crc, vht_crc, cca;
+	uint32_t rcr, rxfltmap0, rx_psel, cck_crc, ofdm_crc, ht_crc, vht_crc;
+	uint32_t cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw;
+	uint32_t cca_sel, pdm_fth, cca_2nd, igi_a, igi_b;
 	int channel, error;
 
 	sc = arg1;
@@ -359,6 +361,8 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read16(sc, 0x06a4, &rxfltmap2) !=
 	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0808, &rx_psel) !=
+	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read16(sc, 0x0a5c, &cck_fa) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read16(sc, 0x0f48, &ofdm_fa) !=
@@ -372,6 +376,26 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    rtw88_native_reg_read32(sc, 0x0f0c, &vht_crc) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, 0x0f08, &cca) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0fcc, &cck_cca) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0cb0, &rfe_sel0) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0cb4, &rfe_sel8) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0cbc, &rfe_inv) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0ca0, &trsw) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x082c, &cca_sel) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0830, &pdm_fth) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0838, &cca_2nd) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0c50, &igi_a) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0e50, &igi_b) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		error = EIO;
 
@@ -385,12 +409,17 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	(void)snprintf(status, sizeof(status),
 	    "channel=%d CR=%02x PQ_MAP=%04x RXDMA_MODE=%02x "
 	    "RXDMA_AGG=%04x RCR=%08x RXFLTMAP0=%08x RXFLTMAP2=%04x "
-	    "CCK_FA=%04x OFDM_FA=%04x CCK_CRC=%08x OFDM_CRC=%08x "
-	    "HT_CRC=%08x VHT_CRC=%08x CCA=%08x",
+	    "RX_PSEL=%08x CCK_FA=%04x OFDM_FA=%04x "
+	    "CCK_CRC=%08x OFDM_CRC=%08x HT_CRC=%08x VHT_CRC=%08x "
+	    "OFDM_CCA=%08x CCK_CCA=%08x RFESEL0=%08x RFESEL8=%08x "
+	    "RFEINV=%08x TRSW=%08x CCASEL=%08x PDMFTH=%08x "
+	    "CCA2ND=%08x IGI_A=%08x IGI_B=%08x",
 	    channel, (unsigned int)cr, (unsigned int)pq_map,
 	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr, rxfltmap0,
-	    (unsigned int)rxfltmap2, (unsigned int)cck_fa,
-	    (unsigned int)ofdm_fa, cck_crc, ofdm_crc, ht_crc, vht_crc, cca);
+	    (unsigned int)rxfltmap2, rx_psel, (unsigned int)cck_fa,
+	    (unsigned int)ofdm_fa, cck_crc, ofdm_crc, ht_crc, vht_crc,
+	    cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw, cca_sel,
+	    pdm_fth, cca_2nd, igi_a, igi_b);
 	return (sysctl_handle_string(oidp, status, sizeof(status), req));
 }
 
