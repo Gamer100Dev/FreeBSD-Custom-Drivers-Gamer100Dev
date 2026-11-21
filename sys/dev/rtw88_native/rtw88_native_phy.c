@@ -550,9 +550,10 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (error == 0)
 		error = rtw88_native_reg_write8(sc, REG_CH_DATA_SC, 0) ==
 		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	/* RTW88 MAC_CLK_HW_DEF_80M is zero: clear both select bits. */
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_AFE_CTRL1,
-		    CH_BIT_MAC_CLK_SEL, 2);
+		    CH_BIT_MAC_CLK_SEL, 0);
 	if (error == 0)
 		error = rtw88_native_reg_write8(sc, REG_CH_USTIME_TSF, 80) ==
 		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
