@@ -44,6 +44,29 @@
 #define BIT_RX_PSEL_RST			((1U << 28) | (1U << 29))
 
 #define RTW88_NATIVE_RFREG_MASK		0x000fffffU
+
+#define REG_AGCTR_A			0x0c08
+#define REG_CDDTXP			0x093c
+#define REG_TXPSEL			0x080c
+#define REG_ADCINI			0x0a04
+#define REG_TXPSEL1			0x0940
+#define REG_RXDESC			0x0a2c
+#define REG_AGCTR_B			0x0e08
+#define REG_ANTWT			0x1904
+#define REG_HTSTFWT			0x0800
+#define REG_MRC			0x0850
+#define REG_TRSW			0x0ca0
+
+#define BB_PATH_A			0x01
+#define BB_PATH_B			0x02
+#define BB_PATH_AB			(BB_PATH_A | BB_PATH_B)
+
+#define RF_LUTWA			0x33
+#define RF_LUTWD1			0x3e
+#define RF_LUTWD0			0x3f
+#define RF_LUTWE			0xef
+#define RF_PATH_A_BASE			0x2800
+#define RF_PATH_B_BASE			0x2c00
 #define RTW88_NATIVE_RF_SIPI_A		0x0c90
 #define RTW88_NATIVE_RF_SIPI_B		0x0e90
 
@@ -135,6 +158,162 @@ rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
 		return (EIO);
 	DELAY(13);
 	return (0);
+}
+
+static int
+rtw88_native_phy_rf_read(struct rtw88_native_softc *sc, uint8_t path,
+    uint32_t addr, uint32_t *value)
+{
+	uint16_t base;
+	uint32_t raw;
+
+	if (value == NULL || path >= sc->rf_path_num || path > 1)
+		return (EINVAL);
+	base = path == 0 ? RF_PATH_A_BASE : RF_PATH_B_BASE;
+	if (rtw88_native_reg_read32(sc, base + ((addr & 0xffU) << 2),
+	    &raw) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	*value = raw & RTW88_NATIVE_RFREG_MASK;
+	return (0);
+}
+
+static int
+rtw88_native_phy_config_trx_mode(struct rtw88_native_softc *sc,
+    uint8_t tx_path, uint8_t rx_path)
+{
+	uint8_t txsel, rxsel;
+	uint32_t rf_reg33;
+	int error, counter;
+
+	if ((tx_path & ~BB_PATH_AB) != 0 || (rx_path & ~BB_PATH_AB) != 0 ||
+	    tx_path == 0 || rx_path == 0)
+		return (EINVAL);
+	if (((tx_path | rx_path) & BB_PATH_B) != 0 && sc->rf_path_num < 2)
+		return (ENOTSUP);
+
+	/* Select AGC chains for each enabled RF path. */
+	error = rtw88_native_phy_write_mask32(sc, REG_AGCTR_A, 0x0000ffff,
+	    ((tx_path | rx_path) & BB_PATH_A) ? 0x3231 : 0x1111);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_AGCTR_B,
+		    0x0000ffff,
+		    ((tx_path | rx_path) & BB_PATH_B) ? 0x3231 : 0x1111);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CDDTXP,
+		    (1U << 19) | (1U << 18), 0x3);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_TXPSEL,
+		    (1U << 29) | (1U << 28), 0x1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_TXPSEL,
+		    (1U << 30), 0x1);
+	if (error != 0)
+		return (error);
+
+	if (tx_path & BB_PATH_A) {
+		error = rtw88_native_phy_write_mask32(sc, REG_CDDTXP,
+		    0xfff00000U, 0x001);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_ADCINI,
+			    0xf0000000U, 0x8);
+	} else if (tx_path & BB_PATH_B) {
+		error = rtw88_native_phy_write_mask32(sc, REG_CDDTXP,
+		    0xfff00000U, 0x002);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_ADCINI,
+			    0xf0000000U, 0x4);
+	}
+	if (error != 0)
+		return (error);
+
+	error = rtw88_native_phy_write_mask32(sc, REG_TXPSEL1, 0x0000fff0,
+	    (tx_path == BB_PATH_A || tx_path == BB_PATH_B) ? 0x01 : 0x43);
+	if (error != 0)
+		return (error);
+	txsel = (tx_path << 4) | tx_path;
+	error = rtw88_native_phy_write_mask32(sc, REG_TXPSEL, 0x000000ff,
+	    txsel);
+	if (error != 0)
+		return (error);
+
+	/* Clear RX descriptor path override and select the requested chain(s). */
+	error = rtw88_native_phy_write_mask32(sc, REG_RXDESC,
+	    (1U << 22), 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXDESC,
+		    (1U << 18), 0);
+	if (error != 0)
+		return (error);
+
+	if (rx_path & BB_PATH_A)
+		error = rtw88_native_phy_write_mask32(sc, REG_ADCINI,
+		    0x0f000000U, 0x0);
+	else if (rx_path & BB_PATH_B)
+		error = rtw88_native_phy_write_mask32(sc, REG_ADCINI,
+		    0x0f000000U, 0x5);
+	if (error != 0)
+		return (error);
+
+	rxsel = (rx_path << 4) | rx_path;
+	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL, 0x000000ff,
+	    rxsel);
+	if (error != 0)
+		return (error);
+
+	if (rx_path == BB_PATH_A || rx_path == BB_PATH_B) {
+		error = rtw88_native_phy_write_mask32(sc, REG_ANTWT,
+		    (1U << 16), 0);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_HTSTFWT,
+			    (1U << 28), 0);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_MRC,
+			    (1U << 23), 0);
+	} else {
+		error = rtw88_native_phy_write_mask32(sc, REG_ANTWT,
+		    (1U << 16), 1);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_HTSTFWT,
+			    (1U << 28), 1);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_MRC,
+			    (1U << 23), 1);
+	}
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Configure the 8822B RF-A LUT mode used by the upstream USB chipset
+	 * configuration. Poll RF register 0x33 through the RF direct window.
+	 */
+	for (counter = 0; counter < 100; counter++) {
+		error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWE, 0x80000);
+		if (error == 0)
+			error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWA, 0x00001);
+		if (error != 0)
+			return (error);
+		DELAY(2);
+		error = rtw88_native_phy_rf_read(sc, 0, 0x33, &rf_reg33);
+		if (error != 0)
+			return (error);
+		if (rf_reg33 == 0x00001)
+			break;
+	}
+	if (counter == 100)
+		return (ETIMEDOUT);
+
+	error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWE, 0x80000);
+	if (error == 0)
+		error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWA, 0x00001);
+	if (error == 0)
+		error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWD1, 0x00034);
+	if (error == 0)
+		error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWD0, 0x4080c);
+	if (error == 0)
+		error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWE, 0x00000);
+	if (error == 0)
+		error = rtw88_native_phy_rf_write(sc, 0, RF_LUTWE, 0x00000);
+	return (error);
 }
 
 static int
@@ -352,6 +531,11 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, 0x0974,
 		    (1U << 11) | (1U << 10), 0x3);
+	if (error != 0)
+		return (error);
+
+	error = rtw88_native_phy_config_trx_mode(sc,
+	    sc->antenna_tx, sc->antenna_rx);
 	if (error != 0)
 		return (error);
 

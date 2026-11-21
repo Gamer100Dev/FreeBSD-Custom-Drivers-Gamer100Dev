@@ -361,6 +361,8 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 	cut_mask = (uint8_t)(1U << (cut + 1));
 	sc->cut_version = cut;
 	sc->rf_path_num = (chip_version & (1U << 27)) ? 2 : 1;
+	sc->antenna_tx = sc->rf_path_num > 1 ? 0x03 : 0x01;
+	sc->antenna_rx = sc->antenna_tx;
 
 	error = rtw88_native_mac_pre_system_cfg(sc);
 	if (error != 0)

@@ -205,6 +205,8 @@ struct rtw88_native_softc {
 	struct rtw88_native_efuse efuse;
 	uint8_t			cut_version;
 	uint8_t			rf_path_num;
+	uint8_t			antenna_tx;
+	uint8_t			antenna_rx;
 	uint8_t			bulkout_num;
 	uint8_t			qsel_to_ep[20];
 	uint16_t		txff_pg_num;
