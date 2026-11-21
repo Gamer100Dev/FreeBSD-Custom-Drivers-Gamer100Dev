@@ -90,6 +90,8 @@
 #define RTW88_NATIVE_RX_DESC_W2_C2H		(1U << 28)
 #define RTW88_NATIVE_RX_FCS_LEN		4U
 #define RTW88_NATIVE_RX_MAX_FRAME		11454U
+#define RTW88_NATIVE_RX_PHY_STATUS_SIZE	32U
+#define RTW88_NATIVE_RX_RATE_MAX		0x54U
 
 
 #define RTW88_NATIVE_REG_CR			0x0100
@@ -269,6 +271,15 @@ struct rtw88_native_softc {
 	uint64_t		rx_probe_resp_count;
 	uint64_t		rx_beacon_count;
 	uint64_t		rx_eapol_count;
+	uint64_t		rx_bad_rate_count;
+	uint64_t		rx_bad_drvinfo_count;
+	uint64_t		rx_phy_page0_count;
+	uint64_t		rx_phy_page1_count;
+	uint64_t		rx_phy_unknown_count;
+	uint64_t		rx_no_phy_count;
+	uint64_t		rx_ht_count;
+	uint64_t		rx_vht_count;
+	uint64_t		rx_decrypted_count;
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
