@@ -264,6 +264,12 @@ struct rtw88_native_softc {
 	uint8_t			rf_path_num;
 	uint8_t			antenna_tx;
 	uint8_t			antenna_rx;
+	int				hw_feature_valid;
+	uint8_t			hw_feature_hci;
+	uint8_t			hw_feature_bw;
+	uint8_t			hw_feature_nss;
+	uint8_t			hw_feature_ant_num;
+	uint8_t			hw_feature_protocol;
 	uint8_t			bulkout_num;
 	uint8_t			qsel_to_ep[20];
 	uint16_t		txff_pg_num;
