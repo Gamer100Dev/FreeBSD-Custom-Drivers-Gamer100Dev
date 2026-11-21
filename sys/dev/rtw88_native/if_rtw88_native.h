@@ -23,9 +23,9 @@
 
 struct rtw88_native_softc;
 
-usb_error_t	rtw88_native_reg_read32(struct rtw88_native_softc *,
+usb_error_t	rtw88_native_raw_reg_read32(struct rtw88_native_softc *,
 		    uint16_t, uint32_t *);
-usb_error_t	rtw88_native_reg_write(struct rtw88_native_softc *,
+usb_error_t	rtw88_native_raw_reg_write(struct rtw88_native_softc *,
 		    uint16_t, const void *, uint16_t);
 
 #endif /* _IF_RTW88_NATIVE_H_ */

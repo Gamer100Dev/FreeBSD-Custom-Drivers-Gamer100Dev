@@ -83,7 +83,7 @@ rtw88_native_control(struct rtw88_native_softc *sc, uint8_t request_type,
 }
 
 usb_error_t
-rtw88_native_reg_read32(struct rtw88_native_softc *sc, uint16_t reg,
+rtw88_native_raw_reg_read32(struct rtw88_native_softc *sc, uint16_t reg,
     uint32_t *value)
 {
 	uint32_t value_le;
@@ -102,7 +102,7 @@ rtw88_native_reg_read32(struct rtw88_native_softc *sc, uint16_t reg,
 }
 
 usb_error_t
-rtw88_native_reg_write(struct rtw88_native_softc *sc, uint16_t reg,
+rtw88_native_raw_reg_write(struct rtw88_native_softc *sc, uint16_t reg,
     const void *data, uint16_t len)
 {
 	/*
@@ -157,7 +157,7 @@ rtw88_native_attach(device_t dev)
 	 * used by the upstream RTW88 chip-identification path.  Probe it once
 	 * without changing device state; this tests the native control pipe.
 	 */
-	uerr = rtw88_native_reg_read32(sc, RTW88_NATIVE_REG_SYS_CFG1, &sys_cfg1);
+	uerr = rtw88_native_raw_reg_read32(sc, RTW88_NATIVE_REG_SYS_CFG1, &sys_cfg1);
 	if (uerr == USB_ERR_NORMAL_COMPLETION) {
 		device_printf(dev,
 		    "native vendor-control read succeeded: SYS_CFG1=0x%08x\n",

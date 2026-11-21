@@ -12,10 +12,11 @@ RTL8822BU USB adapter (USB ID 0bda:b812).
 - `usbd_do_request_flags()` for synchronous vendor control transfers;
 - a device-private FreeBSD mutex to serialize control requests.
 
-It performs one read-only request to RTW88 `REG_SYS_CFG1` (0x00f0) at
-attachment. The request format (vendor request 0x05, register in wValue,
-zero wIndex, little-endian data) is taken from the vendored RTW88 USB
-implementation. The driver logs whether the control transfer succeeds.
+It performs one raw, read-only request to RTW88 `REG_SYS_CFG1` (0x00f0) at
+attachment. The raw helper intentionally does not yet implement the RTL8822B
+section-specific side operation (`rtw_usb_reg_sec()` writes register 0x04e0
+for selected register ranges), so it must not be treated as the final chipset
+register-access implementation.
 
 The module deliberately does **not** register a `wlan(4)` interface and does
 not yet download firmware, set up bulk RX/TX, initialise the RTL8822B MAC/PHY,

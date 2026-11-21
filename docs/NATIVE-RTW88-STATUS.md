@@ -10,8 +10,8 @@ A separate native USB kernel module has been introduced at
 
 It targets Realtek USB ID `0bda:b812` with vendor-specific interface
 class/subclass/protocol `ff/ff/ff`. On attach it performs one read-only vendor
-control request for `REG_SYS_CFG1` (0x00f0). It does not change device
-register state.
+raw, read-only control request for `REG_SYS_CFG1` (0x00f0). It does not
+change device register state.
 
 ## API design
 
@@ -26,10 +26,13 @@ The implementation follows the FreeBSD 15.1 Kernel Developer's Manual,
 Official API manual:
 https://man.freebsd.org/cgi/man.cgi?query=usbd_do_request_flags&sektion=9&manpath=FreeBSD+15.1-RELEASE+and+Ports
 
-The register request format is taken from the vendored RTW88 USB code:
-vendor request 0x05, register address in wValue, wIndex 0, and little-endian
-payload. The read-only chip identification register `REG_SYS_CFG1` is
-defined by the vendored RTW88 register header as 0x00f0.
+The raw request format is taken from the vendored RTW88 USB code: vendor
+request 0x05, register address in wValue, wIndex 0, and little-endian payload.
+The read-only chip identification register `REG_SYS_CFG1` is defined by the
+vendored RTW88 register header as 0x00f0. This raw probe deliberately omits
+the RTL8822B-specific `rtw_usb_reg_sec()` side operation (a write to 0x04e0
+for selected register ranges); the complete chip register-access layer must
+implement and validate that sequence separately.
 
 The choice to retain an explicit FreeBSD `net80211` integration stage is
 consistent with existing native FreeBSD wireless drivers such as `rtwn(4)`.
