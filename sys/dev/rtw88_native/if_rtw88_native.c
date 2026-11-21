@@ -431,7 +431,7 @@ rtw88_native_attach(device_t dev)
 	for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 		cv_init(&sc->tx_cv[i], "rtw88 native tx");
 	sc->tx_cv_initialized = 1;
-	mbufq_init(&sc->rx_queue, ifqmaxlen);
+	mbufq_init(&sc->rx_queue, IFQ_MAXLEN);
 	TASK_INIT(&sc->rx_task, 0, rtw88_native_rx_task, sc);
 	cv_init(&sc->io_drain_cv, "rtw88 native io");
 	sc->io_cv_initialized = 1;
