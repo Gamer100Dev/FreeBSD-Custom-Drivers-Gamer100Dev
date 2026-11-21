@@ -20,11 +20,16 @@ USB ID `0bda:b812`.
   exposed as `dev.rtw88_native.N.channel` for channels 1-13.
 - Native net80211 radio registration after successful hardware start, with
   station/monitor VAP creation and 2.4-GHz channel advertisement.
-- Active and passive software scan callbacks: active-scan probe requests are
-  routed through the driver's management-frame transmit callback.
+- Active and passive software scan callbacks: active scans use the
+  FreeBSD net80211 probe-request generator and route those frames through
+  the driver's management-frame transmit callback.
 - Native `ic_raw_xmit` and `ic_transmit` hooks for net80211 management and
   data frames. Frames are queued to a sleepable task and sent using the
   RTL8822B 48-byte TX descriptor and the USB queue-to-endpoint map.
+- The raw transmit callback accepts the normal stack-generated BPF fields
+  used by probe requests and station management frames (priority, legacy
+  management rate, retry count, power and group-frame NOACK). Unsupported
+  radiotap/BPF features and hardware-crypto requests remain rejected.
 - Management/control frames use QSEL 18 on the high-priority OUT endpoint
   (0x05), with a conservative 1-Mbps rate. Data frames currently use TID0/BE
   on the low-priority OUT endpoint (0x08), also at a conservative 1-Mbps rate.
@@ -163,16 +168,21 @@ The default net80211 station state machine also sends authentication and
 association management frames through `ic_raw_xmit`. Ordinary 802.11 data
 frames use `ic_transmit`. Both callbacks enqueue mbufs with their node
 references to a sleepable TX task; the task builds an RTL8822B descriptor and
-uses the correct management or data USB endpoint. The driver registers
-software WEP/TKIP/CCMP crypto, but key handling and WPA exchange have not been
-validated on hardware. Explicit BPF transmit overrides (including hardware
-crypto requests used by shared-key WEP authentication) are rejected; normal
-open-system authentication used by WPA/WPA2 passes zeroed default parameters.
+uses the correct management or data USB endpoint. FreeBSD's ordinary probe
+and station-management helpers populate BPF parameters even for kernel-
+generated frames; the old callback mistakenly rejected these non-zero
+defaults. The current source accepts the standard priority/rate/retry/power
+fields and group-frame NOACK flag, but continues to reject crypto offload and
+other unsupported overrides. The driver registers software WEP/TKIP/CCMP
+crypto, but key handling and WPA exchange have not been validated on hardware.
 
-TX counters distinguish queued frames, successful USB bulk-OUT completions and
-errors. A successful USB completion is not a radio ACK. The initial rate is
-fixed at 1 Mbps; negotiated rate control, QoS queue selection and TX-status
-C2H reports are not implemented.
+TX counters distinguish raw net80211 callback entries/rejections, queued
+frames, successful USB bulk-OUT completions and errors. The new
+`tx_raw_count` and `tx_raw_reject_count` counters make it possible to tell
+whether a scan probe reached the driver and whether its parameters were
+accepted. A successful USB completion is not a radio ACK. The initial rate
+is fixed at 1 Mbps; negotiated rate control, QoS queue selection and
+TX-status C2H reports are not implemented.
 
 The RX callback copies valid non-C2H frames to mbufs, removes the configured
 appended FCS, adds basic channel/RSSI/TSF metadata and defers
@@ -181,15 +191,24 @@ mutex. The user's latest runtime test still showed no completed bulk-IN
 transfer, so an active scan may send probes and channel-hop but will not
 populate results until RX aggregates are actually delivered.
 
-**This revision has not yet been compiled or tested on the adapter.** Active
-probe transmission and management-frame authentication/association handling
-are now implemented in source, but end-to-end connection and WPA security
-remain unverified. Monitor-mode raw injection with BPF transmit overrides is
-intentionally rejected until those parameters are supported.
+The user's most recent local test built and loaded the preceding source
+revision successfully. Hardware startup completed and the net80211 scanner
+visited channels 1-13, but `ifconfig wlan0 list scan` returned no results.
+At that point `tx_queued_count`, `tx_complete_count`, `tx_error_count`,
+`rx_count`, `rx_desc_count`, `rx_data_count` and `rx_input_count` were
+all zero. This was consistent with ordinary probe-request parameters being
+rejected before queueing; the current source adds support for those defaults
+and exposes raw-callback attempt/reject counters. The corrected revision still
+needs a fresh local compile and a repeat hardware test. The prior RX test also
+showed one outstanding bulk-IN submission with no completion, so receive-path
+validation remains a separate blocker.
 
+Active probe TX and the net80211 authentication/association management-frame
+submission path are implemented in source, but neither over-the-air probe
+delivery nor a successful AP connection/WPA exchange has been demonstrated.
 The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
-matching `releng/15.1` source. Build and hardware validation must be reviewed
-after this change before the driver can be considered functional.
+matching `releng/15.1` source. Do not consider the driver functional until
+the corrected revision builds and both TX and RX are verified on the adapter.
 
 ## FreeBSD API basis
 
