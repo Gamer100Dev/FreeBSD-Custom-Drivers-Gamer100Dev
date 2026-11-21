@@ -112,6 +112,43 @@ enum {
 	RTW88_NATIVE_N_XFERS
 };
 
+struct rtw88_native_txdesc_params {
+	uint16_t	packet_size;
+	uint8_t		descriptor_offset;
+	uint8_t		mac_id;
+	uint8_t		queue_select;
+	uint8_t		rate_id;
+	uint8_t		security_type;
+	uint8_t		packet_offset;
+	uint8_t		ampdu_density;
+	uint8_t		hw_ssn_select;
+	uint8_t		ampdu_factor;
+	uint8_t		data_rate;
+	uint8_t		data_rate_fallback_limit;
+	uint8_t		rts_rate;
+	uint8_t		bandwidth;
+	uint8_t		stbc;
+	uint16_t	software_define;
+	uint16_t	software_sequence;
+	uint8_t		dma_aggregate_count;
+	uint8_t		tim_offset;
+	bool		bmc;
+	bool		last_segment;
+	bool		disable_qsel_sequence;
+	bool		more_data;
+	bool		ampdu_enable;
+	bool		special_report;
+	bool		bluetooth_null;
+	bool		use_hardware_rate;
+	bool		disable_rate_fallback;
+	bool		use_rts;
+	bool		nav_use_header;
+	bool		data_short_gi;
+	bool		data_ldpc;
+	bool		rts_short_gi;
+	bool		enable_hardware_sequence;
+};
+
 struct rtw88_native_fw_layout {
 	const uint8_t	*dmem;
 	size_t		dmem_size;
@@ -203,6 +240,9 @@ struct rtw88_native_softc {
 	uint8_t		rx_last_c2h_payload[RTW88_NATIVE_RX_C2H_PAYLOAD_MAX];
 	usb_error_t		rx_error;
 };
+
+int		rtw88_native_txdesc_build(uint8_t *, size_t,
+		    const struct rtw88_native_txdesc_params *);
 
 usb_error_t	rtw88_native_usb_setup(struct rtw88_native_softc *);
 void		rtw88_native_usb_unsetup(struct rtw88_native_softc *);
