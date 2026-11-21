@@ -638,8 +638,7 @@ rtw88_native_phy_set_channel_bb(struct rtw88_native_softc *sc,
 			error = rtw88_native_phy_write_mask32(sc, REG_CLKTRK,
 			    0x1ffe0000, 0x96a);
 		if (error == 0) {
-			error = rtw88_native_reg_write32(sc,
-			    channel == 14 ? REG_TXSF2 : REG_TXSF2,
+			error = rtw88_native_reg_write32(sc, REG_TXSF2,
 			    channel == 14 ? 0x00006577 : 0x384f6577) ==
 			    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
 		}
@@ -753,7 +752,7 @@ rtw88_native_phy_set_channel_bb(struct rtw88_native_softc *sc,
 		if (rtw88_native_reg_read32(sc, REG_ADCCLK,
 		    &value32) != USB_ERR_NORMAL_COMPLETION)
 			return (EIO);
-		value32 = (value32 & 0xefeeff00U) |
+		value32 = (value32 & 0xefeeFE00U) |
 		    ((1U << 6) | RTW88_NATIVE_BW_20);
 		error = rtw88_native_reg_write32(sc, REG_ADCCLK, value32) ==
 		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
@@ -967,9 +966,6 @@ rtw88_native_phy_set_channel_rfe(struct rtw88_native_softc *sc,
 	if (error != 0)
 		return (error);
 
-	if (rtw88_native_reg_read32(sc, REG_TRSW, &trsw) !=
-	    USB_ERR_NORMAL_COMPLETION)
-		return (EIO);
 	if (sc->antenna_rx == BB_PATH_AB || sc->antenna_tx == BB_PATH_AB)
 		trsw = 0xa501;
 	else if (sc->antenna_rx == sc->antenna_tx)
@@ -995,6 +991,8 @@ rtw88_native_phy_set_channel(struct rtw88_native_softc *sc,
 	    bandwidth != RTW88_NATIVE_BW_80 &&
 	    bandwidth != RTW88_NATIVE_BW_5 &&
 	    bandwidth != RTW88_NATIVE_BW_10)
+		return (EINVAL);
+	if (bandwidth == RTW88_NATIVE_BW_80 && rtw88_native_is_2g(channel))
 		return (EINVAL);
 	if ((bandwidth == RTW88_NATIVE_BW_40 &&
 	    primary != 1 && primary != 2) ||
