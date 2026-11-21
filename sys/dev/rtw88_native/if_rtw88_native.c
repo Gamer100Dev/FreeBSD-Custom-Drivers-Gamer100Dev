@@ -387,9 +387,10 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    "RXDMA_AGG=%04x RCR=%08x RXFLTMAP0=%08x RXFLTMAP2=%04x "
 	    "CCK_FA=%04x OFDM_FA=%04x CCK_CRC=%08x OFDM_CRC=%08x "
 	    "HT_CRC=%08x VHT_CRC=%08x CCA=%08x",
-	    channel, cr, pq_map, rxdma_mode, agg, rcr, rxfltmap0,
-	    rxfltmap2, cck_fa, ofdm_fa, cck_crc, ofdm_crc, ht_crc,
-	    vht_crc, cca);
+	    channel, (unsigned int)cr, (unsigned int)pq_map,
+	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr, rxfltmap0,
+	    (unsigned int)rxfltmap2, (unsigned int)cck_fa,
+	    (unsigned int)ofdm_fa, cck_crc, ofdm_crc, ht_crc, vht_crc, cca);
 	return (sysctl_handle_string(oidp, status, sizeof(status), req));
 }
 
