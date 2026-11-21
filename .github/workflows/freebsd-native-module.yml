@@ -3,11 +3,15 @@ name: FreeBSD native RTW88 module build
 on:
   push:
     paths:
+      - "CMakeLists.txt"
+      - "tools/build-native-module.sh"
       - "sys/dev/rtw88_native/**"
       - "sys/modules/rtw88_native/**"
       - ".github/workflows/freebsd-native-module.yml"
   pull_request:
     paths:
+      - "CMakeLists.txt"
+      - "tools/build-native-module.sh"
       - "sys/dev/rtw88_native/**"
       - "sys/modules/rtw88_native/**"
       - ".github/workflows/freebsd-native-module.yml"
@@ -25,17 +29,12 @@ jobs:
           mem: "4096"
           copyback: false
           prepare: |
-            pkg install -y git
+            pkg install -y git cmake
           run: |
             set -eu
             rm -rf /usr/src
             git clone --depth 1 --branch releng/15.1 https://git.freebsd.org/src.git /usr/src
-            mkdir -p /usr/src/sys/dev/rtw88_native
-            cp -R sys/dev/rtw88_native/. /usr/src/sys/dev/rtw88_native/
-            mkdir -p /usr/src/sys/modules/rtw88_native
-            cp -R sys/modules/rtw88_native/. /usr/src/sys/modules/rtw88_native/
-            cd /usr/src/sys/modules/rtw88_native
-            make clean
-            make
-            test -f if_rtw88_native.ko
-            file if_rtw88_native.ko
+            cmake -S . -B build -DFREEBSD_SRCROOT=/usr/src
+            cmake --build build --verbose
+            test -f build/if_rtw88_native.ko
+            file build/if_rtw88_native.ko
