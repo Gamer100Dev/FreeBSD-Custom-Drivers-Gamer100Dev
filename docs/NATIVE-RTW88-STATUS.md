@@ -135,9 +135,10 @@ An additional runtime safeguard remains: if a dual-path configuration is
 reported but RF-B still fails RF18 readback, the channel path switches TX/RX
 to RF-A only, applies the 1R CCA and TRSW settings, verifies RF-A again, and
 continues channel tuning. The fallback logs the B-path SIPI command, RF control
-and WLRF1 state. These changes compile in CI, but neither the firmware report
-contents nor successful scan/RX behaviour has yet been confirmed on the
-physical adapter.
+and WLRF1 state. The RF-A fallback passed the FreeBSD CI build; the new
+firmware-report parser is still being compiled in the current CI run. Neither
+the firmware report contents nor successful scan/RX behaviour has yet been
+confirmed on the physical adapter.
 
 ## Not yet implemented
 
