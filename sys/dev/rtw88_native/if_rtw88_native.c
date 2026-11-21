@@ -273,6 +273,8 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 {
 	struct ieee80211_frame_min *wh;
 	struct rtw88_native_txdesc_params params;
+	struct ieee80211_frame_min whbuf;
+	struct ieee80211_frame_min *wh;
 	uint8_t *buffer;
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
@@ -281,12 +283,14 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	usb_error_t uerr;
 	int error;
 
-	if (m->m_pkthdr.len < sizeof(*wh))
+	if (m->m_pkthdr.len < sizeof(whbuf))
 		return (EINVAL);
 	if (m->m_pkthdr.len > 20 * 1024 - RTW88_NATIVE_TX_DESC_SIZE)
 		return (EFBIG);
 
-	wh = mtod(m, struct ieee80211_frame_min *);
+	/* The header may span mbuf segments; copy only the bounded header. */
+	m_copydata(m, 0, sizeof(whbuf), (caddr_t)&whbuf);
+	wh = &whbuf;
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 	if (type == IEEE80211_FC0_TYPE_MGT ||
 	    type == IEEE80211_FC0_TYPE_CTL)
@@ -311,9 +315,19 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.descriptor_offset = RTW88_NATIVE_TX_DESC_SIZE;
 	params.mac_id = 0;
 	params.queue_select = qsel;
-	/* 2.4-GHz B/20-MHz rate set; DESC_RATE1M is zero. */
-	params.rate_id = 8;		/* RTW_RATEID_B_20M */
-	params.data_rate = 0;		/* DESC_RATE1M */
+	/*
+	 * Use the 2.4-GHz B rate table for management frames at 1 Mbps. Data
+	 * frames start conservatively at 6 Mbps with the BG rate table; station
+	 * rate control and negotiated HT/VHT rates are not ported yet.
+	 */
+	if (type == IEEE80211_FC0_TYPE_MGT ||
+	    type == IEEE80211_FC0_TYPE_CTL) {
+		params.rate_id = 8;	/* RTW_RATEID_B_20M */
+		params.data_rate = 0;	/* DESC_RATE1M */
+	} else {
+		params.rate_id = 6;	/* RTW BG legacy rate table */
+		params.data_rate = 4;	/* DESC_RATE6M */
+	}
 	params.use_hardware_rate = true;
 	params.disable_rate_fallback = true;
 	params.last_segment = true;
