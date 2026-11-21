@@ -230,6 +230,60 @@ rtw88_native_tx_enqueue(struct rtw88_native_softc *sc, struct mbuf *m)
 	return (error);
 }
 
+/*
+ * FreeBSD's normal scanner and STA management state machine populate the
+ * BPF parameter structure even for ordinary kernel-generated frames. For
+ * example, ProbeReq uses ibp_pri/rate0/try0/power and sets NOACK for its
+ * broadcast destination; authentication and association use VO, a
+ * management rate, retries and power. Those are not user radiotap overrides.
+ *
+ * Accept those stack-generated defaults, while rejecting descriptor features
+ * this first TX path cannot honour (crypto offload, RTS/CTS, short preamble,
+ * explicit retry series, data padding and FCS). The TX descriptor currently
+ * uses a conservative fixed 1-Mbps rate; retry/power/rate requests are
+ * validated but not yet applied.
+ */
+static int
+rtw88_native_raw_params_supported(const struct ieee80211_bpf_params *params,
+    struct mbuf *m)
+{
+	static const uint8_t legacy_rates[] = {
+		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
+	};
+	struct ieee80211_frame_min wh;
+	unsigned int i;
+
+	if (params == NULL)
+		return (1);
+	if (params->ibp_vers != 0 || params->ibp_len != 0 ||
+	    (params->ibp_flags & ~IEEE80211_BPF_NOACK) != 0 ||
+	    params->ibp_pri > WME_AC_VO ||
+	    params->ibp_try0 > 15 || params->ibp_ctsrate != 0 ||
+	    params->ibp_try1 != 0 || params->ibp_rate1 != 0 ||
+	    params->ibp_try2 != 0 || params->ibp_rate2 != 0 ||
+	    params->ibp_try3 != 0 || params->ibp_rate3 != 0)
+		return (0);
+
+	if (params->ibp_rate0 != 0) {
+		for (i = 0; i < nitems(legacy_rates); i++) {
+			if (params->ibp_rate0 == legacy_rates[i])
+				break;
+		}
+		if (i == nitems(legacy_rates))
+			return (0);
+	}
+
+	/* NOACK is only accepted for a group-addressed frame. */
+	if ((params->ibp_flags & IEEE80211_BPF_NOACK) != 0) {
+		if (m == NULL || m->m_pkthdr.len < sizeof(wh))
+			return (0);
+		m_copydata(m, 0, sizeof(wh), (caddr_t)&wh);
+		if (!IEEE80211_IS_MULTICAST(wh.i_addr1))
+			return (0);
+	}
+	return (1);
+}
+
 static int
 rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
     const struct ieee80211_bpf_params *params)
@@ -242,27 +296,26 @@ rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 			m_freem(m);
 		return (EINVAL);
 	}
-	/*
-	 * net80211 passes a zeroed params structure for ordinary auth/assoc
-	 * management frames. Reject non-default BPF/radiotap overrides until the
-	 * driver can honour rate, retry, crypto, RTS/CTS and padding controls.
-	 */
-	if (params != NULL &&
-	    (params->ibp_vers != 0 || params->ibp_len != 0 ||
-	    params->ibp_flags != 0 || params->ibp_pri != 0 ||
-	    params->ibp_try0 != 0 || params->ibp_rate0 != 0 ||
-	    params->ibp_power != 0 || params->ibp_ctsrate != 0 ||
-	    params->ibp_try1 != 0 || params->ibp_rate1 != 0 ||
-	    params->ibp_try2 != 0 || params->ibp_rate2 != 0 ||
-	    params->ibp_try3 != 0 || params->ibp_rate3 != 0)) {
+	sc = ni->ni_ic->ic_softc;
+	mtx_lock(&sc->mtx);
+	sc->tx_raw_count++;
+	mtx_unlock(&sc->mtx);
+
+	if (!rtw88_native_raw_params_supported(params, m)) {
+		mtx_lock(&sc->mtx);
+		sc->tx_raw_reject_count++;
+		mtx_unlock(&sc->mtx);
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
 		return (EOPNOTSUPP);
 	}
-	sc = ni->ni_ic->ic_softc;
+
 	error = rtw88_native_tx_enqueue(sc, m);
 	if (error != 0) {
+		mtx_lock(&sc->mtx);
+		sc->tx_raw_reject_count++;
+		mtx_unlock(&sc->mtx);
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
@@ -783,6 +836,14 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_input_drop_count", CTLFLAG_RD, &sc->rx_input_drop_count, 0,
 	    "Number of RX frames discarded before net80211 input");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_raw_count", CTLFLAG_RD, &sc->tx_raw_count, 0,
+	    "Number of raw net80211 frames passed to the driver");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_raw_reject_count", CTLFLAG_RD, &sc->tx_raw_reject_count, 0,
+	    "Number of raw net80211 frames rejected before queueing");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_queued_count", CTLFLAG_RD, &sc->tx_queued_count, 0,
