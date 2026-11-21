@@ -1,8 +1,10 @@
-# LinuxKPI compatibility changes
+# LinuxKPI USB compatibility sources
 
-Keep only the LinuxKPI files that are modified or needed to understand the driver integration. Record their original FreeBSD paths and base revision.
+The actual FreeBSD stable/15 LinuxKPI USB compatibility implementation is vendored at:
 
-Current area of interest:
-- `sys/compat/linuxkpi/common/src/linuxkpi_usb.c`
+- `vendor/freebsd-stable-15/sys/compat/linuxkpi/common/src/linux_usb.c`
+- `vendor/freebsd-stable-15/sys/compat/linuxkpi/common/include/linux/usb.h`
 
-The local USB unlink guard experiment and any follow-up URB/control-message changes must be represented as small, reviewable patches.
+The FreeBSD upstream filename is `linux_usb.c`. Local experimental changes must be added as focused patches against this exact base revision, not assumed to be present in the imported upstream snapshot.
+
+See `upstream/IMPORT-MANIFEST.md`.
