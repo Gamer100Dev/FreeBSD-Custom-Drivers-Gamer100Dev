@@ -970,8 +970,6 @@ fail:
 	mtx_lock(&sc->mtx);
 	sc->tx_enabled = 0;
 	mtx_unlock(&sc->mtx);
-	rtw88_native_usb_rx_stop(sc);
-	rtw88_native_usb_intr_stop(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	rtw88_native_firmware_put(sc);
@@ -991,6 +989,9 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	mtx_lock(&sc->mtx);
 	sc->tx_enabled = 0;
 	mtx_unlock(&sc->mtx);
+	/* Stop new USB completions before draining deferred packet work. */
+	rtw88_native_usb_rx_stop(sc);
+	rtw88_native_usb_intr_stop(sc);
 	if (sc->net80211_attached) {
 		TAILQ_FOREACH(vap, &sc->ic.ic_vaps, iv_next)
 			ieee80211_stop(vap);
