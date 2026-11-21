@@ -838,7 +838,7 @@ rtw88_native_attach(device_t dev)
 		return (ENXIO);
 	}
 	device_printf(dev,
-	    "allocated native USB pipes: 1 bulk IN, 3 bulk OUT, 1 interrupt IN (idle)\n");
+	    "allocated native USB pipes: 4 bulk IN, 3 bulk OUT, 1 interrupt IN (idle)\n");
 
 	/*
 	 * REG_SYS_CFG1 (0x00f0) is the read-only system configuration register
