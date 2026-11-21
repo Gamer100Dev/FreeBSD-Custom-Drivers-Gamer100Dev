@@ -244,6 +244,25 @@ rtw88_native_attach(device_t dev)
 	    "native FreeBSD USB transport attached (RTL8822BU, 0bda:b812)\n");
 
 	/*
+	 * Allocate transfer resources from the active interface descriptors.
+	 * UE_ADDR_ANY and ep_index select endpoints by transfer type/direction;
+	 * literal endpoint addresses are intentionally not hard-coded.
+	 */
+	uerr = usbd_transfer_setup(sc->udev, &sc->iface_index, sc->xfer,
+	    rtw88_native_xfer_config, RTW88_NATIVE_N_XFERS, sc, &sc->mtx);
+	if (uerr != USB_ERR_NORMAL_COMPLETION) {
+		device_printf(dev, "could not allocate native USB transfers: %s\n",
+		    usbd_errstr(uerr));
+		usbd_transfer_unsetup(sc->xfer, RTW88_NATIVE_N_XFERS);
+		mtx_destroy(&sc->mtx);
+		sc->mtx_initialized = 0;
+		return (ENXIO);
+	}
+	sc->xfers_initialized = 1;
+	device_printf(dev,
+	    "allocated native USB pipes: 1 bulk IN, 3 bulk OUT, 1 interrupt IN (idle)\n");
+
+	/*
 	 * REG_SYS_CFG1 (0x00f0) is the read-only system configuration register
 	 * used by the upstream RTW88 chip-identification path.  Probe it once
 	 * without changing device state; this tests the native control pipe.
