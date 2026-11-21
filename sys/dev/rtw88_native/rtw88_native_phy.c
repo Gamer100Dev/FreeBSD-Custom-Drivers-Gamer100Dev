@@ -484,7 +484,7 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
     uint8_t channel)
 {
 	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg;
-	uint32_t igi_a, igi_b, value32;
+	uint32_t igi, value32;
 	uint8_t value8;
 	int error, path;
 
@@ -594,6 +594,46 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
 		return (EIO);
 
+/*
+	 * Match rtw8822b_toggle_igi(): read the Path-A gain index, apply that
+	 * value to both paths, and pulse RX path selection before CCA setup.
+	 */
+	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	igi &= CH_BIT_MAC_RXIGI;
+	if (igi < 2)
+		return (EIO);
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+	    CH_BIT_MAC_RXIGI, igi - 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+		    CH_BIT_MAC_RXIGI, igi);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+		    CH_BIT_MAC_RXIGI, igi - 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+		    CH_BIT_MAC_RXIGI, igi);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    0x000000ffU, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    0x000000ffU,
+		    sc->antenna_rx | (sc->antenna_rx << 4));
+	if (error != 0)
+		return (error);
+
+	/* RFE-option-3 / IFEM-ext CCA thresholds, two receive paths. */
+	if (rtw88_native_reg_write32(sc, REG_CH_CCASEL, 0x75da8010U) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_CH_PDMFTH, 0x97a0eaacU) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_CH_CCA2ND, 0x86666341U) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
 	/*
 	 * RFE option 3 is IFEM-ext. These are shared chip-level RFE controls;
 	 * upstream rtw8822b_set_channel_rfe_ifem() writes only the base addresses.
@@ -610,49 +650,6 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW,
 		    0x0000ffffU, 0xa501);
-	if (error != 0)
-		return (error);
-
-	/* RFE-option-3 / IFEM-ext CCA thresholds, two receive paths. */
-	if (rtw88_native_reg_write32(sc, REG_CH_CCASEL, 0x75da8010U) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_write32(sc, REG_CH_PDMFTH, 0x97a0eaacU) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_write32(sc, REG_CH_CCA2ND, 0x86666341U) !=
-	    USB_ERR_NORMAL_COMPLETION)
-		return (EIO);
-
-	/*
-	 * Match rtw8822b_toggle_igi(): toggle the gain index on both RF paths,
-	 * then pulse RX path selection with the configured dual-chain value.
-	 */
-	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_read32(sc, REG_CH_RXIGI_B, &igi_b) !=
-	    USB_ERR_NORMAL_COMPLETION)
-		return (EIO);
-	igi_a &= CH_BIT_MAC_RXIGI;
-	igi_b &= CH_BIT_MAC_RXIGI;
-	if (igi_a < 2 || igi_b < 2)
-		return (EIO);
-	error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
-	    CH_BIT_MAC_RXIGI, igi_a - 2);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
-		    CH_BIT_MAC_RXIGI, igi_b - 2);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
-		    CH_BIT_MAC_RXIGI, igi_a);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
-		    CH_BIT_MAC_RXIGI, igi_b);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
-		    0x000000ffU, 0);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
-		    0x000000ffU,
-		    sc->antenna_rx | (sc->antenna_rx << 4));
 	if (error != 0)
 		return (error);
 
