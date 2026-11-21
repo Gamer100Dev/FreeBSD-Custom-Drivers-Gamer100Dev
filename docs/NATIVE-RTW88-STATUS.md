@@ -5,7 +5,7 @@ Development branch: `work/native-rtw88-usb`
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
 
-## Implemented in source (not build-tested)
+## Implemented in source
 
 ### USB and register layer
 
