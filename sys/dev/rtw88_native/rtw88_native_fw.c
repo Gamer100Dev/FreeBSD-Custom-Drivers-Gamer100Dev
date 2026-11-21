@@ -298,8 +298,9 @@ static int
 rtw88_native_fw_send_reserved_packet(struct rtw88_native_softc *sc,
     uint16_t page, const uint8_t *data, size_t size)
 {
-	uint8_t *packet, *desc;
-	uint16_t old_page, page_state, wire_size, checksum, word;
+	struct rtw88_native_txdesc_params params;
+	uint8_t *packet;
+	uint16_t old_page, page_state, wire_size;
 	uint8_t old_bcn, old_cr1, value;
 	size_t pad, packet_size, i;
 	int error, restore_error;
@@ -314,28 +315,22 @@ rtw88_native_fw_send_reserved_packet(struct rtw88_native_softc *sc,
 	if (packet == NULL)
 		return (ENOMEM);
 
-	desc = packet;
-	{
-		uint32_t word32;
-
-		word32 = htole32((uint32_t)wire_size |
-		    ((uint32_t)RTW88_NATIVE_TX_DESC_SIZE << 16) | (1U << 26));
-		memcpy(desc + 0, &word32, sizeof(word32));
-		word32 = htole32(RTW88_NATIVE_TXQSEL_BEACON << 8);
-		memcpy(desc + 4, &word32, sizeof(word32));
-	}
+	/*
+	 * Firmware DMA uses a BEACON/high-priority descriptor, with the payload
+	 * beginning immediately after the 48-byte RTL8822B descriptor area.
+	 * The extra USB-boundary byte is padding only and is not part of the
+	 * firmware segment copied by DDMA.
+	 */
+	bzero(&params, sizeof(params));
+	params.packet_size = wire_size;
+	params.descriptor_offset = RTW88_NATIVE_TX_DESC_SIZE;
+	params.queue_select = RTW88_NATIVE_TXQSEL_BEACON;
+	params.last_segment = true;
+	error = rtw88_native_txdesc_build(packet,
+	    RTW88_NATIVE_TX_DESC_SIZE, &params);
+	if (error != 0)
+		goto out;
 	memcpy(packet + RTW88_NATIVE_TX_DESC_SIZE, data, size);
-	/* The extra byte is USB packet-boundary padding, not firmware data. */
-
-	checksum = 0;
-	for (i = 0; i < RTW88_NATIVE_TX_DESC_CHECKSUM_LEN / 2; i++) {
-		memcpy(&word, desc + i * 2, sizeof(word));
-		checksum ^= le16toh(word);
-	}
-	{
-		uint32_t word32 = htole32(checksum);
-		memcpy(desc + 28, &word32, sizeof(word32));
-	}
 
 	/* Save the active beacon-page state before temporarily selecting page. */
 	error = rtw88_native_fw_read16(sc,
