@@ -415,6 +415,8 @@ rtw88_native_attach(device_t dev)
 	for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 		cv_init(&sc->tx_cv[i], "rtw88 native tx");
 	sc->tx_cv_initialized = 1;
+	mbufq_init(&sc->rx_queue, ifqmaxlen);
+	TASK_INIT(&sc->rx_task, 0, rtw88_native_rx_task, sc);
 	cv_init(&sc->io_drain_cv, "rtw88 native io");
 	sc->io_cv_initialized = 1;
 
@@ -521,6 +523,18 @@ rtw88_native_attach(device_t dev)
 	    "Number of malformed/truncated RX records");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_input_count", CTLFLAG_RD, &sc->rx_input_count, 0,
+	    "Number of RX frames passed to net80211");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_input_drop_count", CTLFLAG_RD, &sc->rx_input_drop_count, 0,
+	    "Number of RX frames discarded before net80211 input");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "net80211_attached", CTLFLAG_RD, &sc->net80211_attached, 0,
+	    "Whether the net80211 radio has been attached");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_submit_count", CTLFLAG_RD, &sc->rx_submit_count, 0,
 	    "Number of bulk-IN transfer submit attempts");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
@@ -579,6 +593,18 @@ rtw88_native_detach(device_t dev)
 		mtx_unlock(&sc->mtx);
 	}
 	rtw88_native_hw_stop(sc);
+	rtw88_native_net80211_detach(sc);
+	taskqueue_drain(taskqueue_thread, &sc->rx_task);
+	mtx_lock(&sc->mtx);
+	{
+		struct mbuf *m;
+
+		while ((m = mbufq_dequeue(&sc->rx_queue)) != NULL) {
+			sc->rx_input_drop_count++;
+			m_freem(m);
+		}
+	}
+	mtx_unlock(&sc->mtx);
 	if (sc->mtx_initialized) {
 		mtx_lock(&sc->mtx);
 		sc->hw_started = 0;
@@ -627,5 +653,6 @@ static driver_t rtw88_native_driver = {
 
 DRIVER_MODULE(rtw88_native, uhub, rtw88_native_driver, NULL, NULL);
 MODULE_DEPEND(rtw88_native, usb, 1, 1, 1);
+MODULE_DEPEND(rtw88_native, wlan, 1, 1, 1);
 MODULE_VERSION(rtw88_native, 1);
 USB_PNP_HOST_INFO(rtw88_native_devs);
