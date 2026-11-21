@@ -138,10 +138,20 @@ An additional runtime safeguard remains: if a dual-path configuration is
 reported but RF-B still fails RF18 readback, the channel path switches TX/RX
 to RF-A only, applies the 1R CCA and TRSW settings, verifies RF-A again, and
 continues channel tuning. The fallback logs the B-path SIPI command, RF control
-and WLRF1 state. The RF-A fallback passed the FreeBSD CI build; the new
+and WLRF1 state. The same diagnostics exposed a more fundamental PHY initialisation error:
+`rtw88_native_phy_write_mask32()` expects an unshifted field value, but the
+WLRF1 enable mask (bits 24-26) and RXPSEL reset-release mask (bits 28-29) had
+been passed as already-positioned values. The helper shifted them a second
+time, resulting in WLRF1 remaining zero and RX path reset not being released.
+The native sequence now passes field values `0x7` and `0x3` respectively and
+checks both registers immediately after writing. This mirrors Linux RTW88's
+`rtw8822b_phy_set_param()` use of `rtw_write32_set()` for those same enables.
+
+The RF-A fallback passed the FreeBSD CI build; the new
 firmware-report parser is still being compiled in the current CI run. Neither
 the firmware report contents nor successful scan/RX behaviour has yet been
-confirmed on the physical adapter.
+confirmed on the physical adapter. The latest CI job also includes a startup
+ordering change that registers net80211 before the four RX requests are posted.
 
 ## Not yet implemented
 
