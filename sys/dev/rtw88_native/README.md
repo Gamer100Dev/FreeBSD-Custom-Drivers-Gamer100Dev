@@ -205,6 +205,16 @@ This branch's EDCCA and scan-gain changes still require physical validation
 on the RTL8822BU; a successful compile does not establish that networks will
 be discovered in every RF environment.
 
+Linux RTW88 also sends two mandatory 3081 firmware-offload H2C packets after
+USB HCI startup. The native driver now sends the matching General Info
+(`0x0d`) packet with the reserved firmware TX-buffer boundary and PHYDM Info
+(`0x11`) packet with the RFE, 2T2R RF type, silicon cut and antenna paths.
+Both are transferred as 32-byte H2C payloads with the 48-byte RTL8822B TX
+descriptor on the H2C queue. The new `fw_h2c_general_count`,
+`fw_h2c_phydm_count`, `fw_h2c_error_count` and `fw_h2c_error` sysctls
+report whether each command completed on USB. Firmware H2C delivery and
+actual network discovery still require physical validation.
+
 The channel setup also uses only the shared base RFE control registers for
 RFE option 3, matching upstream `rtw8822b_set_channel_rfe_ifem()`.
 It does not write speculative `+0x200` copies of those controls.

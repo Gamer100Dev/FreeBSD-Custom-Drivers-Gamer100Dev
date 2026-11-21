@@ -994,6 +994,16 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
+
+	/*
+	 * Linux main.c sends General Info and PHYDM Info immediately after
+	 * HCI start. The firmware uses these to configure its reserved TX
+	 * boundary and the 8822B RFE/RF/antenna topology.
+	 */
+	error = rtw88_native_firmware_send_initial_h2c(sc);
+	if (error != 0)
+		goto fail;
+
 	error = rtw88_native_net80211_attach(sc);
 	if (error != 0)
 		goto fail;

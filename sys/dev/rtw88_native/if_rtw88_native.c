@@ -743,6 +743,22 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_input_drop_count", CTLFLAG_RD, &sc->rx_input_drop_count, 0,
 	    "Number of RX frames discarded before net80211 input");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_general_count", CTLFLAG_RD, &sc->fw_h2c_general_count, 0,
+	    "Successfully transmitted General Info firmware H2C packets");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_phydm_count", CTLFLAG_RD, &sc->fw_h2c_phydm_count, 0,
+	    "Successfully transmitted PHYDM Info firmware H2C packets");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_error_count", CTLFLAG_RD, &sc->fw_h2c_error_count, 0,
+	    "Failed firmware H2C USB transfers");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_error", CTLFLAG_RD, &sc->fw_h2c_error, 0,
+	    "Last firmware H2C USB transfer error");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "net80211_attached", CTLFLAG_RD, &sc->net80211_attached, 0,
