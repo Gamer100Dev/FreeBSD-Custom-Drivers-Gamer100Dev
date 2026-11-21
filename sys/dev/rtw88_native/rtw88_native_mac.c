@@ -1071,15 +1071,20 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	/* Start the event endpoint and raw bulk receive after PHY table setup. */
+	/*
+	 * Register the net80211 radio before posting receive requests, matching
+	 * Linux RTW88's order (rtw_register_hw() before rtw_usb_setup_rx()).
+	 * This prevents a first RX completion from being consumed while the
+	 * native net80211 input path is still detached.
+	 */
+	error = rtw88_native_net80211_attach(sc);
+	if (error != 0)
+		goto fail;
 	error = rtw88_native_usb_intr_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
 	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
-		goto fail;
-	error = rtw88_native_net80211_attach(sc);
-	if (error != 0)
 		goto fail;
 	mtx_lock(&sc->mtx);
 	sc->tx_enabled = 1;
