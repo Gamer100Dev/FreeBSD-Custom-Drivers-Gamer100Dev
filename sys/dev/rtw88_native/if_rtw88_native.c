@@ -348,6 +348,9 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	uint16_t txdma_offset_chk;
 	uint8_t trxff_bndy_hi;
 	uint32_t rxpkt_num, rxdma_status, rxdma_dpr;
+	uint32_t sys_sdio_ctrl, led_cfg;
+	uint8_t rfe_ctrl_e, rfesel_ctrl_hi, rfe_inv16;
+	int wifi_coex_initialized;
 	uint16_t intr_len;
 	size_t i;
 	int channel, error;
@@ -372,6 +375,7 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	 */
 	sc->hw_busy = 1;
 	channel = sc->current_channel;
+	wifi_coex_initialized = sc->wifi_only_coex_initialized;
 	intr_len = MIN(sc->last_intr_len, sizeof(intr_snapshot));
 	memcpy(intr_snapshot, sc->last_intr, intr_len);
 	mtx_unlock(&sc->mtx);
@@ -450,6 +454,16 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    rtw88_native_reg_read32(sc, 0x0288, &rxdma_status) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, 0x028c, &rxdma_dpr) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0070, &sys_sdio_ctrl) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x004c, &led_cfg) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read8(sc, 0x0974, &rfe_ctrl_e) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read8(sc, 0x1991, &rfesel_ctrl_hi) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read8(sc, 0x0cbe, &rfe_inv16) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		error = EIO;
 
@@ -479,7 +493,9 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    "EDCCA_SOURCE=%08x EDCCA_POW_MA=%08x EDCCA_DECISION=%08x "
 	    "TXDMA_OFFSET_CHK=%04x TRXFF_BNDY_HI=%02x "
 	    "RXPKT_NUM=%08x RXDMA_STATUS=%08x "
-	    "RXDMA_DPR=%08x INTR_LEN=%u INTR_DATA=%s",
+	    "RXDMA_DPR=%08x WIFI_COEX=%d SYS_SDIO_CTRL=%08x "
+	    "LED_CFG=%08x RFE_CTRL_E=%02x RFESEL_CTRL_HI=%02x "
+	    "RFE_INV16=%02x INTR_LEN=%u INTR_DATA=%s",
 	    channel, (unsigned int)cr, (unsigned int)pq_map,
 	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr,
 	    (unsigned int)rxfltmap0, (unsigned int)rxfltmap1,
@@ -489,7 +505,10 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    pdm_fth, cca_2nd, igi_a, igi_b, edcca_th, tx_ptcl_ctrl,
 	    edcca_rd_ctrl, edcca_source, edcca_pow_ma, edcca_decision,
 	    (unsigned int)txdma_offset_chk, (unsigned int)trxff_bndy_hi,
-	    rxpkt_num, rxdma_status, rxdma_dpr, (unsigned int)intr_len, intr_hex);
+	    rxpkt_num, rxdma_status, rxdma_dpr, wifi_coex_initialized,
+	    sys_sdio_ctrl, led_cfg, (unsigned int)rfe_ctrl_e,
+	    (unsigned int)rfesel_ctrl_hi, (unsigned int)rfe_inv16,
+	    (unsigned int)intr_len, intr_hex);
 	return (sysctl_handle_string(oidp, status, sizeof(status), req));
 }
 
@@ -759,6 +778,11 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "fw_h2c_error", CTLFLAG_RD, &sc->fw_h2c_error, 0,
 	    "Last firmware H2C USB transfer error");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "wifi_only_coex_initialized", CTLFLAG_RD,
+	    &sc->wifi_only_coex_initialized, 0,
+	    "Whether the RTL8822B Wi-Fi-only WLG antenna route is configured");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "net80211_attached", CTLFLAG_RD, &sc->net80211_attached, 0,
