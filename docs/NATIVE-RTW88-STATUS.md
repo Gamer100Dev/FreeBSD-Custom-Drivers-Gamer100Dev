@@ -59,6 +59,10 @@ USB ID `0bda:b812`.
 - Read-only counters for aggregates, descriptors, data frames, C2H records
   and malformed/truncated RX records; last C2H ID/sequence/length are exposed
   through device sysctls.
+- A write-triggered `rx_diag` sysctl reads back live CR, TXDMA/RXDMA,
+  receive-filter, baseband/RF-control, RX-gain and both RF channel registers.
+  It serializes the register snapshot against the scanner's channel callback
+  and logs both the receive-transfer counters and each register value.
 - Checked little-endian 8/16/32-bit register access.
 - RTL8822B USB security-section side operation at `0x04e0` for the
   register ranges used by upstream RTW88.
@@ -199,9 +203,10 @@ At that point `tx_queued_count`, `tx_complete_count`, `tx_error_count`,
 all zero. This was consistent with ordinary probe-request parameters being
 rejected before queueing; the current source adds support for those defaults
 and exposes raw-callback attempt/reject counters. The corrected revision still
-needs a fresh local compile and a repeat hardware test. The prior RX test also
-showed one outstanding bulk-IN submission with no completion, so receive-path
-validation remains a separate blocker.
+needs a fresh local compile and a repeat hardware test. The current branch also
+adds `sysctl dev.rtw88_native.0.rx_diag=1` to read back the live RX/MAC/RF
+register state; this is the next diagnostic step because the RX bulk-IN request
+remains outstanding without a completion.
 
 Active probe TX and the net80211 authentication/association management-frame
 submission path are implemented in source, but neither over-the-air probe
