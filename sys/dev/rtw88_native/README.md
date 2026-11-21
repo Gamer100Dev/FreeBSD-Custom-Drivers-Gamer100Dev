@@ -183,6 +183,12 @@ change hardware configuration.
 The native 2.4-GHz channel sequence follows upstream ordering: baseband/ADC,
 MAC channel width and timing, RF synthesizer, RX DFIR, RX gain-index toggle,
 CCA thresholds, then RFE routing.
+The USB RX interface setup follows Linux RTW88's post-PHY HCI stage:
+RX burst size is programmed after the PHY tables, and
+`REG_TXDMA_OFFSET_CHK.BIT_DROP_DATA_EN` is enabled before bulk-IN is armed.
+The RXDMA status, packet count, data pointer and offset-check registers are
+exposed in `rx_hw_status` to distinguish PHY detection from a packet that
+actually reaches USB DMA.
 
 The receive bring-up also ports the RTL8822B EDCCA/adaptivity initialization
 from Linux RTW88: both EDCCA thresholds are initialized to 0x7f, MAC EDCCA
