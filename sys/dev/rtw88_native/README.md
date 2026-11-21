@@ -90,6 +90,12 @@ metadata. It does not yet decode PHY status, perform C2H dispatch or inject
 802.11 frames into net80211. The independent interrupt-IN endpoint remains
 a raw diagnostic capture.
 
+The MAC setup programs `RXFLTMAP0`, `RXFLTMAP1`, and `RXFLTMAP2` as
+separate 16-bit registers, matching the upstream RTL8822B initialization
+rather than writing the adjacent filter maps as one combined 32-bit value.
+The diagnostic reports each map independently so their readback can be
+compared against the programmed values.
+
 ## Not yet implemented
 
 - Full RFE/board selection and PHY/BB/RF register-table programming.
