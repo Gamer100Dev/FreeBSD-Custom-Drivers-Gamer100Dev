@@ -277,6 +277,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
 	uint8_t type;
+	uint16_t seqctl;
 	usb_error_t uerr;
 	int error;
 
@@ -315,10 +316,19 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.data_rate = 0;		/* DESC_RATE1M */
 	params.use_hardware_rate = true;
 	params.disable_rate_fallback = true;
-	params.disable_qsel_sequence = true;
 	params.last_segment = true;
-	params.enable_hardware_sequence = true;
 	params.bmc = IEEE80211_IS_MULTICAST(wh->i_addr1);
+	params.more_data = (m->m_flags & M_MORE_DATA) != 0;
+	if (type == IEEE80211_FC0_TYPE_MGT) {
+		/* Match RTW88 management frames: hardware sequence on QSEL_MGMT. */
+		params.disable_qsel_sequence = true;
+		params.enable_hardware_sequence = true;
+	} else if (type == IEEE80211_FC0_TYPE_DATA) {
+		/* Preserve the sequence number already assigned by net80211. */
+		memcpy(&seqctl, wh->i_seq, sizeof(seqctl));
+		params.software_sequence =
+		    (le16toh(seqctl) >> IEEE80211_SEQ_SEQ_SHIFT) & 0x0fff;
+	}
 
 	error = rtw88_native_txdesc_build(buffer,
 	    RTW88_NATIVE_TX_DESC_SIZE, &params);
