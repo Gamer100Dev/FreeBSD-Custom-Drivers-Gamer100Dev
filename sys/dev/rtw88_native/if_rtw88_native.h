@@ -249,6 +249,10 @@ struct rtw88_native_softc {
 	uint64_t		tx_data_count;
 	uint64_t		tx_group_count;
 	uint64_t		tx_eapol_count;
+	uint64_t		tx_probe_req_count;
+	uint64_t		tx_auth_req_count;
+	uint64_t		tx_assoc_req_count;
+	uint64_t		tx_deauth_req_count;
 	int			tx_last_error;
 	int			tx_last_qsel;
 	int			tx_last_endpoint;
@@ -256,6 +260,14 @@ struct rtw88_native_softc {
 	int			tx_last_frame_len;
 	uint64_t		rx_input_count;
 	uint64_t		rx_input_drop_count;
+	uint64_t		rx_auth_count;
+	uint64_t		rx_auth_to_self_count;
+	uint64_t		rx_assoc_resp_count;
+	uint64_t		rx_deauth_count;
+	uint64_t		rx_disassoc_count;
+	uint64_t		rx_probe_resp_count;
+	uint64_t		rx_beacon_count;
+	uint64_t		rx_eapol_count;
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
