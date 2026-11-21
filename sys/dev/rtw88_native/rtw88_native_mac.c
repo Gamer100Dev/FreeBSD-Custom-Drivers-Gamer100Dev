@@ -963,13 +963,16 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	mtx_unlock(&sc->mtx);
 
 	device_printf(sc->dev,
-	    "RTL8822B startup complete; net80211 station/monitor VAP creation and passive 2.4-GHz scanning enabled (TX/association not implemented)\n");
+	    "RTL8822B startup complete; net80211 station/monitor VAPs, probe TX and authentication/association management TX enabled\n");
 	return (0);
 
 fail:
 	mtx_lock(&sc->mtx);
 	sc->tx_enabled = 0;
 	mtx_unlock(&sc->mtx);
+	rtw88_native_usb_rx_stop(sc);
+	rtw88_native_usb_intr_stop(sc);
+	rtw88_native_net80211_detach(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	rtw88_native_firmware_put(sc);
