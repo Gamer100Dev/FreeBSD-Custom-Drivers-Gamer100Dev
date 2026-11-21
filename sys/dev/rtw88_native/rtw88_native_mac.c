@@ -1024,6 +1024,7 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 fail:
 	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
+	sc->wifi_only_coex_initialized = 0;
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	rtw88_native_firmware_put(sc);
@@ -1056,6 +1057,7 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
 	sc->current_channel = 0;
+	sc->wifi_only_coex_initialized = 0;
 	mtx_lock(&sc->mtx);
 	sc->scan_igi_valid = 0;
 	sc->scan_igi_saved = 0;
