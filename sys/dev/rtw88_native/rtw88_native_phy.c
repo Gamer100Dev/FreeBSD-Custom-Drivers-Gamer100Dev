@@ -693,7 +693,7 @@ rtw88_native_phy_set_channel(struct rtw88_native_softc *sc, uint8_t channel)
 int
 rtw88_native_phy_scan_gain(struct rtw88_native_softc *sc, int enable)
 {
-	uint32_t igi_a, igi_b;
+	uint32_t igi_a;
 	uint8_t saved;
 	int error;
 
@@ -722,8 +722,6 @@ rtw88_native_phy_scan_gain(struct rtw88_native_softc *sc, int enable)
 	error = 0;
 	if (enable) {
 		if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
-		    USB_ERR_NORMAL_COMPLETION ||
-		    rtw88_native_reg_read32(sc, REG_CH_RXIGI_B, &igi_b) !=
 		    USB_ERR_NORMAL_COMPLETION) {
 			error = EIO;
 		} else {
