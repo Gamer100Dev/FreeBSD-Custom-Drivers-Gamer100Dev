@@ -16,6 +16,7 @@
 #include <sys/malloc.h>
 #include <sys/firmware.h>
 #include <sys/systm.h>
+#include <sys/kernel.h>
 
 #include <dev/usb/usb.h>
 

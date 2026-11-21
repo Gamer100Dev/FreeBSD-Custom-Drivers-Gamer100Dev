@@ -145,6 +145,9 @@ struct rtw88_native_softc {
 	int			tx_cv_initialized;
 	int			io_cv_initialized;
 	int			dying;
+	int			detaching;
+	int			hw_busy;
+	int			hw_started;
 	unsigned int		io_users;
 	int			xfers_initialized;
 	int			tx_busy[RTW88_NATIVE_TX_QUEUES];
