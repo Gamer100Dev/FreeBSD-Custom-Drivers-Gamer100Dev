@@ -376,6 +376,14 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 		 */
 		if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
 			qsel = RTW88_NATIVE_TXQSEL_HIGH;
+		} else if ((m->m_flags & M_EAPOL) != 0) {
+			/*
+			 * FreeBSD tags PAE frames M_EAPOL and promotes their WME
+			 * category to VO, but transmits them as non-QoS data.
+			 * Match the FreeBSD LinuxKPI RTW88 path: put EAPOL on
+			 * BE/TID0, rather than mapping the promoted VO category to QSEL_BEACON.
+			 */
+			qsel = RTW88_NATIVE_TXQSEL_TID0;
 		} else {
 			ac = M_WME_GETAC(m);
 			if (ac < WME_AC_BE || ac > WME_AC_VO)

@@ -47,8 +47,10 @@ USB ID `0bda:b812`.
   endpoint (0x05), with a conservative 1-Mbps rate. Group-addressed data uses
   QSEL_HIGH (17) on the high-priority endpoint. Unicast BE/BK map to their
   corresponding TIDs (0/1); unicast VI/VO map to QSEL_BEACON (16), matching
-  Linux RTW88's three-pipe USB queue policy. Data remains at a conservative
-  1-Mbps rate.
+  Linux RTW88's three-pipe USB queue policy. Non-QoS unicast PAE/EAPOL frames
+  are explicitly routed to BE/TID0: FreeBSD marks them M_EAPOL and promotes
+  their WME category to VO, but the 802.11 frame itself is non-QoS. EAPOL
+  retains the conservative 1-Mbps B rate profile.
 - USB transmit completion is returned to net80211 through
   `ieee80211_tx_complete()`; separate queue, completion and error counters
   are exposed. Completion currently means USB bulk-OUT completion, not a
