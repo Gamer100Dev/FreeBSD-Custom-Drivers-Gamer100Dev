@@ -207,6 +207,9 @@ struct rtw88_native_softc {
 	uint8_t			rf_path_num;
 	uint8_t			antenna_tx;
 	uint8_t			antenna_rx;
+	uint8_t			current_channel;
+	uint8_t			current_bandwidth;
+	uint8_t			current_primary;
 	uint8_t			bulkout_num;
 	uint8_t			qsel_to_ep[20];
 	uint16_t		txff_pg_num;
@@ -284,6 +287,8 @@ int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
+int		rtw88_native_phy_set_channel(struct rtw88_native_softc *, uint8_t,
+		    uint8_t, uint8_t);
 void		rtw88_native_mac_stop(struct rtw88_native_softc *);
 int		rtw88_native_hw_start(struct rtw88_native_softc *);
 void		rtw88_native_hw_stop(struct rtw88_native_softc *);
