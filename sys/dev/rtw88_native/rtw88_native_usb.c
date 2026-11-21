@@ -16,6 +16,99 @@
 
 #include "if_rtw88_native.h"
 
+
+/*
+ * Convert one verified non-C2H aggregate record into a net80211-owned mbuf.
+ * RCR.APP_FCS is set by rtw88_native_8822b_mac_init(), so the four-byte FCS
+ * is removed before input. PHY status is used only for the basic RSSI/rate
+ * metadata needed by the software scan cache; advanced rate/chain reporting
+ * remains future work.
+ */
+static void
+rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
+    const uint8_t *frame, size_t packet_length, size_t driver_info,
+    size_t shift, uint32_t w0)
+{
+	static const uint8_t legacy_rates[] = {
+		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
+	};
+	struct ieee80211_rx_stats rxs;
+	struct mbuf *m;
+	uint32_t w3, w5, phy0;
+	uint8_t rate, raw_a, raw_b;
+	int rssi, channel;
+
+	mtx_assert(&sc->mtx, MA_OWNED);
+	if (!sc->net80211_attached || sc->current_channel < 1 ||
+	    sc->current_channel > 13)
+		return;
+	if ((w0 & (RTW88_NATIVE_RX_DESC_W0_CRCERR |
+	    RTW88_NATIVE_RX_DESC_W0_ICVERR)) != 0 ||
+	    packet_length <= RTW88_NATIVE_RX_FCS_LEN ||
+	    packet_length > RTW88_NATIVE_RX_MAX_FRAME) {
+		sc->rx_input_drop_count++;
+		return;
+	}
+
+	packet_length -= RTW88_NATIVE_RX_FCS_LEN;
+	m = m_get2((int)packet_length, M_NOWAIT, MT_DATA, M_PKTHDR);
+	if (m == NULL) {
+		sc->rx_input_drop_count++;
+		return;
+	}
+	m->m_len = (int)packet_length;
+	m->m_pkthdr.len = (int)packet_length;
+	memcpy(mtod(m, void *), frame, packet_length);
+
+	bzero(&rxs, sizeof(rxs));
+	memcpy(&w3, desc + 12, sizeof(w3));
+	memcpy(&w5, desc + 20, sizeof(w5));
+	rate = (uint8_t)(le32toh(w3) & 0x7f);
+	if (rate < nitems(legacy_rates)) {
+		rxs.c_rate = legacy_rates[rate];
+		if (rate <= 3)
+			rxs.c_pktflags |= IEEE80211_RX_F_CCK;
+	}
+
+	channel = sc->current_channel;
+	rxs.r_flags = IEEE80211_R_IEEE | IEEE80211_R_FREQ |
+	    IEEE80211_R_BAND | IEEE80211_R_NF | IEEE80211_R_RSSI |
+	    IEEE80211_R_TSF32;
+	rxs.c_ieee = channel;
+	rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_2GHZ);
+	rxs.c_band = IEEE80211_CHAN_2GHZ;
+	rxs.c_rx_tsf = le32toh(w5);
+	rxs.c_nf = -95;
+	rssi = -95;
+	if ((w0 & RTW88_NATIVE_RX_DESC_W0_PHYST) != 0 &&
+	    driver_info >= sizeof(phy0)) {
+		memcpy(&phy0, desc + RTW88_NATIVE_RX_DESC_SIZE + shift,
+		    sizeof(phy0));
+		phy0 = le32toh(phy0);
+		raw_a = (uint8_t)((phy0 >> 8) & 0xff);
+		raw_b = (uint8_t)((phy0 >> 16) & 0xff);
+		if ((rxs.c_pktflags & IEEE80211_RX_F_CCK) != 0)
+			rssi = (int)raw_a - 110;
+		else
+			rssi = MAX((int)raw_a, (int)raw_b) - 110;
+		if (rssi < -105 || rssi > -10)
+			rssi = -95;
+	}
+	rxs.c_rssi = rssi - rxs.c_nf;
+	if (ieee80211_add_rx_params(m, &rxs) == 0) {
+		m_freem(m);
+		sc->rx_input_drop_count++;
+		return;
+	}
+
+	if (mbufq_enqueue(&sc->rx_queue, m) != 0) {
+		m_freem(m);
+		sc->rx_input_drop_count++;
+		return;
+	}
+	taskqueue_enqueue(taskqueue_thread, &sc->rx_task);
+}
+
 /*
  * Parse only the framing information required to safely walk an RTW88 USB
  * RX aggregation. This intentionally does not decode PHY status or pass
@@ -83,8 +176,10 @@ rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
 				sc->rx_c2h_count++;
 			}
 		} else {
-			/* The frame is counted but deliberately not injected yet. */
 			sc->rx_data_count++;
+			rtw88_native_rx_enqueue(sc, buf + offset,
+			    buf + offset + packet_offset, packet_length,
+			    driver_info, shift, w0);
 		}
 
 		record_length = packet_offset + packet_length;
