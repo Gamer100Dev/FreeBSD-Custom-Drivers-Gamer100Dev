@@ -746,7 +746,7 @@ rtw88_native_fw_send_h2c_packet(struct rtw88_native_softc *sc,
 		sc->fw_h2c_error = (int)uerr;
 		device_printf(sc->dev,
 		    "firmware H2C transfer failed: seq=%u qsel=%u usb_error=%d\n",
-		    sequence, RTW88_NATIVE_TXQSEL_H2C, (int)uerr);
+		    (unsigned int)sequence, RTW88_NATIVE_TXQSEL_H2C, (int)uerr);
 		return (EIO);
 	}
 	sc->fw_h2c_error = 0;
@@ -821,8 +821,9 @@ rtw88_native_firmware_send_initial_h2c(struct rtw88_native_softc *sc)
 	    "firmware initial H2C complete: general=%u PHYDM=%u boundary=%u RF=%uT%uR RFE=%u cut=%u\n",
 	    (unsigned int)sc->fw_h2c_general_count,
 	    (unsigned int)sc->fw_h2c_phydm_count,
-	    (unsigned int)fw_boundary, sc->rf_path_num, sc->rf_path_num,
-	    sc->efuse.rfe_option, sc->cut_version);
+	    (unsigned int)fw_boundary, (unsigned int)sc->rf_path_num,
+	    (unsigned int)sc->rf_path_num, (unsigned int)sc->efuse.rfe_option,
+	    (unsigned int)sc->cut_version);
 	return (0);
 }
 
