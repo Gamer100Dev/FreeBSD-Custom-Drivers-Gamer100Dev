@@ -201,7 +201,15 @@ struct rtw88_native_softc {
 	struct ieee80211com	ic;
 	struct mbufq		rx_queue;
 	struct task		rx_task;
+	struct mbufq		tx_queue;
+	struct task		tx_task;
 	int			net80211_attached;
+	int			tx_enabled;
+	int			tx_queue_depth;
+	uint64_t		tx_queued_count;
+	uint64_t		tx_complete_count;
+	uint64_t		tx_error_count;
+	int			tx_last_error;
 	uint64_t		rx_input_count;
 	uint64_t		rx_input_drop_count;
 	struct usb_device	*udev;
@@ -320,5 +328,6 @@ void		rtw88_native_hw_stop(struct rtw88_native_softc *);
 int		rtw88_native_net80211_attach(struct rtw88_native_softc *);
 void		rtw88_native_net80211_detach(struct rtw88_native_softc *);
 void		rtw88_native_rx_task(void *, int);
+void		rtw88_native_tx_task(void *, int);
 
 #endif /* _IF_RTW88_NATIVE_H_ */
