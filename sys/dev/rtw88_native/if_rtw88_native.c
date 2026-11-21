@@ -30,28 +30,6 @@
 
 #include "if_rtw88_native.h"
 
-#define RTW88_NATIVE_RX_BUFSIZE	(32 * 1024)
-#define RTW88_NATIVE_TX_BUFSIZE	(20 * 1024)
-#define RTW88_NATIVE_INT_BUFSIZE	64
-
-enum {
-	RTW88_NATIVE_BULK_RX,
-	RTW88_NATIVE_BULK_TX0,
-	RTW88_NATIVE_BULK_TX1,
-	RTW88_NATIVE_BULK_TX2,
-	RTW88_NATIVE_INTERRUPT_RX,
-	RTW88_NATIVE_N_XFERS
-};
-
-struct rtw88_native_softc {
-	struct usb_device	*udev;
-	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
-	struct mtx		mtx;
-	uint8_t			iface_index;
-	int			mtx_initialized;
-	int			xfers_initialized;
-};
-
 /*
  * Keep the initial port deliberately narrow: bind only to the adapter that
  * is being developed and only to its vendor-specific interface.
@@ -65,146 +43,6 @@ static const STRUCT_USB_HOST_ID rtw88_native_devs[] = {
 		USB_IFACE_PROTOCOL(0xff)
 	},
 };
-
-/*
- * Transfers are allocated during attach but deliberately never started in
- * this bring-up stage.  The callback is therefore inert; later stages will
- * add RX/TX state machines and submit frames only after firmware and MAC
- * initialisation have completed.
- */
-static void
-rtw88_native_xfer_callback(struct usb_xfer *xfer, usb_error_t error)
-{
-	(void)xfer;
-	(void)error;
-}
-
-static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = {
-	[RTW88_NATIVE_BULK_RX] = {
-		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
-		.direction = UE_DIR_IN,
-		.bufsize = RTW88_NATIVE_RX_BUFSIZE,
-		.flags = {
-			.pipe_bof = 1,
-			.short_xfer_ok = 1
-		},
-		.callback = rtw88_native_xfer_callback
-	},
-	[RTW88_NATIVE_BULK_TX0] = {
-		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
-		.ep_index = 0,
-		.direction = UE_DIR_OUT,
-		.bufsize = RTW88_NATIVE_TX_BUFSIZE,
-		.flags = {
-			.pipe_bof = 1,
-			.force_short_xfer = 1
-		},
-		.callback = rtw88_native_xfer_callback
-	},
-	[RTW88_NATIVE_BULK_TX1] = {
-		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
-		.ep_index = 1,
-		.direction = UE_DIR_OUT,
-		.bufsize = RTW88_NATIVE_TX_BUFSIZE,
-		.flags = {
-			.pipe_bof = 1,
-			.force_short_xfer = 1
-		},
-		.callback = rtw88_native_xfer_callback
-	},
-	[RTW88_NATIVE_BULK_TX2] = {
-		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
-		.ep_index = 2,
-		.direction = UE_DIR_OUT,
-		.bufsize = RTW88_NATIVE_TX_BUFSIZE,
-		.flags = {
-			.pipe_bof = 1,
-			.force_short_xfer = 1
-		},
-		.callback = rtw88_native_xfer_callback
-	},
-	[RTW88_NATIVE_INTERRUPT_RX] = {
-		.type = UE_INTERRUPT,
-		.endpoint = UE_ADDR_ANY,
-		.direction = UE_DIR_IN,
-		.bufsize = RTW88_NATIVE_INT_BUFSIZE,
-		.flags = {
-			.pipe_bof = 1,
-			.short_xfer_ok = 1
-		},
-		.callback = rtw88_native_xfer_callback
-	}
-};
-
-static usb_error_t
-rtw88_native_control(struct rtw88_native_softc *sc, uint8_t request_type,
-    uint16_t reg, void *data, uint16_t len)
-{
-	usb_device_request_t req;
-	usb_error_t error;
-
-	if (sc == NULL || sc->udev == NULL || data == NULL || len == 0 ||
-	    len > RTW88_NATIVE_MAX_CONTROL_DATA)
-		return (USB_ERR_INVAL);
-
-	memset(&req, 0, sizeof(req));
-	req.bmRequestType = request_type;
-	req.bRequest = RTW88_NATIVE_USB_REQUEST;
-	USETW(req.wValue, reg);
-	USETW(req.wIndex, RTW88_NATIVE_USB_REQUEST_INDEX);
-	USETW(req.wLength, len);
-
-	/*
-	 * usbd_do_request_flags() is the synchronous FreeBSD USB control
-	 * transfer API.  The caller must not be in a USB transfer callback.
-	 * Serialize register requests with the device-private mutex.
-	 */
-	mtx_lock(&sc->mtx);
-	error = usbd_do_request_flags(sc->udev, &sc->mtx, &req, data, 0,
-	    NULL, RTW88_NATIVE_USB_TIMEOUT);
-	mtx_unlock(&sc->mtx);
-
-	return (error);
-}
-
-usb_error_t
-rtw88_native_raw_reg_read32(struct rtw88_native_softc *sc, uint16_t reg,
-    uint32_t *value)
-{
-	uint32_t value_le;
-	usb_error_t error;
-
-	if (sc == NULL || value == NULL)
-		return (USB_ERR_INVAL);
-
-	value_le = 0;
-	error = rtw88_native_control(sc, UT_READ_VENDOR_DEVICE, reg,
-	    &value_le, sizeof(value_le));
-	if (error == USB_ERR_NORMAL_COMPLETION)
-		*value = le32toh(value_le);
-
-	return (error);
-}
-
-usb_error_t
-rtw88_native_raw_reg_write(struct rtw88_native_softc *sc, uint16_t reg,
-    const void *data, uint16_t len)
-{
-	/*
-	 * The hardware consumes register values and firmware blocks in
-	 * little-endian byte order.  Multi-byte caller buffers must already
-	 * be encoded accordingly; this routine deliberately does not reinterpret
-	 * arbitrary firmware payloads.
-	 */
-	if (sc == NULL)
-		return (USB_ERR_INVAL);
-	return (rtw88_native_control(sc, UT_WRITE_VENDOR_DEVICE, reg,
-	    __DECONST(void *, data), len));
-}
 
 static int
 rtw88_native_probe(device_t dev)
@@ -230,6 +68,7 @@ rtw88_native_attach(device_t dev)
 	sc = device_get_softc(dev);
 	bzero(sc, sizeof(*sc));
 	uaa = device_get_ivars(dev);
+	sc->dev = dev;
 	if (uaa == NULL || uaa->device == NULL)
 		return (ENXIO);
 
@@ -243,21 +82,17 @@ rtw88_native_attach(device_t dev)
 	    "native FreeBSD USB transport attached (RTL8822BU, 0bda:b812)\n");
 
 	/*
-	 * Allocate transfer resources from the active interface descriptors.
-	 * UE_ADDR_ANY and ep_index select endpoints by transfer type/direction;
-	 * literal endpoint addresses are intentionally not hard-coded.
+	 * Allocate endpoint-backed resources through the native FreeBSD USB
+	 * layer. Endpoint addresses are resolved from interface descriptors.
 	 */
-	uerr = usbd_transfer_setup(sc->udev, &sc->iface_index, sc->xfer,
-	    rtw88_native_xfer_config, RTW88_NATIVE_N_XFERS, sc, &sc->mtx);
+	uerr = rtw88_native_usb_setup(sc);
 	if (uerr != USB_ERR_NORMAL_COMPLETION) {
 		device_printf(dev, "could not allocate native USB transfers: %s\n",
 		    usbd_errstr(uerr));
-		usbd_transfer_unsetup(sc->xfer, RTW88_NATIVE_N_XFERS);
 		mtx_destroy(&sc->mtx);
 		sc->mtx_initialized = 0;
 		return (ENXIO);
 	}
-	sc->xfers_initialized = 1;
 	device_printf(dev,
 	    "allocated native USB pipes: 1 bulk IN, 3 bulk OUT, 1 interrupt IN (idle)\n");
 
@@ -290,10 +125,8 @@ rtw88_native_detach(device_t dev)
 	struct rtw88_native_softc *sc;
 
 	sc = device_get_softc(dev);
-	if (sc->xfers_initialized) {
-		usbd_transfer_unsetup(sc->xfer, RTW88_NATIVE_N_XFERS);
-		sc->xfers_initialized = 0;
-	}
+	rtw88_native_usb_unsetup(sc);
+	rtw88_native_firmware_put(sc);
 	if (sc->mtx_initialized) {
 		mtx_destroy(&sc->mtx);
 		sc->mtx_initialized = 0;
