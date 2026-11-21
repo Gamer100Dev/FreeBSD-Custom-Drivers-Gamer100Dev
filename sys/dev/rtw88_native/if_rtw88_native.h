@@ -269,6 +269,7 @@ struct rtw88_native_softc {
 	int			firmware_running;
 	int			mac_initialized;
 	int			phy_initialized;
+	int			wifi_only_coex_initialized;
 	int			efuse_initialized;
 	int			current_channel;
 	uint8_t			scan_igi_saved;
@@ -340,6 +341,7 @@ int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
 int		rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
+int		rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_set_channel(struct rtw88_native_softc *,
 		    uint8_t);
 int		rtw88_native_phy_scan_gain(struct rtw88_native_softc *,
