@@ -6,8 +6,10 @@
  *
  * This file implements the native FreeBSD USB and net80211 glue for the
  * Realtek RTL8822BU (USB ID 0bda:b812). It currently supports station and
- * monitor VAP creation plus passive 2.4-GHz scanning; association and TX are
- * not implemented yet.
+ * monitor VAP creation, active/passive scanning, and queued 802.11 frame
+ * transmission for management/authentication/association and data frames.
+ * Hardware key installation, advanced rate control and full TX status
+ * reporting remain follow-on work.
  *
  * Register request format is the one used by the RTW88 USB hardware
  * interface: vendor control request 0x05, wValue = register address,
@@ -137,11 +139,14 @@ static void
 rtw88_native_scan_start(struct ieee80211com *ic)
 {
 	struct rtw88_native_softc *sc;
+	const char *mode;
 
 	sc = ic->ic_softc;
-	if (ic->ic_scan != NULL)
-		ic->ic_scan->ss_flags &= ~IEEE80211_SCAN_ACTIVE;
-	device_printf(sc->dev, "starting passive 2.4-GHz scan (TX disabled)\n");
+	mode = (ic->ic_scan != NULL &&
+	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0) ?
+	    "active" : "passive";
+	device_printf(sc->dev,
+	    "starting %s 2.4-GHz scan (channels 1-13)\n", mode);
 }
 
 static void
@@ -150,7 +155,7 @@ rtw88_native_scan_end(struct ieee80211com *ic)
 	struct rtw88_native_softc *sc;
 
 	sc = ic->ic_softc;
-	device_printf(sc->dev, "passive scan finished\n");
+	device_printf(sc->dev, "net80211 scan finished\n");
 }
 
 static void
@@ -193,6 +198,180 @@ rtw88_native_set_channel(struct ieee80211com *ic)
 		    channel, error);
 }
 
+
+/*
+ * Enqueue one already-encapsulated 802.11 frame. Net80211 transfers its node
+ * reference with m_pkthdr.rcvif when ic_transmit/ic_raw_xmit returns success.
+ * USB submission is deferred because the transfer helper sleeps.
+ */
+static int
+rtw88_native_tx_enqueue(struct rtw88_native_softc *sc, struct mbuf *m)
+{
+	int error;
+
+	if (sc == NULL || m == NULL || (m->m_flags & M_PKTHDR) == 0 ||
+	    m->m_pkthdr.rcvif == NULL)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->net80211_attached ||
+	    !sc->tx_enabled) {
+		error = ENETDOWN;
+	} else {
+		error = mbufq_enqueue(&sc->tx_queue, m);
+		if (error == 0) {
+			sc->tx_queue_depth++;
+			sc->tx_queued_count++;
+		}
+	}
+	mtx_unlock(&sc->mtx);
+	if (error == 0)
+		taskqueue_enqueue(taskqueue_thread, &sc->tx_task);
+	return (error);
+}
+
+static int
+rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
+    const struct ieee80211_bpf_params *params)
+{
+	struct rtw88_native_softc *sc;
+	int error;
+
+	(void)params;
+	if (ni == NULL || m == NULL) {
+		if (m != NULL)
+			m_freem(m);
+		return (EINVAL);
+	}
+	sc = ni->ni_ic->ic_softc;
+	error = rtw88_native_tx_enqueue(sc, m);
+	if (error != 0) {
+		if (m->m_flags & M_TXCB)
+			ieee80211_process_callback(ni, m, 1);
+		m_freem(m);
+	}
+	return (error);
+}
+
+static int
+rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
+{
+	struct rtw88_native_softc *sc;
+
+	sc = ic->ic_softc;
+	return (rtw88_native_tx_enqueue(sc, m));
+}
+
+/*
+ * Send one 802.11 MPDU through the RTW88 48-byte descriptor and the USB
+ * endpoint selected by the RTL8822B queue map. Management/control frames use
+ * QSEL_MGMT (18 -> high endpoint 0x05); data frames use TID0/BE (0 -> low
+ * endpoint 0x08). TX is serialized by the sleepable TX task.
+ */
+static int
+rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
+{
+	struct ieee80211_frame_min *wh;
+	struct rtw88_native_txdesc_params params;
+	uint8_t *buffer;
+	uint16_t frame_len, transfer_len;
+	uint8_t qsel, endpoint;
+	uint8_t type;
+	usb_error_t uerr;
+	int error;
+
+	if (m->m_pkthdr.len < sizeof(*wh))
+		return (EINVAL);
+	if (m->m_pkthdr.len > 20 * 1024 - RTW88_NATIVE_TX_DESC_SIZE)
+		return (EFBIG);
+
+	wh = mtod(m, struct ieee80211_frame_min *);
+	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+	if (type == IEEE80211_FC0_TYPE_MGT ||
+	    type == IEEE80211_FC0_TYPE_CTL)
+		qsel = 18;		/* TX_DESC_QSEL_MGMT */
+	else if (type == IEEE80211_FC0_TYPE_DATA)
+		qsel = 0;		/* TX_DESC_QSEL_TID0 / best effort */
+	else
+		return (EOPNOTSUPP);
+
+	endpoint = sc->qsel_to_ep[qsel];
+	if (endpoint >= RTW88_NATIVE_TX_QUEUES)
+		return (EOPNOTSUPP);
+	frame_len = (uint16_t)m->m_pkthdr.len;
+	transfer_len = frame_len + RTW88_NATIVE_TX_DESC_SIZE;
+
+	buffer = malloc(transfer_len, M_DEVBUF, M_WAITOK);
+	if (buffer == NULL)
+		return (ENOMEM);
+	bzero(buffer, transfer_len);
+	bzero(&params, sizeof(params));
+	params.packet_size = frame_len;
+	params.descriptor_offset = RTW88_NATIVE_TX_DESC_SIZE;
+	params.mac_id = 0;
+	params.queue_select = qsel;
+	/* 2.4-GHz B/20-MHz rate set; DESC_RATE1M is zero. */
+	params.rate_id = 8;		/* RTW_RATEID_B_20M */
+	params.data_rate = 0;		/* DESC_RATE1M */
+	params.use_hardware_rate = true;
+	params.disable_rate_fallback = true;
+	params.disable_qsel_sequence = true;
+	params.last_segment = true;
+	params.enable_hardware_sequence = true;
+	params.bmc = IEEE80211_IS_MULTICAST(wh->i_addr1);
+
+	error = rtw88_native_txdesc_build(buffer,
+	    RTW88_NATIVE_TX_DESC_SIZE, &params);
+	if (error == 0)
+		m_copydata(m, 0, frame_len,
+		    buffer + RTW88_NATIVE_TX_DESC_SIZE);
+	if (error == 0) {
+		uerr = rtw88_native_usb_tx_sync(sc, endpoint, buffer,
+		    transfer_len);
+		if (uerr != USB_ERR_NORMAL_COMPLETION)
+			error = EIO;
+	}
+	free(buffer, M_DEVBUF);
+	return (error);
+}
+
+void
+rtw88_native_tx_task(void *arg, int pending __unused)
+{
+	struct rtw88_native_softc *sc;
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+	int error, enabled;
+
+	sc = arg;
+	for (;;) {
+		mtx_lock(&sc->mtx);
+		m = mbufq_dequeue(&sc->tx_queue);
+		if (m != NULL)
+			sc->tx_queue_depth--;
+		enabled = sc->tx_enabled && !sc->dying && !sc->detaching;
+		mtx_unlock(&sc->mtx);
+		if (m == NULL)
+			break;
+
+		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
+		m->m_pkthdr.rcvif = NULL;
+		error = enabled ? rtw88_native_tx_one(sc, m) : ENETDOWN;
+
+		mtx_lock(&sc->mtx);
+		if (error == 0)
+			sc->tx_complete_count++;
+		else {
+			sc->tx_error_count++;
+			sc->tx_last_error = error;
+		}
+		mtx_unlock(&sc->mtx);
+
+		/* Completes the mbuf and the node reference transferred by net80211. */
+		ieee80211_tx_complete(ni, m, error == 0 ? 0 : 1);
+	}
+}
+
 static void
 rtw88_native_parent(struct ieee80211com *ic)
 {
@@ -230,7 +409,8 @@ rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
 	ic->ic_phytype = IEEE80211_T_OFDM;
 	ic->ic_opmode = IEEE80211_M_STA;
 	IEEE80211_ADDR_COPY(ic->ic_macaddr, sc->efuse.macaddr);
-	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR;
+	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR |
+	    IEEE80211_C_WPA;
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11B);
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11G);
 	rtw88_native_getradiocaps(ic, IEEE80211_CHAN_MAX,
@@ -246,12 +426,18 @@ rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
 	ic->ic_set_channel = rtw88_native_set_channel;
 	ic->ic_scan_start = rtw88_native_scan_start;
 	ic->ic_scan_end = rtw88_native_scan_end;
+	ic->ic_raw_xmit = rtw88_native_raw_xmit;
+	ic->ic_transmit = rtw88_native_transmit;
+
+	/* Keep authentication/association crypto in net80211 software for now. */
+	ieee80211_set_software_ciphers(ic, IEEE80211_CRYPTO_WEP |
+	    IEEE80211_CRYPTO_TKIP | IEEE80211_CRYPTO_AES_CCM);
 
 	mtx_lock(&sc->mtx);
 	sc->net80211_attached = 1;
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev,
-	    "net80211 radio attached as %s (2.4 GHz ch 1-13; passive scan only)\n",
+	    "net80211 radio attached as %s (2.4 GHz ch 1-13; management/data TX enabled)\n",
 	    ic->ic_name);
 	return (0);
 }
