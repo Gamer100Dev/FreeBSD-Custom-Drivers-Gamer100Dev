@@ -844,6 +844,7 @@ rtw88_native_mac_stop(struct rtw88_native_softc *sc)
 		return;
 	(void)rtw88_native_reg_write16(sc, REG_TXPAUSE, 0xffff);
 	(void)rtw88_native_reg_write8(sc, RTW88_NATIVE_REG_CR, 0);
+	sc->phy_initialized = 0;
 	sc->mac_initialized = 0;
 }
 
@@ -870,8 +871,11 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_mac_init(sc);
 	if (error != 0)
 		goto fail;
+	error = rtw88_native_phy_init(sc);
+	if (error != 0)
+		goto fail;
 
-	/* Start the event endpoint and raw bulk receive after firmware startup. */
+	/* Start the event endpoint and raw bulk receive after PHY table setup. */
 	error = rtw88_native_usb_intr_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
