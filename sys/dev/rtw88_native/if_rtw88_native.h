@@ -8,13 +8,27 @@
 #ifndef _IF_RTW88_NATIVE_H_
 #define _IF_RTW88_NATIVE_H_
 
+#include <sys/param.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/bus.h>
 #include <sys/condvar.h>
 #include <sys/firmware.h>
 #include <sys/mutex.h>
 #include <sys/mbuf.h>
 #include <sys/taskqueue.h>
+
+/*
+ * ieee80211_var.h relies on the kernel interface, media, Ethernet and route
+ * declarations below.  Keep these dependencies here because this header
+ * embeds struct ieee80211com and is included by multiple driver translation
+ * units.
+ */
+#include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_media.h>
+#include <net/ethernet.h>
+#include <net/route.h>
 
 #include <net80211/ieee80211_var.h>
 
