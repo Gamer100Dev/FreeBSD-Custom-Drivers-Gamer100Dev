@@ -229,6 +229,8 @@ struct rtw88_native_softc {
 	int			net80211_attached;
 	int			tx_enabled;
 	int			tx_queue_depth;
+	uint64_t		tx_raw_count;
+	uint64_t		tx_raw_reject_count;
 	uint64_t		tx_queued_count;
 	uint64_t		tx_complete_count;
 	uint64_t		tx_error_count;
