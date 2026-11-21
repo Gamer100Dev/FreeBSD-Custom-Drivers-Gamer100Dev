@@ -140,7 +140,16 @@ rtw88_native_scan_start(struct ieee80211com *ic)
 	sc = ic->ic_softc;
 	if (ic->ic_scan != NULL)
 		ic->ic_scan->ss_flags &= ~IEEE80211_SCAN_ACTIVE;
-	device_printf(sc->dev, "starting passive 2.4-GHz scan (TX disabled)\n");
+	{
+		int error;
+
+		error = rtw88_native_phy_scan_gain(sc, 1);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not enable scan receive coverage: %d\n", error);
+	}
+	device_printf(sc->dev,
+	    "starting passive 2.4-GHz scan (TX disabled, max RX coverage)\n");
 }
 
 static void
@@ -149,6 +158,15 @@ rtw88_native_scan_end(struct ieee80211com *ic)
 	struct rtw88_native_softc *sc;
 
 	sc = ic->ic_softc;
+	{
+		int error;
+
+		error = rtw88_native_phy_scan_gain(sc, 0);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not restore receive gain after scan: %d\n",
+			    error);
+	}
 	device_printf(sc->dev, "passive scan finished\n");
 }
 
