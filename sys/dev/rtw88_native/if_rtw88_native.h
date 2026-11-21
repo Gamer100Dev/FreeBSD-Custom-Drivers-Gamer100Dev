@@ -144,14 +144,23 @@
 #define RTW88_NATIVE_OCPBASE_TXBUF		0x18780000U
 #define RTW88_NATIVE_OCPBASE_DMEM		0x00200000U
 
+#define RTW88_NATIVE_RX_XFERS		4U
+#define RTW88_NATIVE_RX_BUFSIZE		(32U * 1024U)
+
 enum {
-	RTW88_NATIVE_BULK_RX,
+	RTW88_NATIVE_BULK_RX0,
+	RTW88_NATIVE_BULK_RX1,
+	RTW88_NATIVE_BULK_RX2,
+	RTW88_NATIVE_BULK_RX3,
 	RTW88_NATIVE_BULK_TX0,
 	RTW88_NATIVE_BULK_TX1,
 	RTW88_NATIVE_BULK_TX2,
 	RTW88_NATIVE_INTERRUPT_RX,
 	RTW88_NATIVE_N_XFERS
 };
+
+/* Compatibility name for code that needs the first RX transfer. */
+#define RTW88_NATIVE_BULK_RX		RTW88_NATIVE_BULK_RX0
 
 struct rtw88_native_txdesc_params {
 	uint16_t	packet_size;
@@ -293,7 +302,7 @@ struct rtw88_native_softc {
 	uint64_t		intr_count;
 	usb_error_t		intr_error;
 	int			rx_started;
-	uint8_t			rx_buf[32 * 1024];
+	uint8_t			rx_buf[RTW88_NATIVE_RX_XFERS][RTW88_NATIVE_RX_BUFSIZE];
 	uint8_t			rx_last[32 * 1024];
 	uint32_t		rx_last_len;
 	uint64_t		rx_count;
