@@ -72,6 +72,8 @@
 #define RTW88_NATIVE_TXQ_HIGH			0
 #define RTW88_NATIVE_TX_QUEUES			3
 #define RTW88_NATIVE_TXQSEL_BEACON		16U
+#define RTW88_NATIVE_TXQSEL_HIGH		17U
+#define RTW88_NATIVE_TXQSEL_MGMT		18U
 #define RTW88_NATIVE_TXDMA_CHUNK		0x1000U
 #define RTW88_NATIVE_RX_DESC_SIZE		24U
 #define RTW88_NATIVE_RX_C2H_HEADER_SIZE	2U
@@ -243,7 +245,15 @@ struct rtw88_native_softc {
 	uint64_t		tx_queued_count;
 	uint64_t		tx_complete_count;
 	uint64_t		tx_error_count;
+	uint64_t		tx_mgmt_count;
+	uint64_t		tx_data_count;
+	uint64_t		tx_group_count;
+	uint64_t		tx_eapol_count;
 	int			tx_last_error;
+	int			tx_last_qsel;
+	int			tx_last_endpoint;
+	int			tx_last_frame_control;
+	int			tx_last_frame_len;
 	uint64_t		rx_input_count;
 	uint64_t		rx_input_drop_count;
 	struct usb_device	*udev;
