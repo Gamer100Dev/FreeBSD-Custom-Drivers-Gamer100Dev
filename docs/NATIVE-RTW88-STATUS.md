@@ -1,6 +1,6 @@
 # Native RTW88 implementation status
 
-Development branch: `work/native-rtw88-rxdma`
+Development branch: `work/native-rtw88-net80211`
 
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
@@ -17,8 +17,15 @@ USB ID `0bda:b812`.
 - Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
   be distinguished from a callback that repeatedly fails.
 - Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
-  exposed as `dev.rtw88_native.N.channel` for channels 1-13. This is a
-  passive receive diagnostic control, not a scan or association operation.
+  exposed as `dev.rtw88_native.N.channel` for channels 1-13.
+- Native net80211 radio registration after successful hardware start, with
+  station/monitor VAP creation, 2.4-GHz channel advertisement and passive-only
+  software scan callbacks.
+- Bounds-checked RX descriptor handling now copies normal 802.11 MPDUs into
+  mbufs, removes the configured appended FCS, adds channel/RSSI/TSF metadata
+  and queues them to deferred net80211 input outside the USB transfer mutex.
+- Read-only counters for frames queued to net80211 and frames dropped before
+  delivery.
 - Descriptor-indexed allocation of one bulk-IN, three bulk-OUT and one
   interrupt-IN transfer.
 - Completion-signalled synchronous bulk-OUT using FreeBSD USB callbacks,
@@ -84,12 +91,15 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 - Full RFE board selection, HW-feature C2H report, IQK/DPK, thermal tracking,
   antenna diversity and TX-power calibration; 5-GHz and non-20-MHz channel
   programming are not implemented.
-- RX PHY-status interpretation, C2H command-specific event decoding/
-  dispatch and delivery of normal 802.11 frames to net80211.
+- Full RX PHY-status/rate/chain interpretation, C2H command-specific event
+  decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
 - Normal TX data path, aggregation, per-frame queue mapping, completion and
   status reporting.
-- Native `net80211` interface and lifecycle integration.
-- Regulatory, scan/auth/association, key and power-management operations.
+- Active scanning/probe-request transmission, authentication, association,
+  key handling, regulatory-domain integration and power-management operations.
+- Verified RX packet delivery and verified scan results on the physical
+  adapter; the current RX DMA request had not yet completed during the user's
+  latest test.
 - Suspend/resume, watchdog, recovery and full load/unload/device-unplug tests.
 
 ## Validation
@@ -119,15 +129,24 @@ The endpoint descriptor dump showed a USB 2.0 High-Speed device with bulk-IN
 was `0x1e` and aggregation register value `0x2005`; the user has not yet
 reported a bulk-IN completion after this configuration.
 
-The branch now adds a manual passive channel-tune control for the observed
-RFE option 3 (2.4 GHz, 20 MHz, channels 1-13). It must be rebuilt and tested
-against an access point whose actual 2.4-GHz channel is known.
+The current branch adds a net80211 radio and a standard VAP creation path.
+After a successful `dev.rtw88_native.N.hw_start=1`, a station VAP can be
+created with `ifconfig wlan create wlandev rtw88_native0 wlanmode sta`.
+The software scan callback deliberately clears `IEEE80211_SCAN_ACTIVE`,
+so the initial scan is passive and does not issue probe requests.
 
-**Wi-Fi operation is not yet verified.** The module still lacks a registered
-net80211 wlan interface, active scanning/association, command-specific C2H
-dispatch, RX delivery to net80211, and a normal TX data path. This branch
-therefore contains a controlled channel/RX diagnostic step, not a claim of
-working Wi-Fi.
+The RX callback copies valid non-C2H frames to mbufs and defers
+`ieee80211_input_mimo_all()` to a taskqueue thread, avoiding net80211 input
+under the USB transfer mutex. This code now needs a FreeBSD 15.1 build and
+adapter test. The user's latest hardware test still had no completed
+bulk-IN transfer, so the driver may expose the interface and perform channel
+hops while scan results remain empty until RX traffic reaches the bulk-IN
+endpoint.
+
+**Wi-Fi operation is not yet fully verified.** Active scanning, TX,
+authentication, association, key management, complete C2H dispatch and
+full PHY/radiotap statistics remain unimplemented. This is a passive scan
+bring-up stage, not a claim of end-to-end Wi-Fi connectivity.
 
 The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
 matching `releng/15.1` source. Build and hardware validation must be reviewed
