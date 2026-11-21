@@ -35,6 +35,7 @@
 #include <dev/usb/usbdi.h>
 
 #include "if_rtw88_native.h"
+#include "rtw88_native_build.h"
 
 /*
  * Keep the initial port deliberately narrow: bind only to the adapter that
@@ -823,6 +824,8 @@ rtw88_native_attach(device_t dev)
 
 	device_printf(dev,
 	    "native FreeBSD USB transport attached (RTL8822BU, 0bda:b812)\n");
+	device_printf(dev, "native driver build ID: %s\n",
+	    RTW88_NATIVE_BUILD_ID);
 
 	/*
 	 * Allocate endpoint-backed resources through the native FreeBSD USB
