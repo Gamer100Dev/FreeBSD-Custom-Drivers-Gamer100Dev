@@ -130,10 +130,20 @@ wireless/USB conventions:
 The module Makefile is `sys/modules/rtw88_native/Makefile`. It builds as a
 separate loadable module and does not modify `sys/conf/files`.
 
-**Validation status:** source implementation only. It has not yet been
-compiled against the user's FreeBSD 15.1 tree and has not been run on the
-physical RTL8822BU device. Do not treat it as a working Wi-Fi driver until
-build, firmware, RX/TX and `net80211` validation passes.
+**Validation status (2026-11-22):** the native module builds successfully
+on the user's FreeBSD 15.1 amd64 host, and the current diagnostic branch passes
+the FreeBSD and FreeBSD 15.1 GitHub Actions build jobs. The RTL8822BU device
+(`0bda:b812`) has been tested on physical hardware: firmware loads, passive
+2.4-GHz scanning discovers two BSSs, and the bulk-IN receive path delivers
+frames through the RX descriptor parser into net80211. One captured scan
+reported 26 bulk-IN completions, 26 parsed descriptors, 26 data frames and
+26 net80211 inputs, with zero USB RX errors, malformed records or input drops.
+
+This validates the passive 2.4-GHz receive/scan path on the tested device.
+It does **not** validate transmission, probe requests, authentication,
+association, DHCP, sustained traffic, 5-GHz operation or power management.
+TX and association remain unimplemented; keep this driver in the experimental
+passive-scan stage until those paths are implemented and tested.
 
 
 ## RX hardware register snapshot
