@@ -489,6 +489,9 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define BIT_DMA_BURST_SIZE_1024		0U
 #define BIT_RXDMA_AGG_PG_TH_RESERVED	(1U << 7)
 
+static int rtw88_native_write_mask8(struct rtw88_native_softc *, uint16_t,
+    uint8_t, uint8_t);
+
 /*
  * Configure the RTL8822B USB receive DMA engine before posting bulk-IN.
  * Values follow the upstream RTW88 USB interface configuration and v1 RX
