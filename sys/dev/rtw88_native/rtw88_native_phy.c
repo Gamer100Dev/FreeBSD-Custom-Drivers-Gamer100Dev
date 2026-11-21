@@ -132,12 +132,20 @@ rtw88_native_phy_write_mask32(struct rtw88_native_softc *sc, uint16_t reg,
 	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO);
 }
 
+/*
+ * RTW88's mixed RF write path uses the serial-interface port only for RF
+ * register zero. All other RF registers are memory-mapped through the
+ * path-specific RF base window. Keep that distinction here: sending a
+ * nonzero RF address through HSSI/SIPI can leave the direct RF window
+ * unchanged (in particular RF-B register 0x18), even though the USB control
+ * transfer itself completes.
+ */
 static int
 rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
     uint32_t addr, uint32_t value)
 {
 	uint32_t data_and_addr;
-	uint16_t sipi_reg;
+	uint16_t base, sipi_reg;
 
 	if (path >= sc->rf_path_num || path > 1)
 		return (EINVAL);
@@ -149,14 +157,26 @@ rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
 		DELAY(100);
 		return (0);
 	}
+	if (addr > 0xff)
+		return (EINVAL);
 
-	sipi_reg = path == 0 ? RTW88_NATIVE_RF_SIPI_A : RTW88_NATIVE_RF_SIPI_B;
-	data_and_addr = (((addr & 0xffU) << 20) |
-	    (value & RTW88_NATIVE_RFREG_MASK)) & 0x0fffffffU;
-	if (rtw88_native_reg_write32(sc, sipi_reg, data_and_addr) !=
-	    USB_ERR_NORMAL_COMPLETION)
+	if (addr == 0) {
+		sipi_reg = path == 0 ? RTW88_NATIVE_RF_SIPI_A :
+		    RTW88_NATIVE_RF_SIPI_B;
+		data_and_addr = value & RTW88_NATIVE_RFREG_MASK;
+		if (rtw88_native_reg_write32(sc, sipi_reg, data_and_addr) !=
+		    USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		DELAY(13);
+		return (0);
+	}
+
+	base = path == 0 ? RF_PATH_A_BASE : RF_PATH_B_BASE;
+	if (rtw88_native_reg_write32(sc,
+	    base + (uint16_t)(addr << 2),
+	    value & RTW88_NATIVE_RFREG_MASK) != USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
-	DELAY(13);
+	DELAY(1);
 	return (0);
 }
 
@@ -483,7 +503,7 @@ static int
 rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
     uint8_t channel)
 {
-	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg;
+	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg, rf18_check;
 	uint32_t igi_a, igi_b, value32;
 	uint8_t value8;
 	int error, path;
@@ -580,12 +600,24 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	rf_malsel &= ~CH_RF_MALSEL_MASK;
 	rf_lutdbg &= ~CH_RF_LUTDBG_MASK; /* channels 1-13 are below channel 144 */
 	if (rtw88_native_phy_rf_write(sc, 0, 0xbe, rf_malsel) != 0 ||
-	    rtw88_native_phy_rf_write(sc, 0, 0xdf, rf_lutdbg) != 0 ||
-	    rtw88_native_phy_rf_write(sc, 0, 0x18, rf18) != 0)
+	    rtw88_native_phy_rf_write(sc, 0, 0xdf, rf_lutdbg) != 0)
 		return (EIO);
-	for (path = 1; path < sc->rf_path_num; path++) {
-		if (rtw88_native_phy_rf_write(sc, path, 0x18, rf18) != 0)
+
+	/*
+	 * RTW88 programs RF18 identically on each active path. Verify the
+	 * direct RF window after each write; this catches a command-port write
+	 * that completed over USB but did not change the selected RF path.
+	 */
+	for (path = 0; path < sc->rf_path_num; path++) {
+		if (rtw88_native_phy_rf_write(sc, path, 0x18, rf18) != 0 ||
+		    rtw88_native_phy_rf_read(sc, path, 0x18,
+		    &rf18_check) != 0 ||
+		    rf18_check != rf18) {
+			device_printf(sc->dev,
+			    "RF path %d channel register mismatch: wrote 0x%05x, read 0x%05x\n",
+			    path, rf18, rf18_check);
 			return (EIO);
+		}
 	}
 	rf_xtalx2 &= ~CH_RF_XTALX2_MASK;
 	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
