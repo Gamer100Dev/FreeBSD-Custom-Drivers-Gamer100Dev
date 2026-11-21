@@ -174,6 +174,25 @@ adapter.
   and the WLRF1/RXPSEL masked-write correction.
 - Suspend/resume, watchdog, recovery and full load/unload/device-unplug tests.
 
+## Verifying the exact source revision on the target machine
+
+`tools/build-native-module.sh` copies the checked-out repository's native
+driver files into the selected FreeBSD source overlay before building. It now
+prints the checked-out Git revision and stamps it into the loaded module, which
+then logs `native driver build ID` during USB attach. This avoids confusing
+a successful build of an older `/usr/src-rtw88-usb-test` overlay with a build of
+the current GitHub branch.
+
+After pulling this branch, the expected markers are:
+- `native driver build ID: <revision>` matching the local Git checkout.
+- `allocated native USB pipes: 4 bulk IN`.
+- `BB/RF domain enabled: WLRF1=0x07000000` and no BB/RF enable failure.
+- `RX diag: ... xfers=4 submits=4` immediately after RX starts, before any
+  receive completions.
+
+If the PHY readback checks fail, startup returns an error rather than
+advertising a working radio with its BB/RF or RX path-select domain disabled.
+
 ## Validation
 
 User-reported local FreeBSD testing on the RTL8822BU adapter confirms:
