@@ -979,5 +979,6 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
+	sc->current_channel = 0;
 	rtw88_native_firmware_put(sc);
 }
