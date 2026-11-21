@@ -461,6 +461,7 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define REG_DRVERLYINT				0x0558
 #define REG_BCNDMATIM				0x0559
 #define REG_RXFLTMAP0				0x06a0
+#define REG_RXFLTMAP1			0x06a2
 #define REG_RXFLTMAP2				0x06a4
 #define REG_RCR				0x0608
 #define REG_RX_PKT_LIMIT			0x060c
@@ -844,7 +845,13 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
-	if (rtw88_native_reg_write32(sc, REG_RXFLTMAP0, 0x0fffffff) !=
+	/*
+	 * Match upstream RTL8822B mac_init() register widths and map layout:
+	 * RXFLTMAP0/1/2 are three independent 16-bit filter registers.
+	 */
+	if (rtw88_native_reg_write16(sc, REG_RXFLTMAP0, 0xffff) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write16(sc, REG_RXFLTMAP1, 0x0fff) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_write16(sc, REG_RXFLTMAP2, 0xffff) !=
 	    USB_ERR_NORMAL_COMPLETION ||
