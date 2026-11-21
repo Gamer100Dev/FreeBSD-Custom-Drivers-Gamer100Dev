@@ -43,11 +43,12 @@ USB ID `0bda:b812`.
   used by probe requests and station management frames (priority, legacy
   management rate, retry count, power and group-frame NOACK). Unsupported
   radiotap/BPF features and hardware-crypto requests remain rejected.
-- Management/control frames use QSEL 18 on the high-priority OUT endpoint
-  (0x05), with a conservative 1-Mbps rate. Group-addressed data uses QSEL_HIGH
-  (17) on the high-priority endpoint; unicast data maps FreeBSD's WME AC to
-  the corresponding 802.11 TID (BE 0, BK 1, VI 5, VO 6) and then to the
-  configured bulk-OUT endpoint. Data remains at a conservative 1-Mbps rate.
+- Management/control frames use QSEL 18 on the management/high-priority OUT
+  endpoint (0x05), with a conservative 1-Mbps rate. Group-addressed data uses
+  QSEL_HIGH (17) on the high-priority endpoint. Unicast BE/BK map to their
+  corresponding TIDs (0/1); unicast VI/VO map to QSEL_BEACON (16), matching
+  Linux RTW88's three-pipe USB queue policy. Data remains at a conservative
+  1-Mbps rate.
 - USB transmit completion is returned to net80211 through
   `ieee80211_tx_complete()`; separate queue, completion and error counters
   are exposed. Completion currently means USB bulk-OUT completion, not a
@@ -255,9 +256,14 @@ TX counters distinguish raw net80211 callback entries/rejections, queued
 frames, successful USB bulk-OUT completions and errors. The `tx_raw_count` and
 `tx_raw_reject_count` counters show whether a management frame reached the
 callback and was accepted. The `tx_mgmt_count`, `tx_data_count`,
-`tx_group_count` and `tx_eapol_count` counters classify frames entering the
-worker; `tx_last_qsel`, `tx_last_endpoint`, `tx_last_frame_control` and
-`tx_last_frame_len` record the most recent descriptor decision. A successful
+`tx_group_count`, `tx_eapol_count`, `tx_probe_req_count`, `tx_auth_req_count`,
+`tx_assoc_req_count` and `tx_deauth_req_count` counters classify frames
+entering the worker; `tx_last_qsel`, `tx_last_endpoint`,
+`tx_last_frame_control` and `tx_last_frame_len` record the most recent
+descriptor decision. RX subtype counters distinguish authentication responses,
+association responses, deauthentication/disassociation, probe responses,
+beacons and EAPOL frames; `rx_auth_to_self_count` confirms an authentication
+frame addressed to this station actually reached the parser. A successful
 USB completion is not a radio ACK. The initial rate is fixed at 1 Mbps;
 negotiated rate control and TX-status C2H reports are not implemented.
 
@@ -300,10 +306,19 @@ and uses the packet priority/TID for unicast data. The native path now mirrors
 that classification using FreeBSD `M_WME_GETAC()` and `WME_AC_TO_TID()`, and
 exposes frame-classification/QSEL diagnostics. EAPOL-tagged PAE traffic is
 also assigned the conservative 1-Mbps B/management rate profile, following
-FreeBSD net80211's M_EAPOL transmit guidance. Active probe TX and the
-net80211 authentication/association management-frame submission path remain
-unverified over the air; successful AP connection/WPA exchange has not been
-demonstrated.
+FreeBSD net80211's M_EAPOL transmit guidance. Active probe TX has now produced 68 raw net80211 management-frame submissions
+in the latest user test, all 68 completing on USB bulk-OUT with no driver TX
+errors. The final observed frame-control was 0x00b0 (authentication request)
+and length 30 bytes. This still does not prove an over-the-air acknowledgement.
+The next revision adds per-subtype TX/RX counters so an authentication response
+addressed to this station can be distinguished from an unanswered TX. The
+latest wpa_supplicant log reports authentication timeout to BSSID
+`1c:61:b4:98:43:de` (SSID `TP-Link_43DF`, 2412 MHz), rather than the requested
+`DIGI-G5HP_RPT`; that network-selection mismatch must be resolved before
+judging the intended AP's compatibility. The operation-20 `DELKEY` ioctl
+warning is known FreeBSD supplicant key-cleanup noise and does not itself
+identify the authentication timeout cause. End-to-end AP connection and WPA
+handshake remain unverified.
 The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
 matching `releng/15.1` source. Do not consider the driver functional until
 the corrected revision builds and both TX and RX are verified on the adapter.
