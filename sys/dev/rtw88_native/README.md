@@ -149,13 +149,19 @@ sysctl dev.rtw88_native.0.rx_hw_status
 The output includes the MAC TRX enable register, TXDMA queue/arbiter map,
 RXDMA mode and aggregation threshold, receive filters, RX path selection,
 CCK/OFDM false-alarm counters, per-modulation CRC counters, OFDM and CCK CCA
-counts, RFE selection/inversion and TR-switch readback, CCA thresholds, and
-both path IGI values. The RX path-select register is included because upstream
-RTL8822B false-alarm accounting uses bit 28 of `0x0808` to determine
-whether CCK statistics are active. This is intended to distinguish PHY
-detection from a MAC/RXDMA path that is failing to emit USB bulk-IN aggregates.
-It does not change hardware configuration and does not itself prove packet
-reception.
+counts, RFE selection/inversion and TR-switch readback, CCA thresholds, both
+path IGI values, and the latest raw interrupt-IN report as hexadecimal bytes.
+The RX path-select register is included because upstream RTL8822B false-alarm
+accounting uses bit 28 of `0x0808` to determine whether CCK statistics are
+active. The interrupt report is captured under the device mutex and copied
+into the snapshot before formatting. This is intended to distinguish PHY
+detection and firmware event traffic from a MAC/RXDMA path that is failing to
+emit USB bulk-IN aggregates. It does not change hardware configuration and
+does not itself prove packet reception.
+
+The native 2.4-GHz channel sequence follows upstream ordering: baseband/ADC,
+MAC channel width and timing, RF synthesizer, RX DFIR, RX gain-index toggle,
+CCA thresholds, then RFE routing.
 
 The channel setup also uses only the shared base RFE control registers for
 RFE option 3, matching upstream `rtw8822b_set_channel_rfe_ifem()`.
