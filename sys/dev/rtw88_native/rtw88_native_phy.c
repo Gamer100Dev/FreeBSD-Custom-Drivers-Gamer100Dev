@@ -818,11 +818,25 @@ rtw88_native_phy_adaptivity_init(struct rtw88_native_softc *sc)
 #define REG_RFE_INV8			0x0cbd
 #define REG_RFE_INV16			0x0cbe
 #define REG_RFESEL_CTRL			0x1990
+#define REG_WIFI_BT_INFO			0x00aa
+#define REG_BT_COEX_TABLE_H			0x06cc
+#define REG_BT_COEX_TABLE_H3			0x06cf
+#define REG_BT_TDMA_TIME			0x0790
+#define REG_BT_STAT_CTRL			0x0778
+#define REG_GPIO_MUXCFG			0x0040
+#define REG_QUEUE_CTRL			0x04c6
+#define REG_BT_COEX_V2			0x0762
 
 #define LTECOEX_READY			(1U << 29)
 #define BIT_LTE_MUX_CTRL_PATH		(1U << 26)
 #define BIT_LTE_COEX_EN			(1U << 7)
 #define BIT_RFE_BUF_EN			(1U << 3)
+#define BIT_BT_INT_EN			(1U << 15)
+#define BIT_BT_PTA_EN			(1U << 5)
+#define BIT_PO_BT_PTA_PINS		(1U << 9)
+#define BIT_PTA_WL_TX_EN		(1U << 4)
+#define BIT_PTA_EDCCA_EN		(1U << 5)
+#define BIT_GNT_BT_POLARITY		(1U << 12)
 
 static int
 rtw88_native_ltecoex_wait_ready(struct rtw88_native_softc *sc)
@@ -978,6 +992,38 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 		return (error);
 	}
 
+	/*
+	 * rtw8822b_coex_cfg_init(): initialise the shared grant/antenna GPIO,
+	 * WLAN-to-PTA indication and BT statistics sampling registers. These
+	 * are common 8822B setup writes and are also performed in wifi_only mode.
+	 */
+	error = rtw88_native_phy_write_mask8(sc, REG_BT_TDMA_TIME,
+	    0x3f, 0x05);
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_BT_STAT_CTRL, 0x01) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_GPIO_MUXCFG,
+		    BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS,
+		    BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_QUEUE_CTRL,
+		    BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN,
+		    BIT_PTA_WL_TX_EN);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_BT_COEX_V2,
+		    BIT_GNT_BT_POLARITY, BIT_GNT_BT_POLARITY);
+	/* Linux gives ACK/BA/CTS, beacon and beacon-queue traffic high priority. */
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc,
+		    REG_BT_COEX_TABLE_H, (1U << 3) | (1U << 4),
+		    (1U << 3) | (1U << 4));
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc,
+		    REG_BT_COEX_TABLE_H3, (1U << 3), (1U << 3));
+	if (error != 0)
+		return (error);
+
 	/* COEX_SET_ANT_WONLY: grant path control to WLAN. 8822B has no btg_reg. */
 	if (rtw88_native_phy_write_mask8(sc, REG_SYS_SDIO_CTRL + 3,
 	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24),
@@ -1001,6 +1047,15 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 		    0x03, 0x02);
 	if (error != 0)
 		return (error);
+
+	/*
+	 * COEX_SCBD_ACTIVE | COEX_SCBD_ONOFF: tell firmware that WLAN is
+	 * active and its radio is enabled. This is the Wi-Fi-only scoreboard
+	 * state written by Linux after the WONLY antenna path is selected.
+	 */
+	if (rtw88_native_reg_write16(sc, REG_WIFI_BT_INFO,
+	    BIT_BT_INT_EN | 0x0003) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
 
 	/* Read the LTE control register once more to ensure the path is ready. */
 	error = rtw88_native_ltecoex_read(sc, 0x0038, &value);
