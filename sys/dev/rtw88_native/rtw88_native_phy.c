@@ -522,7 +522,7 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (error != 0)
 		return (error);
 
-	/* 20-MHz ADC and receive DFIR path. */
+	/* 20-MHz ADC clock and converter setup (part of set_channel_bb). */
 	if (rtw88_native_reg_read32(sc, REG_CH_ADCCLK, &value32) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
@@ -532,15 +532,6 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 		return (EIO);
 	error = rtw88_native_phy_write_mask32(sc, REG_CH_ADC160,
 	    1U << 30, 1);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBB0,
-		    (3U << 28), 2);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBBRXFIR,
-		    (3U << 28), 2);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_TXDFIR,
-		    1U << 31, 1);
 	if (error != 0)
 		return (error);
 
@@ -593,6 +584,21 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	rf_xtalx2 |= CH_RF_XTALX2_MASK;
 	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
 		return (EIO);
+
+	/*
+	 * Upstream set_channel() configures RX DFIR after set_channel_rf().
+	 * Keep this order: BB/ADC, MAC, RF, RX DFIR, IGI, CCA and RFE.
+	 */
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBB0,
+	    (3U << 28), 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBBRXFIR,
+		    (3U << 28), 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TXDFIR,
+		    1U << 31, 1);
+	if (error != 0)
+		return (error);
 
 /*
 	 * Match rtw8822b_toggle_igi(): read the Path-A gain index, apply that
