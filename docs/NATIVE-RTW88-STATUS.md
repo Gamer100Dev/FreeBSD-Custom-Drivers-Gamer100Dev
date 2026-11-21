@@ -1,6 +1,6 @@
 # Native RTW88 implementation status
 
-Development branch: `work/native-rtw88-usb`
+Development branch: `work/native-rtw88-rxdma`
 
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
