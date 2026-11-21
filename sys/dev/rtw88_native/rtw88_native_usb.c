@@ -40,8 +40,10 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 
 	mtx_assert(&sc->mtx, MA_OWNED);
 	if (!sc->net80211_attached || sc->current_channel < 1 ||
-	    sc->current_channel > 13)
+	    sc->current_channel > 13) {
+		sc->rx_input_drop_count++;
 		return;
+	}
 	if ((w0 & (RTW88_NATIVE_RX_DESC_W0_CRCERR |
 	    RTW88_NATIVE_RX_DESC_W0_ICVERR)) != 0 ||
 	    packet_length <= RTW88_NATIVE_RX_FCS_LEN ||
