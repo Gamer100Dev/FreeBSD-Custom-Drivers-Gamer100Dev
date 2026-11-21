@@ -55,10 +55,15 @@ enum rtw88_native_phy_table_kind {
 };
 
 extern const uint32_t rtw88_native_rtw8822b_mac[];
+extern const size_t rtw88_native_rtw8822b_mac_nwords;
 extern const uint32_t rtw88_native_rtw8822b_agc[];
+extern const size_t rtw88_native_rtw8822b_agc_nwords;
 extern const uint32_t rtw88_native_rtw8822b_bb[];
+extern const size_t rtw88_native_rtw8822b_bb_nwords;
 extern const uint32_t rtw88_native_rtw8822b_rf_a[];
+extern const size_t rtw88_native_rtw8822b_rf_a_nwords;
 extern const uint32_t rtw88_native_rtw8822b_rf_b[];
+extern const size_t rtw88_native_rtw8822b_rf_b_nwords;
 
 static bool
 rtw88_native_phy_condition_match(struct rtw88_native_softc *sc,
@@ -297,19 +302,19 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 		return (error);
 
 	error = rtw88_native_phy_load_table(sc, rtw88_native_rtw8822b_mac,
-	    nitems(rtw88_native_rtw8822b_mac), RTW88_NATIVE_PHY_MAC, 0);
+	    rtw88_native_rtw8822b_mac_nwords, RTW88_NATIVE_PHY_MAC, 0);
 	if (error == 0)
 		error = rtw88_native_phy_load_table(sc, rtw88_native_rtw8822b_bb,
-		    nitems(rtw88_native_rtw8822b_bb), RTW88_NATIVE_PHY_BB, 0);
+		    rtw88_native_rtw8822b_bb_nwords, RTW88_NATIVE_PHY_BB, 0);
 	if (error == 0)
 		error = rtw88_native_phy_load_table(sc, rtw88_native_rtw8822b_agc,
-		    nitems(rtw88_native_rtw8822b_agc), RTW88_NATIVE_PHY_AGC, 0);
+		    rtw88_native_rtw8822b_agc_nwords, RTW88_NATIVE_PHY_AGC, 0);
 	if (error == 0)
 		error = rtw88_native_phy_load_table(sc, rtw88_native_rtw8822b_rf_a,
-		    nitems(rtw88_native_rtw8822b_rf_a), RTW88_NATIVE_PHY_RF, 0);
+		    rtw88_native_rtw8822b_rf_a_nwords, RTW88_NATIVE_PHY_RF, 0);
 	if (error == 0 && sc->rf_path_num > 1)
 		error = rtw88_native_phy_load_table(sc, rtw88_native_rtw8822b_rf_b,
-		    nitems(rtw88_native_rtw8822b_rf_b), RTW88_NATIVE_PHY_RF, 1);
+		    rtw88_native_rtw8822b_rf_b_nwords, RTW88_NATIVE_PHY_RF, 1);
 	if (error != 0)
 		return (error);
 

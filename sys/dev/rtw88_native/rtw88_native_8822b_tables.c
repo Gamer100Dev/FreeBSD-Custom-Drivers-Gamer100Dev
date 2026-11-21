@@ -20273,3 +20273,10 @@ const uint32_t rtw88_native_rtw8822b_rf_b[] = {
 		0x0EF, 0x00000000,
 };
 
+
+/* Word counts are exported because the arrays are defined in this translation unit. */
+const size_t rtw88_native_rtw8822b_mac_nwords = sizeof(rtw88_native_rtw8822b_mac) / sizeof(rtw88_native_rtw8822b_mac[0]);
+const size_t rtw88_native_rtw8822b_agc_nwords = sizeof(rtw88_native_rtw8822b_agc) / sizeof(rtw88_native_rtw8822b_agc[0]);
+const size_t rtw88_native_rtw8822b_bb_nwords = sizeof(rtw88_native_rtw8822b_bb) / sizeof(rtw88_native_rtw8822b_bb[0]);
+const size_t rtw88_native_rtw8822b_rf_a_nwords = sizeof(rtw88_native_rtw8822b_rf_a) / sizeof(rtw88_native_rtw8822b_rf_a[0]);
+const size_t rtw88_native_rtw8822b_rf_b_nwords = sizeof(rtw88_native_rtw8822b_rf_b) / sizeof(rtw88_native_rtw8822b_rf_b[0]);
