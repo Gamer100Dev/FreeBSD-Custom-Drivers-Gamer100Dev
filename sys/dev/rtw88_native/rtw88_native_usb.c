@@ -288,7 +288,7 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 /*
  * Safely walk an RTW88 USB RX aggregation, retain bounded C2H metadata, and
  * enqueue valid 802.11 frames for deferred net80211 input. C2H dispatch and
- * full per-rate/chain PHY-statistics decoding remain follow-on work.
+ * per-chain RSSI/SNR/EVM decoding remain follow-on work.
  */
 static void
 rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
