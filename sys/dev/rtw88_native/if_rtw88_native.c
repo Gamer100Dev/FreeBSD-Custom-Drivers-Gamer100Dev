@@ -316,13 +316,17 @@ static int
 rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 {
 	struct rtw88_native_softc *sc;
-	char status[768];
+	char status[1152];
+	char intr_hex[129];
+	uint8_t intr_snapshot[64];
 	uint8_t cr, rxdma_mode;
 	uint16_t pq_map, agg, rxfltmap0, rxfltmap1, rxfltmap2;
 	uint16_t cck_fa, ofdm_fa;
 	uint32_t rcr, rx_psel, cck_crc, ofdm_crc, ht_crc, vht_crc;
 	uint32_t cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw;
 	uint32_t cca_sel, pdm_fth, cca_2nd, igi_a, igi_b;
+	uint16_t intr_len;
+	size_t i;
 	int channel, error;
 
 	sc = arg1;
@@ -345,6 +349,8 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	 */
 	sc->hw_busy = 1;
 	channel = sc->current_channel;
+	intr_len = MIN(sc->last_intr_len, sizeof(intr_snapshot));
+	memcpy(intr_snapshot, sc->last_intr, intr_len);
 	mtx_unlock(&sc->mtx);
 
 	error = 0;
@@ -409,6 +415,12 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	if (error != 0)
 		return (error);
 
+	for (i = 0; i < intr_len; i++)
+		(void)snprintf(intr_hex + (i * 2),
+		    sizeof(intr_hex) - (i * 2), "%02x",
+		    (unsigned int)intr_snapshot[i]);
+	intr_hex[intr_len * 2] = '\0';
+
 	(void)snprintf(status, sizeof(status),
 	    "channel=%d CR=%02x PQ_MAP=%04x RXDMA_MODE=%02x "
 	    "RXDMA_AGG=%04x RCR=%08x RXFLTMAP0=%04x "
@@ -417,14 +429,15 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    "CCK_CRC=%08x OFDM_CRC=%08x HT_CRC=%08x VHT_CRC=%08x "
 	    "OFDM_CCA=%08x CCK_CCA=%08x RFESEL0=%08x RFESEL8=%08x "
 	    "RFEINV=%08x TRSW=%08x CCASEL=%08x PDMFTH=%08x "
-	    "CCA2ND=%08x IGI_A=%08x IGI_B=%08x",
+	    "CCA2ND=%08x IGI_A=%08x IGI_B=%08x "
+	    "INTR_LEN=%u INTR_DATA=%s",
 	    channel, (unsigned int)cr, (unsigned int)pq_map,
 	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr,
 	    (unsigned int)rxfltmap0, (unsigned int)rxfltmap1,
 	    (unsigned int)rxfltmap2, rx_psel, (unsigned int)cck_fa,
 	    (unsigned int)ofdm_fa, cck_crc, ofdm_crc, ht_crc, vht_crc,
 	    cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw, cca_sel,
-	    pdm_fth, cca_2nd, igi_a, igi_b);
+	    pdm_fth, cca_2nd, igi_a, igi_b, (unsigned int)intr_len, intr_hex);
 	return (sysctl_handle_string(oidp, status, sizeof(status), req));
 }
 
