@@ -262,9 +262,10 @@ rtw88_native_efuse_read(struct rtw88_native_softc *sc)
 	rtw88_native_efuse_parse_8822bu(sc, logical);
 	sc->efuse_initialized = 1;
 	device_printf(sc->dev,
-	    "eFuse configuration: channel-plan=0x%02x RFE=0x%02x board=0x%02x crystal=0x%02x\n",
+	    "eFuse configuration: channel-plan=0x%02x RFE=0x%02x board=0x%02x RF-antenna=0x%02x crystal=0x%02x\n",
 	    sc->efuse.channel_plan, sc->efuse.rfe_option,
-	    sc->efuse.rf_board_option, sc->efuse.crystal_cap);
+	    sc->efuse.rf_board_option, sc->efuse.rf_antenna_option,
+	    sc->efuse.crystal_cap);
 
 out:
 	if (logical != NULL)
