@@ -5,11 +5,17 @@ Development branch: `work/native-rtw88-usb`
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
 
-## Implemented in source (not build-tested)
+## Implemented in source
 
 ### USB and register layer
 
 - Newbus host-driver binding to the vendor-specific Realtek interface.
+- Explicit endpoint-number matching for the observed RTL8822BU interface:
+  bulk-IN 0x84, bulk-OUT 0x05/0x06/0x08, and interrupt-IN 0x87.
+- USB RXDMA burst-mode setup selected from the negotiated USB speed, plus
+  RTL8822B v1 RX aggregation threshold/timeout programming.
+- Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
+  be distinguished from a callback that repeatedly fails.
 - Descriptor-indexed allocation of one bulk-IN, three bulk-OUT and one
   interrupt-IN transfer.
 - Completion-signalled synchronous bulk-OUT using FreeBSD USB callbacks,
@@ -84,16 +90,33 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 
 ## Validation
 
-**The source has not been compiled against FreeBSD 15.1 and has not been
-loaded on the physical adapter.** No claim of successful firmware boot,
-hardware initialisation, scanning or Wi-Fi connectivity is made.
+User-reported local FreeBSD testing on the RTL8822BU adapter confirms:
+- `kldload ./build/if_rtw88_native.ko` returned without an error.
+- The USB device bound as `rtw88_native0`; the SYS_CFG1 vendor-control read
+  succeeded.
+- `hw_start=1` reported completion of power, firmware, eFuse, FIFO, MAC
+  and PHY table setup, including two RF paths.
+- The interrupt-IN endpoint completed repeatedly (769 reports observed,
+  last report length 60 bytes).
+- At that point `rx_count=0`, `rx_desc_count=0`, and all RX parser counters
+  remained zero. This means no bulk-IN transfer had completed; it is not
+  evidence that the descriptor parser rejected packets.
 
-A GitHub Actions workflow now builds the loadable module inside a FreeBSD
-15.1 amd64 VM against the matching `releng/15.1` source. The first CI run
-must be reviewed for compiler diagnostics before attempting a device load.
-The next local verification should reproduce that build in the user's
-foreground FreeBSD 15.1 source tree. Hardware testing remains deferred until
-more of the driver is implemented.
+The endpoint descriptor dump showed a USB 2.0 High-Speed device with bulk-IN
+0x84, bulk-OUT 0x05/0x06/0x08 and interrupt-IN 0x87. The RXDMA burst and
+aggregation configuration was added after this observation and still needs
+a rebuild/retest. These observations are user-reported and have not been
+independently reproduced in CI.
+
+**Wi-Fi operation is not yet verified.** The module still lacks a registered
+net80211 wlan interface, channel programming/scanning, command-specific C2H
+dispatch, RX delivery to net80211, and a normal TX data path. Therefore this
+patch is an RX-DMA bring-up correction and diagnostic improvement, not a
+claim of working Wi-Fi.
+
+The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
+matching `releng/15.1` source. Build and hardware validation must be reviewed
+after this change before the driver can be considered functional.
 
 ## FreeBSD API basis
 
