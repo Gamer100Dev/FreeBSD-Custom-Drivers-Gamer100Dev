@@ -8,18 +8,34 @@ A separate native USB kernel module has been introduced at
 `sys/dev/rtw88_native/` with its module Makefile at
 `sys/modules/rtw88_native/Makefile`.
 
-It targets only Realtek USB ID `0bda:b812` with vendor-specific interface
-class/subclass/protocol `ff/ff/ff`. On attach it performs one read-only
-vendor control request for `REG_SYS_CFG1` (0x00f0). It does not modify
+It targets Realtek USB ID `0bda:b812` with vendor-specific interface
+class/subclass/protocol `ff/ff/ff`. On attach it performs one read-only vendor
+control request for `REG_SYS_CFG1` (0x00f0). It does not change device
 register state.
 
-## Why this is staged
+## API design
 
-FreeBSD's USB API documents synchronous control requests and asynchronous
-transfer setup/lifecycle separately. We first need to validate the native
-control-pipe path before introducing bulk transfer callbacks or firmware
-download. The existing LinuxKPI-based driver remains untouched as a
-comparison/reference and fallback.
+The implementation follows the FreeBSD 15.1 Kernel Developer's Manual,
+`USBDI(9)`, for its USB host-driver interfaces:
+
+- `usbd_lookup_id_by_uaa()` and `USB_PNP_HOST_INFO()` for USB device matching;
+- `DRIVER_MODULE(..., uhub, ...)` for USB bus attachment;
+- `usbd_do_request_flags()` for synchronous control requests;
+- a device-private mutex to serialize register requests.
+
+Official API manual:
+https://man.freebsd.org/cgi/man.cgi?query=usbd_do_request_flags&sektion=9&manpath=FreeBSD+15.1-RELEASE+and+Ports
+
+The register request format is taken from the vendored RTW88 USB code:
+vendor request 0x05, register address in wValue, wIndex 0, and little-endian
+payload. The read-only chip identification register `REG_SYS_CFG1` is
+defined by the vendored RTW88 register header as 0x00f0.
+
+The choice to retain an explicit FreeBSD `net80211` integration stage is
+consistent with existing native FreeBSD wireless drivers such as `rtwn(4)`.
+The native FreeBSD driver handbook is also a reference for driver/module
+structure:
+https://docs.freebsd.org/en/books/arch-handbook/driverbasics/
 
 ## Not implemented
 
@@ -28,15 +44,15 @@ comparison/reference and fallback.
 - RTL8822B MAC/BB/RF configuration and calibration
 - TX/RX descriptors, aggregation, queue mapping and error recovery
 - Native net80211 glue and wlan interface registration
-- Suspend/resume and full detach/teardown for active transfers
+- Suspend/resume and full transfer teardown/recovery
 
 ## Required validation
 
-- Build the module against the user's FreeBSD 15.1 source/build tree.
-- Load only this experimental module for the probe test; avoid simultaneously
-  binding another driver to the same USB interface.
-- Confirm dmesg reports attach and a successful SYS_CFG1 read.
-- Record the exact register value and any `usbd_errstr()` failure.
-- Continue only after reviewing build and device logs.
+1. Build the module against the user's FreeBSD 15.1 source/build tree.
+2. Load only this experimental module for the probe test; do not allow
+   another driver to bind the same USB interface simultaneously.
+3. Confirm dmesg reports attachment and a successful SYS_CFG1 read.
+4. Record the SYS_CFG1 value and any `usbd_errstr()` failure.
+5. Continue with endpoint discovery only after reviewing build/device logs.
 
 No claim of functional wireless support is made at this stage.

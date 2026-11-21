@@ -14,7 +14,9 @@
  * wIndex = 0, and a little-endian payload.
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
+#include <sys/errno.h>
 #include <sys/bus.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
@@ -56,7 +58,7 @@ rtw88_native_control(struct rtw88_native_softc *sc, uint8_t request_type,
 	usb_device_request_t req;
 	usb_error_t error;
 
-	if (data == NULL || len == 0 ||
+	if (sc == NULL || sc->udev == NULL || data == NULL || len == 0 ||
 	    len > RTW88_NATIVE_MAX_CONTROL_DATA)
 		return (USB_ERR_INVAL);
 
@@ -87,7 +89,7 @@ rtw88_native_reg_read32(struct rtw88_native_softc *sc, uint16_t reg,
 	uint32_t value_le;
 	usb_error_t error;
 
-	if (value == NULL)
+	if (sc == NULL || value == NULL)
 		return (USB_ERR_INVAL);
 
 	value_le = 0;
@@ -109,6 +111,8 @@ rtw88_native_reg_write(struct rtw88_native_softc *sc, uint16_t reg,
 	 * be encoded accordingly; this routine deliberately does not reinterpret
 	 * arbitrary firmware payloads.
 	 */
+	if (sc == NULL)
+		return (USB_ERR_INVAL);
 	return (rtw88_native_control(sc, UT_WRITE_VENDOR_DEVICE, reg,
 	    __DECONST(void *, data), len));
 }
@@ -136,6 +140,9 @@ rtw88_native_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	uaa = device_get_ivars(dev);
+	if (uaa == NULL || uaa->device == NULL)
+		return (ENXIO);
+
 	sc->dev = dev;
 	sc->udev = uaa->device;
 
