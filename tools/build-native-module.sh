@@ -18,7 +18,18 @@ install -d "$SRCROOT/sys/dev/rtw88_native" "$SRCROOT/sys/modules/rtw88_native"
 cp -R "$REPO_ROOT/sys/dev/rtw88_native/." "$SRCROOT/sys/dev/rtw88_native/"
 cp -R "$REPO_ROOT/sys/modules/rtw88_native/." "$SRCROOT/sys/modules/rtw88_native/"
 cd "$SRCROOT/sys/modules/rtw88_native"
+OBJDIR="$(make -V .OBJDIR)"
+if [ -z "$OBJDIR" ]; then
+    echo "Could not determine the kernel-module object directory." >&2
+    exit 1
+fi
+
 make clean
 make
-test -f if_rtw88_native.ko
-echo "Build succeeded: $SRCROOT/sys/modules/rtw88_native/if_rtw88_native.ko"
+
+KMOD="$OBJDIR/if_rtw88_native.ko"
+if [ ! -f "$KMOD" ]; then
+    echo "Build completed but the module was not found at: $KMOD" >&2
+    exit 1
+fi
+echo "Build succeeded: $KMOD"
