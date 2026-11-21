@@ -885,6 +885,18 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 
 	/* Attach PHY-status records to RX descriptors for the later RX parser. */
 	if (rtw88_native_reg_write8(sc, REG_RX_DRVINFO_SZ, 4) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/*
+	 * Linux rtw_drv_info_cfg() applies this 3081-specific fix because
+	 * otherwise the RTL8822B RX descriptor length can be reported as zero.
+	 */
+	if (rtw88_native_reg_read8(sc, 0x0115, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	value8 = (value8 & 0xf0) | 0x0f;
+	if (rtw88_native_reg_write8(sc, 0x0115, value8) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, REG_RCR, &value32) !=
 	    USB_ERR_NORMAL_COMPLETION ||
