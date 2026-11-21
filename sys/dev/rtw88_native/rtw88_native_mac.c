@@ -1017,9 +1017,6 @@ rtw88_native_hw_feature_read(struct rtw88_native_softc *sc)
 	sc->hw_feature_nss = (caps >> 19) & 0x03U;
 	sc->hw_feature_ant_num = (caps >> 21) & 0x07U;
 	sc->hw_feature_protocol = (caps >> 26) & 0x03U;
-	if (sc->hw_feature_nss == 0 ||
-	    sc->hw_feature_nss > sc->rf_path_num)
-		sc->hw_feature_nss = sc->rf_path_num;
 	sc->hw_feature_valid = 1;
 
 	if (sc->hw_feature_ant_num == 1 && sc->rf_path_num > 1) {
@@ -1027,6 +1024,9 @@ rtw88_native_hw_feature_read(struct rtw88_native_softc *sc)
 		sc->antenna_tx = 0x01;
 		sc->antenna_rx = 0x01;
 	}
+	if (sc->hw_feature_nss == 0 ||
+	    sc->hw_feature_nss > sc->rf_path_num)
+		sc->hw_feature_nss = sc->rf_path_num;
 	device_printf(sc->dev,
 	    "RTL8822B HW feature: HCI=%u BW=%u NSS=%u antennas=%u protocol=%u; RF paths=%u TX=0x%x RX=0x%x\n",
 	    sc->hw_feature_hci, sc->hw_feature_bw, sc->hw_feature_nss,
@@ -1056,14 +1056,14 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_firmware_download(sc);
 	if (error != 0)
 		goto fail;
+	error = rtw88_native_efuse_read(sc);
+	if (error != 0 && error != EALREADY)
+		goto fail;
 	if (hw_feature_requested)
 		(void)rtw88_native_hw_feature_read(sc);
 	else
 		rtw88_native_hw_feature_rf_a_fallback(sc, 0,
 		    "request write failed");
-	error = rtw88_native_efuse_read(sc);
-	if (error != 0 && error != EALREADY)
-		goto fail;
 	error = rtw88_native_mac_init(sc);
 	if (error != 0)
 		goto fail;
