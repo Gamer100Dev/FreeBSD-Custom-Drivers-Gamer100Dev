@@ -298,7 +298,9 @@ The TX queue-selection audit found that the FreeBSD implementation sent every
 data frame as TID0/BE. Linux RTW88 selects QSEL_HIGH for group-addressed data
 and uses the packet priority/TID for unicast data. The native path now mirrors
 that classification using FreeBSD `M_WME_GETAC()` and `WME_AC_TO_TID()`, and
-exposes frame-classification/QSEL diagnostics. Active probe TX and the
+exposes frame-classification/QSEL diagnostics. EAPOL-tagged PAE traffic is
+also assigned the conservative 1-Mbps B/management rate profile, following
+FreeBSD net80211's M_EAPOL transmit guidance. Active probe TX and the
 net80211 authentication/association management-frame submission path remain
 unverified over the air; successful AP connection/WPA exchange has not been
 demonstrated.
