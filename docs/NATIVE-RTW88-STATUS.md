@@ -165,7 +165,9 @@ frames use `ic_transmit`. Both callbacks enqueue mbufs with their node
 references to a sleepable TX task; the task builds an RTL8822B descriptor and
 uses the correct management or data USB endpoint. The driver registers
 software WEP/TKIP/CCMP crypto, but key handling and WPA exchange have not been
-validated on hardware.
+validated on hardware. Explicit BPF transmit overrides (including hardware
+crypto requests used by shared-key WEP authentication) are rejected; normal
+open-system authentication used by WPA/WPA2 passes zeroed default parameters.
 
 TX counters distinguish queued frames, successful USB bulk-OUT completions and
 errors. A successful USB completion is not a radio ACK. The initial rate is
