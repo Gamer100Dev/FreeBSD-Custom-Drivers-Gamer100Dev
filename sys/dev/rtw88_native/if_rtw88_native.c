@@ -336,8 +336,9 @@ rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
 /*
  * Send one 802.11 MPDU through the RTW88 48-byte descriptor and the USB
  * endpoint selected by the RTL8822B queue map. Management/control frames use
- * QSEL_MGMT (18 -> high endpoint 0x05); data frames use TID0/BE (0 -> low
- * endpoint 0x08). TX is serialized by the sleepable TX task.
+ * QSEL_MGMT; group-addressed data uses QSEL_HIGH; unicast data maps the
+ * net80211 WME access category to its 802.11 TID. TX is serialized by the
+ * sleepable TX task.
  */
 static int
 rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
@@ -420,12 +421,13 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.mac_id = 0;
 	params.queue_select = qsel;
 	/*
-	 * Use the 2.4-GHz B rate table for management frames at 1 Mbps. Until
-	 * association-specific rate control is ported, data uses the BG legacy
-	 * table at the universally supported 1-Mbps basic rate.
+	 * Use the 2.4-GHz B rate table for management and EAPOL frames at 1 Mbps;
+	 * the FreeBSD net80211 M_EAPOL tag identifies PAE traffic that should use
+	 * the robust management rate. Ordinary data uses the BG legacy table.
 	 */
 	if (type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_CTL) {
+	    type == IEEE80211_FC0_TYPE_CTL ||
+	    (m->m_flags & M_EAPOL) != 0) {
 		params.rate_id = 8;	/* RTW_RATEID_B_20M */
 		params.data_rate = 0;	/* DESC_RATE1M */
 	} else {
