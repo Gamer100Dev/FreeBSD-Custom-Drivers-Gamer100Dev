@@ -87,6 +87,7 @@ rtw88_native_fw_parse(struct rtw88_native_softc *sc)
 	const uint8_t *data;
 	const struct firmware *fw;
 	uint64_t dmem_size, imem_size, emem_size, expected;
+	uint64_t dmem_addr, imem_addr, emem_addr;
 	size_t offset;
 
 	fw = sc->firmware;
@@ -117,22 +118,33 @@ rtw88_native_fw_parse(struct rtw88_native_softc *sc)
 	if (expected != fw->datasize)
 		return (EINVAL);
 
+	dmem_addr = le32toh(hdr.dmem_addr) & ~0x80000000U;
+	imem_addr = le32toh(hdr.imem_addr) & ~0x80000000U;
+	emem_addr = le32toh(hdr.emem_addr) & ~0x80000000U;
+	if (dmem_size > UINT32_MAX || imem_size > UINT32_MAX ||
+	    emem_size > UINT32_MAX ||
+	    dmem_addr + dmem_size > (uint64_t)UINT32_MAX + 1 ||
+	    imem_addr + imem_size > (uint64_t)UINT32_MAX + 1 ||
+	    (emem_size != 0 &&
+	    emem_addr + emem_size > (uint64_t)UINT32_MAX + 1))
+		return (EOVERFLOW);
+
 	data = fw->data;
 	offset = RTW88_NATIVE_FW_HEADER_SIZE;
 	sc->fw_layout.dmem = data + offset;
 	sc->fw_layout.dmem_size = (size_t)dmem_size;
-	sc->fw_layout.dmem_addr = le32toh(hdr.dmem_addr) & ~0x80000000U;
+	sc->fw_layout.dmem_addr = (uint32_t)dmem_addr;
 	offset += (size_t)dmem_size;
 
 	sc->fw_layout.imem = data + offset;
 	sc->fw_layout.imem_size = (size_t)imem_size;
-	sc->fw_layout.imem_addr = le32toh(hdr.imem_addr) & ~0x80000000U;
+	sc->fw_layout.imem_addr = (uint32_t)imem_addr;
 	offset += (size_t)imem_size;
 
 	if (emem_size != 0) {
 		sc->fw_layout.emem = data + offset;
 		sc->fw_layout.emem_size = (size_t)emem_size;
-		sc->fw_layout.emem_addr = le32toh(hdr.emem_addr) & ~0x80000000U;
+		sc->fw_layout.emem_addr = (uint32_t)emem_addr;
 	} else {
 		sc->fw_layout.emem = NULL;
 		sc->fw_layout.emem_size = 0;
@@ -397,12 +409,14 @@ rtw88_native_fw_ddma_chunk(struct rtw88_native_softc *sc, uint32_t dst,
     uint32_t length, bool first)
 {
 	uint32_t control;
+	int error;
 
 	if (length == 0 || length > RTW88_NATIVE_TXDMA_CHUNK)
 		return (EINVAL);
-	if (rtw88_native_fw_poll32(sc, RTW88_NATIVE_REG_DDMA_CH0CTRL,
-	    RTW88_NATIVE_BIT_DDMACH0_OWN, 0) != 0)
-		return (EBUSY);
+	error = rtw88_native_fw_poll32(sc, RTW88_NATIVE_REG_DDMA_CH0CTRL,
+	    RTW88_NATIVE_BIT_DDMACH0_OWN, 0);
+	if (error != 0)
+		return (error);
 
 	control = RTW88_NATIVE_BIT_DDMACH0_CHKSUM_EN |
 	    RTW88_NATIVE_BIT_DDMACH0_OWN |
@@ -652,16 +666,25 @@ rtw88_native_fw_start(struct rtw88_native_softc *sc)
 	    value) != 0)
 		return (EIO);
 
-	if (rtw88_native_fw_download_segment(sc, sc->fw_layout.dmem,
-	    sc->fw_layout.dmem_size, sc->fw_layout.dmem_addr) != 0)
-		return (EIO);
-	if (rtw88_native_fw_download_segment(sc, sc->fw_layout.imem,
-	    sc->fw_layout.imem_size, sc->fw_layout.imem_addr) != 0)
-		return (EIO);
-	if (sc->fw_layout.emem_size != 0 &&
-	    rtw88_native_fw_download_segment(sc, sc->fw_layout.emem,
-	    sc->fw_layout.emem_size, sc->fw_layout.emem_addr) != 0)
-		return (EIO);
+	{
+		int error;
+
+		error = rtw88_native_fw_download_segment(sc, sc->fw_layout.dmem,
+		    sc->fw_layout.dmem_size, sc->fw_layout.dmem_addr);
+		if (error != 0)
+			return (error);
+		error = rtw88_native_fw_download_segment(sc, sc->fw_layout.imem,
+		    sc->fw_layout.imem_size, sc->fw_layout.imem_addr);
+		if (error != 0)
+			return (error);
+		if (sc->fw_layout.emem_size != 0) {
+			error = rtw88_native_fw_download_segment(sc,
+			    sc->fw_layout.emem, sc->fw_layout.emem_size,
+			    sc->fw_layout.emem_addr);
+			if (error != 0)
+				return (error);
+		}
+	}
 
 	return (0);
 }
@@ -686,11 +709,6 @@ rtw88_native_firmware_download(struct rtw88_native_softc *sc)
 	if (sc->firmware_running)
 		return (EALREADY);
 	sc->firmware_running = 0;
-
-	/* The 8822B image parser supports EMEM, but this hardware sequence is
-	 * only validated here for the standard DMEM+IMEM image layout. */
-	if (sc->fw_layout.emem_size != 0)
-		return (ENOTSUP);
 
 	error = rtw88_native_fw_cpu_enable(sc, false);
 	if (error != 0)
