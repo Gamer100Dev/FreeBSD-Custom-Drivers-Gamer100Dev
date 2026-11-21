@@ -880,9 +880,8 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 
 /*
  * Configure DMA routing, the 3-endpoint FIFO page table, USB RXDMA burst/
- * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. The USB
- * receive engine can collect aggregates after hardware start, but a wlan
- * interface, channel/scan control and packet path still require net80211.
+ * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. net80211
+ * attaches only after this hardware-start sequence has fully succeeded.
  */
 int
 rtw88_native_mac_init(struct rtw88_native_softc *sc)
