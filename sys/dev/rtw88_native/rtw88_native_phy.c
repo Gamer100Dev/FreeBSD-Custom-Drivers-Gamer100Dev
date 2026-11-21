@@ -638,6 +638,7 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 		    BB_PATH_A);
 		if (error != 0)
 			return (error);
+		sc->rf_path_num = 1;
 		sc->antenna_tx = BB_PATH_A;
 		sc->antenna_rx = BB_PATH_A;
 		active_paths = BB_PATH_A;
