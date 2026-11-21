@@ -229,6 +229,22 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_malformed_count", CTLFLAG_RD, &sc->rx_malformed_count, 0,
 	    "Number of malformed/truncated RX records");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_submit_count", CTLFLAG_RD, &sc->rx_submit_count, 0,
+	    "Number of bulk-IN transfer submit attempts");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_error_count", CTLFLAG_RD, &sc->rx_error_count, 0,
+	    "Number of non-cancelled bulk-IN transfer errors");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_error_code", CTLFLAG_RD, &sc->rx_error_code, 0,
+	    "Last USB bulk-IN transfer error code (0 means no error)");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_started", CTLFLAG_RD, &sc->rx_started, 0,
+	    "Whether continuous bulk-IN collection is armed");
 	SYSCTL_ADD_U32(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_last_len", CTLFLAG_RD, &sc->rx_last_len, 0,
