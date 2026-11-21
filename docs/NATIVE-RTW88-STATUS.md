@@ -34,8 +34,9 @@ USB ID `0bda:b812`.
 - Release FWDL enable, start the WLAN MCU and poll the documented READY bit
   mask.
 
-The current boot path supports the regular DMEM+IMEM image. An image with an
-optional EMEM segment is rejected with `ENOTSUP` pending validation. The
+The boot path handles DMEM, IMEM and optional EMEM segments using the
+upstream RTW88 DDMA/checksum sequence. An EMEM-bearing image still needs
+hardware validation. The
 upstream LTE-coexistence save/restore operation is also not yet ported.
 
 ### Power, eFuse and base MAC configuration
@@ -59,7 +60,10 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
   and base MAC initialisation. Completed data is retained as raw USB batches
   for the future descriptor/C2H parsers.
 - Add an explicit `rtw88_native_hw_start()` / `rtw88_native_hw_stop()`
-  sequence. It is not invoked automatically from USB attach.
+  sequence, exposed by a serialized `dev.rtw88_native.N.hw_start` sysctl.
+- Start the native interrupt-IN transfer after firmware/base MAC setup,
+  capture raw reports in a bounded buffer, and expose count/last-length
+  diagnostics through read-only sysctls.
 
 ## Not yet implemented
 
@@ -79,9 +83,11 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 loaded on the physical adapter.** No claim of successful firmware boot,
 hardware initialisation, scanning or Wi-Fi connectivity is made.
 
-The next local verification batch should run a foreground module build
-against `/usr/src-rtw88-usb-test`, then review any compiler diagnostics
-before attempting a device load. Hardware testing remains deferred until
+A GitHub Actions workflow now builds the loadable module inside a FreeBSD
+15.1 amd64 VM against the matching `releng/15.1` source. The first CI run
+must be reviewed for compiler diagnostics before attempting a device load.
+The next local verification should reproduce that build in the user's
+foreground FreeBSD 15.1 source tree. Hardware testing remains deferred until
 more of the driver is implemented.
 
 ## FreeBSD API basis

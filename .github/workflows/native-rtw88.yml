@@ -1,0 +1,52 @@
+name: FreeBSD 15.1 native RTW88 module build
+
+on:
+  push:
+    branches:
+      - work/native-rtw88-usb
+  pull_request:
+    paths:
+      - "sys/dev/rtw88_native/**"
+      - "sys/modules/rtw88_native/**"
+      - ".github/workflows/native-rtw88.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  freebsd-15-1:
+    name: Build loadable module on FreeBSD 15.1 amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out driver repository
+        uses: actions/checkout@v7
+
+      - name: Build with FreeBSD 15.1 kernel headers and tools
+        uses: vmactions/freebsd-vm@v1.6.0
+        with:
+          release: "15.1"
+          arch: x86_64
+          mem: 8192
+          cpu: 4
+          sync: rsync
+          prepare: |
+            pkg install -y git
+          run: |
+            set -eu
+
+            git clone --depth 1 --branch releng/15.1 \
+              https://github.com/freebsd/freebsd-src.git /usr/src
+
+            install -d /usr/src/sys/dev/rtw88_native
+            install -d /usr/src/sys/modules/rtw88_native
+            cp -R "$GITHUB_WORKSPACE/sys/dev/rtw88_native/." \
+              /usr/src/sys/dev/rtw88_native/
+            cp "$GITHUB_WORKSPACE/sys/modules/rtw88_native/Makefile" \
+              /usr/src/sys/modules/rtw88_native/Makefile
+
+            cd /usr/src/sys/modules/rtw88_native
+            make -j4
+            test -s if_rtw88_native.ko
+            file if_rtw88_native.ko
+            sha256 if_rtw88_native.ko

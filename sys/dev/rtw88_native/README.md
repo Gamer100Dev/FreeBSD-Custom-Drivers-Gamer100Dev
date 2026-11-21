@@ -27,6 +27,22 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
 
 ## Explicit hardware-start entry point
 
+After the module has attached, the device exposes an explicit sysctl:
+
+```sh
+sysctl dev.rtw88_native.0.hw_start=1
+sysctl dev.rtw88_native.0.intr_count
+sysctl dev.rtw88_native.0.intr_last_len
+sysctl dev.rtw88_native.0.hw_start=0
+```
+
+Use the actual unit number shown by `dmesg` if it is not `0`. The start
+handler serializes start/stop operations, calls firmware loading only in
+sleepable process context, and starts the interrupt-IN capture after firmware
+and base MAC setup. Setting it to `0` drains interrupt capture before power
+down. The counters report raw interrupt completion only; C2H parsing and
+event dispatch are not implemented.
+
 `rtw88_native_hw_start()` sequences the current native stages:
 
 1. RTL8822B USB power-on and MAC system configuration.
@@ -42,8 +58,9 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
 
 This routine is **not called by USB attach**. Firmware retrieval may access the
 filesystem and therefore belongs in a sleepable device-start path after the
-root filesystem is mounted. It is exposed for the future native `net80211`
-start method, which has not been implemented yet.
+root filesystem is mounted. It is currently exposed through the device
+`hw_start` sysctl as a controlled bring-up hook; the future native
+`net80211` start method can call the same routine once that interface exists.
 
 ## Current hardware scope
 
@@ -52,9 +69,10 @@ bulk-OUT pipes. The transfer setup only succeeds when the active USB
 interface supplies the expected endpoints. It does not silently fall back to
 a two- or four-pipe layout.
 
-Firmware with an optional EMEM segment is parsed but the current DDMA start
-routine rejects it with `ENOTSUP` until its checksum/address behaviour is
-validated. The firmware sequence also does not yet perform the Bluetooth
+Firmware with an optional EMEM segment is parsed and passed through the same
+DDMA segment/checksum path as the upstream RTW88 implementation. Actual
+EMEM-bearing firmware must still be validated on hardware before claiming
+that path works. The firmware sequence also does not yet perform the Bluetooth
 LTE-coexistence register save/restore used by the upstream RTW88 implementation.
 
 The eFuse reader decodes the packed map and extracts the USB variant's
