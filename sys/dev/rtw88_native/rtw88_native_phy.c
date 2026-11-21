@@ -609,6 +609,7 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	 * that completed over USB but did not change the selected RF path.
 	 */
 	for (path = 0; path < sc->rf_path_num; path++) {
+		rf18_check = 0;
 		if (rtw88_native_phy_rf_write(sc, path, 0x18, rf18) != 0 ||
 		    rtw88_native_phy_rf_read(sc, path, 0x18,
 		    &rf18_check) != 0 ||
