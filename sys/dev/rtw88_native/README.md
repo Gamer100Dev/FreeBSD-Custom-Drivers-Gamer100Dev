@@ -1,58 +1,129 @@
 # Native FreeBSD RTW88 port
 
-This directory starts a separate native FreeBSD driver path for the Realtek
-RTL8822BU USB adapter (USB ID 0bda:b812).
+This directory contains a separate native FreeBSD kernel-driver path for the
+Realtek RTL8822BU USB adapter (USB ID `0bda:b812`). The implementation uses
+FreeBSD newbus, USB USBDI, the kernel firmware framework, native mutexes and
+condition variables. It does not use LinuxKPI or the Linuxulator.
 
-## First milestone: native USB transport allocation
+## Implemented source components
 
-`if_rtw88_native.c` uses FreeBSD's USB host-driver interfaces directly:
+- `if_rtw88_native.c`: newbus USB probe/attach/detach, endpoint setup, and
+  lifetime management for synchronous I/O.
+- `rtw88_native_usb.c`: descriptor-based allocation of one bulk-IN,
+  three bulk-OUT and one interrupt-IN transfer; synchronous vendor-control
+  requests; completion-signalled synchronous bulk-OUT; continuous raw bulk-IN
+  and interrupt-IN transfers with callback/drain lifecycle.
+- `rtw88_native_reg.c`: checked 8/16/32-bit little-endian register access
+  and the RTL8822B USB security-section write to register `0x04e0`.
+- `rtw88_native_fw.c`: FreeBSD firmware acquisition and RTW88 image parsing,
+  firmware TX descriptor construction, reserved-page USB transmission,
+  DDMA segment copy/checksum handling and MCU READY polling.
+- `rtw88_native_mac.c`: USB-applicable RTL8822B power sequences, MAC system
+  configuration, 3-endpoint TX DMA mapping, TX FIFO/page-table setup, H2C
+  ring initialisation and base MAC/WMAC register configuration.
+- `rtw88_native_efuse.c`: native physical eFuse reads, packed logical-map
+  decoding, and RTL8822BU MAC/board-field extraction.
+- `if_rtw88_native.h`: hardware definitions, per-device state and API.
 
-- `usbd_lookup_id_by_uaa()` / `USB_PNP_HOST_INFO()` for adapter matching;
-- `DRIVER_MODULE(..., uhub, ...)` for newbus USB attachment;
-- `usbd_transfer_setup()` to allocate one bulk-IN, three bulk-OUT and one
-  interrupt-IN transfer from the active interface descriptors;
-- `usbd_transfer_unsetup()` during detach and attach failure;
-- `usbd_do_request_flags()` for a synchronous vendor control-register read.
+## Explicit hardware-start entry point
 
-Endpoint addresses are selected by endpoint type and direction using
-`UE_ADDR_ANY` and `ep_index`; the implementation does not hard-code the
-adapter's observed endpoint numbers. The transfer objects are currently
-allocated but **never started**. The callback is intentionally inert until
-firmware, MAC and RX/TX state machines exist.
+After the module has attached, the device exposes an explicit sysctl:
 
-At attach, the driver also performs one raw, read-only request to RTW88
-`REG_SYS_CFG1` (0x00f0). This tests the native control pipe, not full chip
-initialisation. The raw helper intentionally does not implement the RTL8822B
-section-specific side operation (`rtw_usb_reg_sec()` writes register 0x04e0
-for selected register ranges), so it must not be treated as the final chipset
-register-access implementation.
+```sh
+sysctl dev.rtw88_native.0.hw_start=1
+sysctl dev.rtw88_native.0.intr_count
+sysctl dev.rtw88_native.0.intr_last_len
+sysctl dev.rtw88_native.0.hw_start=0
+```
 
-## Build location
+Use the actual unit number shown by `dmesg` if it is not `0`. The start
+handler serializes start/stop operations, calls firmware loading only in
+sleepable process context, and starts the interrupt-IN capture after firmware
+and base MAC setup. Setting it to `0` drains interrupt capture before power
+down. The counters report raw interrupt completion only; C2H parsing and
+event dispatch are not implemented.
 
-The module Makefile is `sys/modules/rtw88_native/Makefile`. It is intended
-to be built as a loadable module against a FreeBSD 15 source/build tree. It
-does not modify `sys/conf/files` or require a kernel configuration change.
+`rtw88_native_hw_start()` sequences the current native stages:
 
-## Implementation order
+1. RTL8822B USB power-on and MAC system configuration.
+2. Acquire and validate `rtw88/rtw8822b_fw.bin` through FreeBSD
+   `firmware_get()`.
+3. Send DMEM/IMEM through the USB beacon/high-priority queue and RTL8822B
+   DDMA engine; verify section checksums and firmware READY bits.
+4. Read and decode the physical/logical eFuse map; extract the permanent
+   MAC address and board configuration bytes.
+5. Configure the 3-OUT-endpoint FIFO/page allocation, H2C ring and base
+   8822B MAC/WMAC registers.
+6. Start continuous raw bulk-IN and interrupt-IN capture.
 
-1. Build and validate the native transport module on FreeBSD 15.1.
-2. Verify all five endpoint matches against the actual descriptor set.
-3. Implement proper RTL8822B USB control-register semantics, including
-   section handling and checked register read/write paths.
-4. Port firmware block download and checksum/startup sequencing.
-5. Port the RTW88 TX/RX descriptors, aggregation, queue mapping and recovery.
-6. Integrate with FreeBSD `net80211` and expose a `wlan(4)` interface.
-7. Add suspend/resume, active-transfer teardown and error recovery.
+This routine is **not called by USB attach**. Firmware retrieval may access the
+filesystem and therefore belongs in a sleepable device-start path after the
+root filesystem is mounted. It is currently exposed through the device
+`hw_start` sysctl as a controlled bring-up hook; the future native
+`net80211` start method can call the same routine once that interface exists.
 
-## API references used
+## Current hardware scope
 
-- FreeBSD 15.1 Kernel Developer's Manual, `USBDI(9)`.
-- In-tree FreeBSD native USB wireless driver patterns:
+The FIFO and queue layout is specifically the RTW88 8822B table for three
+bulk-OUT pipes. The transfer setup only succeeds when the active USB
+interface supplies the expected endpoints. It does not silently fall back to
+a two- or four-pipe layout.
+
+Firmware with an optional EMEM segment is parsed and passed through the same
+DDMA segment/checksum path as the upstream RTW88 implementation. Actual
+EMEM-bearing firmware must still be validated on hardware before claiming
+that path works. The firmware sequence also does not yet perform the Bluetooth
+LTE-coexistence register save/restore used by the upstream RTW88 implementation.
+
+The eFuse reader decodes the packed map and extracts the USB variant's
+permanent MAC address, channel plan, country code, crystal cap, thermal
+meter, PA/LNA, board and RFE bytes. Full board/RFE selection, hardware-feature
+report handling, RF calibration and power-table programming are not yet
+implemented.
+
+Bulk-IN batches are copied to a per-device latest-buffer snapshot and
+walked using the 24-byte RTL8822B RX descriptor layout. The parser validates
+packet length, driver-info length, shift and 8-byte aggregate alignment before
+advancing. It counts normal data frames and identifies C2H records using the
+RXD C2H bit, retaining the last command ID, sequence and bounded payload
+metadata. It does not yet decode PHY status, perform C2H dispatch or inject
+802.11 frames into net80211. The independent interrupt-IN endpoint remains
+a raw diagnostic capture.
+
+## Not yet implemented
+
+- Full RFE/board selection and PHY/BB/RF register-table programming.
+- IQK/DPK calibration, antenna setup, channel control and regulatory
+  handling.
+- RX PHY-status decoding and full RX descriptor processing.
+- C2H command-specific event dispatch/workqueue and normal 802.11 frame
+  delivery into net80211.
+- Normal TX packet descriptors, queue scheduling, aggregation, retries and
+  TX status reporting.
+- Native FreeBSD `net80211` attach/interface operations, scanning,
+  authentication, association, key handling and power management.
+- Suspend/resume, firmware recovery, watchdog and final hot-unplug tests.
+
+## FreeBSD API references
+
+The code is being developed against FreeBSD 15.1 and its in-tree native
+wireless/USB conventions:
+
+- `USBDI(9)`: `usbd_transfer_setup()`, `usbd_transfer_unsetup()`,
+  `usbd_transfer_drain()`, `usbd_do_request_flags()`, USB transfer
+  callbacks and external buffers.
+- `FIRMWARE(9)`: `firmware_get()` and `firmware_put()`.
+- Existing native USB driver patterns:
   `sys/dev/rtwn/usb/rtwn_usb_attach.c`,
-  `sys/dev/rtwn/usb/rtwn_usb_ep.c` and
+  `sys/dev/rtwn/usb/rtwn_usb_ep.c`,
+  `sys/dev/rtwn/usb/rtwn_usb_rx.c`,
+  `sys/dev/rtwn/usb/rtwn_usb_tx.c` and
   `sys/dev/rtwn/usb/rtwn_usb_reg.c`.
-- FreeBSD `rtwn(4)` integrates with the native `net80211` stack; this
-  driver will follow that model once transport and chipset startup are ready.
 
-Do not describe this stage as working Wi-Fi until it builds, attaches to the
-target hardware, downloads firmware, and passes scan/association/TX/RX tests.
+The module Makefile is `sys/modules/rtw88_native/Makefile`. It builds as a
+separate loadable module and does not modify `sys/conf/files`.
+
+**Validation status:** source implementation only. It has not yet been
+compiled against the user's FreeBSD 15.1 tree and has not been run on the
+physical RTL8822BU device. Do not treat it as a working Wi-Fi driver until
+build, firmware, RX/TX and `net80211` validation passes.
