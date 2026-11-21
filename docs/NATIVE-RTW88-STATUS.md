@@ -16,6 +16,9 @@ USB ID `0bda:b812`.
   RTL8822B v1 RX aggregation threshold/timeout programming.
 - Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
   be distinguished from a callback that repeatedly fails.
+- Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
+  exposed as `dev.rtw88_native.N.channel` for channels 1-13. This is a
+  passive receive diagnostic control, not a scan or association operation.
 - Descriptor-indexed allocation of one bulk-IN, three bulk-OUT and one
   interrupt-IN transfer.
 - Completion-signalled synchronous bulk-OUT using FreeBSD USB callbacks,
@@ -78,8 +81,9 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 
 ## Not yet implemented
 
-- Full RFE board selection, HW-feature C2H report, PHY/BB/RF register tables,
-  IQK/DPK, antenna and channel initialisation.
+- Full RFE board selection, HW-feature C2H report, IQK/DPK, thermal tracking,
+  antenna diversity and TX-power calibration; 5-GHz and non-20-MHz channel
+  programming are not implemented.
 - RX PHY-status interpretation, C2H command-specific event decoding/
   dispatch and delivery of normal 802.11 frames to net80211.
 - Normal TX data path, aggregation, per-frame queue mapping, completion and
@@ -98,21 +102,32 @@ User-reported local FreeBSD testing on the RTL8822BU adapter confirms:
   and PHY table setup, including two RF paths.
 - The interrupt-IN endpoint completed repeatedly (769 reports observed,
   last report length 60 bytes).
-- At that point `rx_count=0`, `rx_desc_count=0`, and all RX parser counters
-  remained zero. This means no bulk-IN transfer had completed; it is not
-  evidence that the descriptor parser rejected packets.
+- On the RXDMA revision, the user reported `rx_started=1`,
+  `rx_submit_count=1`, `rx_count=0`, `rx_error_count=0` and
+  `rx_error_code=0`, with 46 interrupt-IN reports at the time of sampling.
+  This means one bulk-IN request was submitted and remained outstanding
+  without a reported USB error; it did not complete with a payload.
+- The same run logged a firmware module lookup warning (`error 8`) followed
+  by successful validation of the 161240-byte binary image (DMEM 11216,
+  IMEM 149960, EMEM 0). FreeBSD's firmware loader tries the binary-file
+  fallback after a linker module lookup fails; the subsequent validation
+  line confirms the driver received and parsed the image bytes.
+
 
 The endpoint descriptor dump showed a USB 2.0 High-Speed device with bulk-IN
-0x84, bulk-OUT 0x05/0x06/0x08 and interrupt-IN 0x87. The RXDMA burst and
-aggregation configuration was added after this observation and still needs
-a rebuild/retest. These observations are user-reported and have not been
-independently reproduced in CI.
+0x84, bulk-OUT 0x05/0x06/0x08 and interrupt-IN 0x87. The reported RXDMA mode
+was `0x1e` and aggregation register value `0x2005`; the user has not yet
+reported a bulk-IN completion after this configuration.
+
+The branch now adds a manual passive channel-tune control for the observed
+RFE option 3 (2.4 GHz, 20 MHz, channels 1-13). It must be rebuilt and tested
+against an access point whose actual 2.4-GHz channel is known.
 
 **Wi-Fi operation is not yet verified.** The module still lacks a registered
-net80211 wlan interface, channel programming/scanning, command-specific C2H
-dispatch, RX delivery to net80211, and a normal TX data path. Therefore this
-patch is an RX-DMA bring-up correction and diagnostic improvement, not a
-claim of working Wi-Fi.
+net80211 wlan interface, active scanning/association, command-specific C2H
+dispatch, RX delivery to net80211, and a normal TX data path. This branch
+therefore contains a controlled channel/RX diagnostic step, not a claim of
+working Wi-Fi.
 
 The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
 matching `releng/15.1` source. Build and hardware validation must be reviewed
