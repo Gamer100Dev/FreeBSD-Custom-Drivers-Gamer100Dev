@@ -803,6 +803,217 @@ rtw88_native_phy_adaptivity_init(struct rtw88_native_softc *sc)
 }
 
 /*
+ * RTL8822B LTE coexistence indirect-register interface, as used by Linux
+ * RTW88 util.c. The Wi-Fi-only RFE path still needs its grant state and
+ * external-antenna switch routed to WLAN even when Bluetooth coexistence is
+ * disabled in eFuse.
+ */
+#define REG_LTECOEX_ACCESS_CTRL		0x1700
+#define REG_LTECOEX_WRITE_DATA		0x1704
+#define REG_LTECOEX_READ_DATA		0x1708
+#define REG_SYS_SDIO_CTRL			0x0070
+#define REG_LED_CFG			0x004c
+#define REG_RFE_CTRL_E			0x0974
+#define REG_RFE_CTRL8			0x0cb4
+#define REG_RFE_INV8			0x0cbd
+#define REG_RFE_INV16			0x0cbe
+#define REG_RFESEL_CTRL			0x1990
+
+#define LTECOEX_READY			(1U << 29)
+#define BIT_LTE_MUX_CTRL_PATH		(1U << 26)
+#define BIT_LTE_COEX_EN			(1U << 7)
+#define BIT_RFE_BUF_EN			(1U << 3)
+
+static int
+rtw88_native_ltecoex_wait_ready(struct rtw88_native_softc *sc)
+{
+	uint32_t value;
+	int i;
+
+	for (i = 0; i < 1000; i++) {
+		if (rtw88_native_reg_read32(sc, REG_LTECOEX_ACCESS_CTRL,
+		    &value) != USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		if ((value & LTECOEX_READY) != 0)
+			return (0);
+		DELAY(10);
+	}
+	return (ETIMEDOUT);
+}
+
+static int
+rtw88_native_ltecoex_read(struct rtw88_native_softc *sc, uint16_t offset,
+    uint32_t *value)
+{
+	int error;
+
+	if (value == NULL)
+		return (EINVAL);
+	error = rtw88_native_ltecoex_wait_ready(sc);
+	if (error != 0)
+		return (error);
+	if (rtw88_native_reg_write32(sc, REG_LTECOEX_ACCESS_CTRL,
+	    0x800f0000U | offset) != USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, REG_LTECOEX_READ_DATA, value) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	return (0);
+}
+
+static int
+rtw88_native_ltecoex_write(struct rtw88_native_softc *sc, uint16_t offset,
+    uint32_t value)
+{
+	int error;
+
+	error = rtw88_native_ltecoex_wait_ready(sc);
+	if (error != 0)
+		return (error);
+	if (rtw88_native_reg_write32(sc, REG_LTECOEX_WRITE_DATA, value) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_LTECOEX_ACCESS_CTRL,
+	    0xc00f0000U | offset) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	return (0);
+}
+
+static int
+rtw88_native_ltecoex_write_mask(struct rtw88_native_softc *sc,
+    uint16_t offset, uint32_t mask, uint32_t value)
+{
+	uint32_t old, shift;
+	int error;
+
+	if (mask == 0)
+		return (EINVAL);
+	error = rtw88_native_ltecoex_read(sc, offset, &old);
+	if (error != 0)
+		return (error);
+	shift = __builtin_ctz(mask);
+	old = (old & ~mask) | ((value << shift) & mask);
+	return (rtw88_native_ltecoex_write(sc, offset, old));
+}
+
+static int
+rtw88_native_phy_write_mask8(struct rtw88_native_softc *sc, uint16_t reg,
+    uint8_t mask, uint8_t value)
+{
+	uint8_t old;
+
+	if (rtw88_native_reg_read8(sc, reg, &old) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	old = (old & ~mask) | (value & mask);
+	return (rtw88_native_reg_write8(sc, reg, old) ==
+	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO);
+}
+
+/*
+ * Linux calls rtw_coex_init_hw_config(wifi_only=true) for this board.
+ * Port only the required 8822B RFE routing and grant programming: no
+ * Bluetooth profile scheduler, PTA TDMA or BT firmware commands are enabled.
+ *
+ * For RFE option 3, the upstream driver selects the WLAN DPDT path by BBSW,
+ * drives GNT_BT low / GNT_WL high, selects the WLG route (0x77) and sets its
+ * inversion value (0x2). The existing RFESEL0/8 and RFEINV values remain
+ * preserved by masked writes.
+ */
+int
+rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
+{
+	uint32_t value;
+	int error;
+
+	if (sc == NULL || !sc->powered || !sc->firmware_running ||
+	    !sc->phy_initialized || sc->dying)
+		return (EINVAL);
+	if (sc->efuse.rfe_option != 3 || sc->rf_path_num != 2 ||
+	    sc->antenna_tx != BB_PATH_AB || sc->antenna_rx != BB_PATH_AB)
+		return (ENOTSUP);
+	if ((sc->efuse.rf_board_option & 0xe0U) == 0x20U)
+		return (ENOTSUP); /* Full BT coexistence is not implemented. */
+	if (sc->wifi_only_coex_initialized)
+		return (0);
+
+	/* rtw8822b_coex_cfg_rfe_type(): select the 8822B RFE signal path. */
+	error = rtw88_native_reg_write8(sc, REG_RFE_CTRL_E, 0xff) ==
+	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc,
+		    REG_RFESEL_CTRL + 1, 0x03, 0x00);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV16,
+		    BIT_RFE_BUF_EN, 0x00);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Linux disables LTE coexistence, then sets both WLAN/BT-vs-LTE
+	 * direction masks to all ones. Keep these indirect writes checked.
+	 */
+	error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+	    BIT_LTE_COEX_EN, 0);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x00a0,
+		    0x0000ffffU, 0xffff);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x00a4,
+		    0x0000ffffU, 0xffff);
+
+	/* COEX_SET_ANT_WONLY: grants are fixed to WLAN for this Wi-Fi-only board. */
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x0000c000U, 0x1);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x00000c00U, 0x1);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x00003000U, 0x3);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x00000300U, 0x3);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only LTE grant configuration failed: %d\n", error);
+		return (error);
+	}
+
+	/* COEX_SET_ANT_WONLY: grant path control to WLAN. 8822B has no btg_reg. */
+	if (rtw88_native_phy_write_mask8(sc, REG_SYS_SDIO_CTRL + 3,
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24),
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) != 0)
+		return (EIO);
+
+	/*
+	 * rtw8822b_coex_cfg_ant_switch(BBSW, WLG): LED_CFG[23]=0,
+	 * LED_CFG[24]=1, RFE_CTRL8[7:0]=0x77, RFE_INV8[1:0]=2.
+	 */
+	error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 2,
+	    0x80, 0x00);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 3,
+		    0x01, 0x01);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_CTRL8,
+		    0xff, 0x77);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV8,
+		    0x03, 0x02);
+	if (error != 0)
+		return (error);
+
+	/* Read the LTE control register once more to ensure the path is ready. */
+	error = rtw88_native_ltecoex_read(sc, 0x0038, &value);
+	if (error != 0)
+		return (error);
+	sc->wifi_only_coex_initialized = 1;
+	device_printf(sc->dev,
+	    "RTL8822B Wi-Fi-only RFE route active: WLAN grants, WLG antenna path, LTE control=0x%08x\n",
+	    value);
+	return (0);
+}
+
+/*
  * USB-specific RTL8822B PHY bring-up in the same order as upstream
  * rtw8822b_phy_set_param(): enable BB/RF domains, release RX path selection,
  * load MAC/BB/AGC and both RF path tables, apply eFuse crystal trim, then
