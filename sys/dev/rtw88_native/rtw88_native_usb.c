@@ -32,11 +32,15 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	static const uint8_t legacy_rates[] = {
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
+	static const uint8_t eapol_snap[8] = {
+		0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e
+	};
 	struct ieee80211_rx_stats rxs;
-	struct ieee80211_frame_min *wh;
+	struct ieee80211_frame *wh;
 	struct mbuf *m;
 	uint32_t w3, w5, phy0, enc_type;
-	uint8_t rate, raw_a, raw_b;
+	uint8_t rate, raw_a, raw_b, fc0, fc1;
+	size_t hdrlen;
 	int rssi, channel;
 
 	mtx_assert(&sc->mtx, MA_OWNED);
@@ -47,7 +51,8 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	}
 	if ((w0 & (RTW88_NATIVE_RX_DESC_W0_CRCERR |
 	    RTW88_NATIVE_RX_DESC_W0_ICVERR)) != 0 ||
-	    packet_length <= RTW88_NATIVE_RX_FCS_LEN ||
+	    packet_length < RTW88_NATIVE_RX_FCS_LEN +
+	    sizeof(struct ieee80211_frame) ||
 	    packet_length > RTW88_NATIVE_RX_MAX_FRAME) {
 		sc->rx_input_drop_count++;
 		return;
@@ -68,7 +73,52 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	 * the RTL8822B has already decrypted a protected MPDU; SWDEC means the
 	 * frame still needs the registered software cipher path.
 	 */
-	wh = mtod(m, struct ieee80211_frame_min *);
+	wh = mtod(m, struct ieee80211_frame *);
+	fc0 = wh->i_fc[0];
+	fc1 = wh->i_fc[1];
+
+	/* Classify received management responses before net80211 consumes them. */
+	if ((fc0 & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT) {
+		switch (fc0 & IEEE80211_FC0_SUBTYPE_MASK) {
+		case IEEE80211_FC0_SUBTYPE_AUTH:
+			sc->rx_auth_count++;
+			if (IEEE80211_ADDR_EQ(wh->i_addr1, sc->ic.ic_macaddr))
+				sc->rx_auth_to_self_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
+		case IEEE80211_FC0_SUBTYPE_REASSOC_RESP:
+			sc->rx_assoc_resp_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_DEAUTH:
+			sc->rx_deauth_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_DISASSOC:
+			sc->rx_disassoc_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
+			sc->rx_probe_resp_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_BEACON:
+			sc->rx_beacon_count++;
+			break;
+		default:
+			break;
+		}
+	} else if ((fc0 & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
+		hdrlen = sizeof(struct ieee80211_frame);
+		if ((fc1 & IEEE80211_FC1_DIR_MASK) == IEEE80211_FC1_DIR_DSTODS)
+			hdrlen += IEEE80211_ADDR_LEN;
+		if ((fc0 & IEEE80211_FC0_SUBTYPE_QOS_MASK_ANY) != 0) {
+			hdrlen += 2;
+			if ((fc1 & IEEE80211_FC1_ORDER) != 0)
+				hdrlen += 4;
+		}
+		if (packet_length >= hdrlen + sizeof(eapol_snap) &&
+		    memcmp((const uint8_t *)wh + hdrlen, eapol_snap,
+		    sizeof(eapol_snap)) == 0)
+			sc->rx_eapol_count++;
+	}
+
 	enc_type = (w0 & RTW88_NATIVE_RX_DESC_W0_ENC_TYPE) >> 20;
 	if ((wh->i_fc[1] & IEEE80211_FC1_PROTECTED) != 0 &&
 	    enc_type != 0 &&
