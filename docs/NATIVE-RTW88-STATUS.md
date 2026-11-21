@@ -109,9 +109,10 @@ User-reported local FreeBSD testing on the RTL8822BU adapter confirms:
   without a reported USB error; it did not complete with a payload.
 - The same run logged a firmware module lookup warning (`error 8`) followed
   by successful validation of the 161240-byte binary image (DMEM 11216,
-  IMEM 149960, EMEM 0). The validation line is the evidence that the firmware
-  bytes were available to the driver's parser; the earlier lookup warning
-  was not followed by a firmware validation failure.
+  IMEM 149960, EMEM 0). FreeBSD's firmware loader tries the binary-file
+  fallback after a linker module lookup fails; the subsequent validation
+  line confirms the driver received and parsed the image bytes.
+
 
 The endpoint descriptor dump showed a USB 2.0 High-Speed device with bulk-IN
 0x84, bulk-OUT 0x05/0x06/0x08 and interrupt-IN 0x87. The reported RXDMA mode
