@@ -218,6 +218,7 @@ struct rtw88_native_softc {
 	int			powered;
 	int			firmware_running;
 	int			mac_initialized;
+	int			phy_initialized;
 	int			efuse_initialized;
 	int			intr_started;
 	uint8_t			intr_buf[64];
@@ -280,6 +281,7 @@ int		rtw88_native_efuse_read(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
+int		rtw88_native_phy_init(struct rtw88_native_softc *);
 void		rtw88_native_mac_stop(struct rtw88_native_softc *);
 int		rtw88_native_hw_start(struct rtw88_native_softc *);
 void		rtw88_native_hw_stop(struct rtw88_native_softc *);

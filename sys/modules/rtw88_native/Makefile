@@ -7,7 +7,7 @@ SYSDIR?=${SRCTOP}/sys
 KMOD=	if_rtw88_native
 SRCS=	if_rtw88_native.c if_rtw88_native.h
 SRCS+=	rtw88_native_usb.c rtw88_native_reg.c rtw88_native_fw.c
-SRCS+=	rtw88_native_mac.c rtw88_native_efuse.c rtw88_native_txdesc.c
+SRCS+=	rtw88_native_mac.c rtw88_native_efuse.c rtw88_native_txdesc.c rtw88_native_8822b_tables.c rtw88_native_phy.c
 SRCS+=	bus_if.h device_if.h opt_bus.h opt_usb.h usb_if.h usbdevs.h
 
 .include <bsd.kmod.mk>
