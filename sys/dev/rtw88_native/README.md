@@ -22,6 +22,9 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
   ring initialisation and base MAC/WMAC register configuration.
 - `rtw88_native_efuse.c`: native physical eFuse reads, packed logical-map
   decoding, and RTL8822BU MAC/board-field extraction.
+- Interrupt-IN path: a FreeBSD transfer callback continuously captures raw
+  64-byte RTL8822B event reports into a per-device ringless latest-report
+  buffer and counter. This is transport capture only; C2H dispatch is pending.
 - `if_rtw88_native.h`: hardware definitions, per-device state and API.
 
 ## Explicit hardware-start entry point
@@ -37,6 +40,7 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
    MAC address and board configuration bytes.
 5. Configure the 3-OUT-endpoint FIFO/page allocation, H2C ring and base
    8822B MAC/WMAC registers.
+6. Start the interrupt-IN endpoint and capture raw device event reports.
 
 This routine is **not called by USB attach**. Firmware retrieval may access the
 filesystem and therefore belongs in a sleepable device-start path after the
@@ -66,7 +70,8 @@ implemented.
 - Full RFE/board selection and PHY/BB/RF register-table programming.
 - IQK/DPK calibration, antenna setup, channel control and regulatory
   handling.
-- Active bulk-IN RX and interrupt/C2H event state machines.
+- Active bulk-IN RX aggregation and C2H event parsing/dispatch (interrupt-IN
+  reports are currently captured but not interpreted).
 - Normal TX packet descriptors, queue scheduling, aggregation, retries and
   TX status reporting.
 - Native FreeBSD `net80211` attach/interface operations, scanning,

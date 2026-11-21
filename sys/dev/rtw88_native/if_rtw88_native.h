@@ -171,10 +171,18 @@ struct rtw88_native_softc {
 	int			firmware_running;
 	int			mac_initialized;
 	int			efuse_initialized;
+	int			intr_started;
+	uint8_t			intr_buf[64];
+	uint8_t			last_intr[64];
+	uint16_t		last_intr_len;
+	uint64_t		intr_count;
+	usb_error_t		intr_error;
 };
 
 usb_error_t	rtw88_native_usb_setup(struct rtw88_native_softc *);
 void		rtw88_native_usb_unsetup(struct rtw88_native_softc *);
+int		rtw88_native_usb_intr_start(struct rtw88_native_softc *);
+void		rtw88_native_usb_intr_stop(struct rtw88_native_softc *);
 usb_error_t	rtw88_native_usb_control(struct rtw88_native_softc *,
 		    uint8_t, uint16_t, void *, uint16_t, uint16_t *);
 usb_error_t	rtw88_native_usb_tx_sync(struct rtw88_native_softc *, uint8_t,

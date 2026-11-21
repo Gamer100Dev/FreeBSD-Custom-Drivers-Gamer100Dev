@@ -18,12 +18,54 @@
 static void
 rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 {
-	/*
-	 * RX and interrupt transfers are allocated but deliberately not started
-	 * until the RTL8822B event format and RX aggregation parser are ready.
-	 */
+	/* Bulk RX stays stopped until the RX descriptor/aggregation parser exists. */
 	(void)xfer;
 	(void)error;
+}
+
+static void
+rtw88_native_intr_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	struct rtw88_native_softc *sc;
+	uint32_t actlen;
+
+	sc = usbd_xfer_softc(xfer);
+	mtx_assert(&sc->mtx, MA_OWNED);
+
+	switch (USB_GET_STATE(xfer)) {
+	case USB_ST_TRANSFERRED:
+		usbd_xfer_status(xfer, &actlen, NULL, NULL, NULL);
+		actlen = MIN(actlen, sizeof(sc->last_intr));
+		memcpy(sc->last_intr, sc->intr_buf, actlen);
+		sc->last_intr_len = (uint16_t)actlen;
+		sc->intr_count++;
+		sc->intr_error = USB_ERR_NORMAL_COMPLETION;
+		/* FALLTHROUGH */
+	case USB_ST_SETUP:
+		if (!sc->intr_started || sc->dying)
+			break;
+		usbd_xfer_set_frame_data(xfer, 0, sc->intr_buf,
+		    sizeof(sc->intr_buf));
+		usbd_transfer_submit(xfer);
+		break;
+	case USB_ST_ERROR:
+		sc->intr_error = error;
+		if (error != USB_ERR_CANCELLED && sc->intr_started &&
+		    !sc->dying) {
+			usbd_xfer_set_stall(xfer);
+			goto tr_setup;
+		}
+		break;
+	default:
+		break;
+	}
+	return;
+tr_setup:
+	if (sc->intr_started && !sc->dying) {
+		usbd_xfer_set_frame_data(xfer, 0, sc->intr_buf,
+		    sizeof(sc->intr_buf));
+		usbd_transfer_submit(xfer);
+	}
 }
 
 static void
@@ -139,9 +181,11 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 		.bufsize = 64,
 		.flags = {
 			.pipe_bof = 1,
-			.short_xfer_ok = 1
+			.short_xfer_ok = 1,
+			.ext_buffer = 1
 		},
-		.callback = rtw88_native_rx_callback
+		.callback = rtw88_native_intr_callback,
+		.timeout = 0
 	}
 };
 
@@ -290,4 +334,63 @@ rtw88_native_usb_tx_sync(struct rtw88_native_softc *sc, uint8_t queue,
 	mtx_unlock(&sc->mtx);
 
 	return (error);
+}
+
+
+/*
+ * Begin collecting raw RTL8822B USB interrupt reports. Call only after the
+ * hardware has completed power-on and firmware startup.
+ */
+int
+rtw88_native_usb_intr_start(struct rtw88_native_softc *sc)
+{
+	struct usb_xfer *xfer;
+
+	if (sc == NULL || !sc->mtx_initialized || !sc->xfers_initialized)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying) {
+		mtx_unlock(&sc->mtx);
+		return (ENXIO);
+	}
+	if (sc->intr_started) {
+		mtx_unlock(&sc->mtx);
+		return (EALREADY);
+	}
+	xfer = sc->xfer[RTW88_NATIVE_INTERRUPT_RX];
+	if (xfer == NULL) {
+		mtx_unlock(&sc->mtx);
+		return (ENXIO);
+	}
+	bzero(sc->intr_buf, sizeof(sc->intr_buf));
+	bzero(sc->last_intr, sizeof(sc->last_intr));
+	sc->last_intr_len = 0;
+	sc->intr_error = USB_ERR_NORMAL_COMPLETION;
+	sc->intr_started = 1;
+	usbd_transfer_start(xfer);
+	mtx_unlock(&sc->mtx);
+	return (0);
+}
+
+/*
+ * Drain the interrupt transfer before allowing its external DMA buffer or
+ * private softc to be reused/freed. usbd_transfer_drain() may sleep and must
+ * be called without the USB transfer mutex held.
+ */
+void
+rtw88_native_usb_intr_stop(struct rtw88_native_softc *sc)
+{
+	struct usb_xfer *xfer;
+
+	if (sc == NULL || !sc->mtx_initialized)
+		return;
+	mtx_lock(&sc->mtx);
+	sc->intr_started = 0;
+	xfer = sc->xfers_initialized ?
+	    sc->xfer[RTW88_NATIVE_INTERRUPT_RX] : NULL;
+	mtx_unlock(&sc->mtx);
+
+	if (xfer != NULL)
+		usbd_transfer_drain(xfer);
 }

@@ -52,6 +52,8 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 - Initialise the H2C ring pointers and check that the ring is empty.
 - Port the 8822B base EDCA, timing, beacon, RX-filter and WMAC register
   configuration.
+- Start the native interrupt-IN transfer after base hardware initialisation
+  and capture raw 64-byte device event reports with completion/drain support.
 - Add an explicit `rtw88_native_hw_start()` / `rtw88_native_hw_stop()`
   sequence. It is not invoked automatically from USB attach.
 
@@ -59,7 +61,8 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 
 - Full RFE board selection, HW-feature C2H report, PHY/BB/RF register tables,
   IQK/DPK, antenna and channel initialisation.
-- Active RX and interrupt/C2H state machines.
+- Active bulk RX aggregation, RX descriptor parsing and C2H event decoding/dispatch
+  (interrupt reports are captured raw but not yet parsed).
 - Normal TX data path, aggregation, per-frame queue mapping, completion and
   status reporting.
 - Native `net80211` interface and lifecycle integration.
