@@ -696,6 +696,96 @@ rtw88_native_sysctl_channel(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+/*
+ * Read back the live MAC/USB RX configuration without disturbing the radio.
+ * This is a process-context diagnostic: hw_busy prevents the scanner's
+ * sleepable channel callback from interleaving its RF register writes.
+ */
+static int
+rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
+{
+	struct rtw88_native_softc *sc;
+	struct {
+		const char *name;
+		uint16_t reg;
+		uint32_t value;
+		usb_error_t error;
+	} regs[] = {
+		{ "CR", 0x0100, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "TXDMA_PQ_MAP", 0x010c, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXDMA_AGG_PG_TH", 0x0280, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXDMA_MODE", 0x0290, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RCR", 0x0608, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP0", 0x06a0, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP2", 0x06a4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "SYS_FUNC_EN", 0x0002, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_CTRL", 0x001f, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXPSEL", 0x0808, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXIGI_A", 0x0c50, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXIGI_B", 0x0e50, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_A_CH18", 0x2860, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_B_CH18", 0x2c60, 0, USB_ERR_NORMAL_COMPLETION }
+	};
+	int value, error, i, channel;
+	uint64_t rx_count, rx_submits, rx_errors;
+	int rx_error_code, rx_started;
+
+	sc = arg1;
+	value = 0;
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value != 1)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->hw_started) {
+		mtx_unlock(&sc->mtx);
+		return (ENXIO);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	sc->hw_busy = 1;
+	mtx_unlock(&sc->mtx);
+
+	for (i = 0; i < nitems(regs); i++)
+		regs[i].error = rtw88_native_reg_read32(sc, regs[i].reg,
+		    &regs[i].value);
+
+	mtx_lock(&sc->mtx);
+	channel = sc->current_channel;
+	rx_started = sc->rx_started;
+	rx_count = sc->rx_count;
+	rx_submits = sc->rx_submit_count;
+	rx_errors = sc->rx_error_count;
+	rx_error_code = sc->rx_error_code;
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	device_printf(sc->dev,
+	    "RX diag: channel=%d started=%d submits=%ju completions=%ju errors=%ju last_error=%d\n",
+	    channel, rx_started, (uintmax_t)rx_submits, (uintmax_t)rx_count,
+	    (uintmax_t)rx_errors, rx_error_code);
+	error = 0;
+	for (i = 0; i < nitems(regs); i++) {
+		if (regs[i].error == USB_ERR_NORMAL_COMPLETION) {
+			device_printf(sc->dev, "RX diag: %-14s [0x%04x] = 0x%08x\n",
+			    regs[i].name, regs[i].reg, regs[i].value);
+		} else {
+			device_printf(sc->dev,
+			    "RX diag: %-14s [0x%04x] read failed: %s\n",
+			    regs[i].name, regs[i].reg,
+			    usbd_errstr(regs[i].error));
+			error = EIO;
+		}
+	}
+	return (error);
+}
+
+
 static int
 rtw88_native_attach(device_t dev)
 {
@@ -775,6 +865,21 @@ rtw88_native_attach(device_t dev)
 	    "hw_start", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	    sc, 0, rtw88_native_sysctl_hw_start, "I",
 	    "Start (1) or stop (0) RTL8822BU hardware and interrupt capture") == NULL) {
+		rtw88_native_usb_unsetup(sc);
+		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
+			cv_destroy(&sc->tx_cv[i]);
+		sc->tx_cv_initialized = 0;
+		cv_destroy(&sc->io_drain_cv);
+		sc->io_cv_initialized = 0;
+		mtx_destroy(&sc->mtx);
+		sc->mtx_initialized = 0;
+		return (ENOMEM);
+	}
+	if (SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_diag", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+	    sc, 0, rtw88_native_sysctl_rx_diag, "I",
+	    "Read back live RTL8822B RX/MAC/RF configuration (write 1)") == NULL) {
 		rtw88_native_usb_unsetup(sc);
 		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 			cv_destroy(&sc->tx_cv[i]);
