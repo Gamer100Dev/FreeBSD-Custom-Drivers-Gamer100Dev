@@ -226,6 +226,10 @@ The new `wifi_only_coex_initialized` sysctl and `rx_hw_status` fields
 (`SYS_SDIO_CTRL`, `LED_CFG`, `RFE_CTRL_E`, `RFESEL_CTRL_HI`,
 `RFE_INV16`) expose the direct hardware readback. The LTE indirect control
 register is logged at startup after the grant sequence.
+The same Wi-Fi-only initialisation also enables the upstream 8822B
+PTA GPIO mux, sample/statistics controls, WLAN TX grant signal, ACK/beacon
+priority masks and firmware scoreboard `ACTIVE|ONOFF` bits. Bluetooth
+grant remains forced low; this does not turn on BT TDMA.
 
 The channel setup also uses only the shared base RFE control registers for
 RFE option 3, matching upstream `rtw8822b_set_channel_rfe_ifem()`.
