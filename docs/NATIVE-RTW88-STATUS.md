@@ -147,11 +147,14 @@ The native sequence now passes field values `0x7` and `0x3` respectively and
 checks both registers immediately after writing. This mirrors Linux RTW88's
 `rtw8822b_phy_set_param()` use of `rtw_write32_set()` for those same enables.
 
-The RF-A fallback passed the FreeBSD CI build; the new
-firmware-report parser is still being compiled in the current CI run. Neither
-the firmware report contents nor successful scan/RX behaviour has yet been
-confirmed on the physical adapter. The latest CI job also includes a startup
-ordering change that registers net80211 before the four RX requests are posted.
+The firmware-report parser, corrected WLRF1/RXPSEL masked writes, four
+concurrent RX transfers and expanded RF diagnostics passed FreeBSD 15.1 CI in
+[run 44937801781](https://github.com/Gamer100Dev/FreeBSD-Custom-Drivers-Gamer100Dev/actions/runs/44937801781).
+A later change moved net80211 registration ahead of posting the RX transfers
+and added an explicit build ID to the module; those follow-up revisions are
+being checked by subsequent CI runs. Neither the corrected register readbacks
+nor successful scan/RX behaviour has yet been confirmed on the physical
+adapter.
 
 ## Not yet implemented
 
