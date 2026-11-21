@@ -1004,6 +1004,15 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
+	/*
+	 * This eFuse board is Wi-Fi-only (rf_board_option=0x01). Linux
+	 * nevertheless applies the 8822B WONLY coexistence grants and WLG
+	 * antenna-switch route before publishing the radio to net80211.
+	 */
+	error = rtw88_native_coex_wifi_only_init(sc);
+	if (error != 0)
+		goto fail;
+
 	error = rtw88_native_net80211_attach(sc);
 	if (error != 0)
 		goto fail;
