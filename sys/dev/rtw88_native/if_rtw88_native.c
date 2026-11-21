@@ -229,7 +229,13 @@ rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
 	ic->ic_phytype = IEEE80211_T_OFDM;
 	ic->ic_opmode = IEEE80211_M_STA;
 	IEEE80211_ADDR_COPY(ic->ic_macaddr, sc->efuse.macaddr);
-	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR;
+	/*
+	 * net80211 handles WPA/RSN policy and software crypto.  Advertise both
+	 * WPA1 and WPA2 so IEEE80211_IOC_WPA accepts wpa_supplicant's wpa=3
+	 * request; this does not claim hardware crypto offload.
+	 */
+	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR |
+	    IEEE80211_C_WPA;
 	rtw88_native_getradiocaps(ic, IEEE80211_CHAN_MAX,
 	    &ic->ic_nchans, ic->ic_channels);
 	if (ic->ic_nchans == 0)
