@@ -821,10 +821,26 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	    BIT_RF_EN | BIT_RF_RSTB | BIT_RF_SDM_RSTB);
 	if (error != 0)
 		return (error);
+	/*
+	 * rtw88_native_phy_write_mask32() takes an unshifted field value.
+	 * WLRF1's enable field is bits 24..26, so pass 0x7, not the
+	 * already-positioned bit mask (which would be shifted a second time
+	 * and silently write zero).
+	 */
 	error = rtw88_native_phy_write_mask32(sc, REG_WLRF1,
-	    BIT_WLRF1_BBRF_EN, BIT_WLRF1_BBRF_EN);
+	    BIT_WLRF1_BBRF_EN, 0x7);
 	if (error != 0)
 		return (error);
+	if (rtw88_native_reg_read32(sc, REG_WLRF1, &value32) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value32 & BIT_WLRF1_BBRF_EN) != BIT_WLRF1_BBRF_EN) {
+		device_printf(sc->dev,
+		    "BB/RF domain enable did not latch: WLRF1=0x%08x\n",
+		    value32);
+		return (EIO);
+	}
+	device_printf(sc->dev, "BB/RF domain enabled: WLRF1=0x%08x\n",
+	    value32);
 
 	/* Disable RX path select while the baseband tables are being written. */
 	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
@@ -859,10 +875,22 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	if (error != 0)
 		return (error);
 
+	/*
+	 * Release both RX path-select reset bits. The mask covers bits 28..29,
+	 * so its unshifted field value is 0x3 (not BIT_RX_PSEL_RST).
+	 */
 	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
-	    BIT_RX_PSEL_RST, BIT_RX_PSEL_RST);
+	    BIT_RX_PSEL_RST, 0x3);
 	if (error != 0)
 		return (error);
+	if (rtw88_native_reg_read32(sc, REG_RXPSEL, &value32) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value32 & BIT_RX_PSEL_RST) != BIT_RX_PSEL_RST) {
+		device_printf(sc->dev,
+		    "RX path-select reset release did not latch: RXPSEL=0x%08x\n",
+		    value32);
+		return (EIO);
+	}
 
 	/* Common 8822B USB board mux setup from rtw8822b_phy_rfe_init(). */
 	error = rtw88_native_phy_write_mask32(sc, 0x0064,
