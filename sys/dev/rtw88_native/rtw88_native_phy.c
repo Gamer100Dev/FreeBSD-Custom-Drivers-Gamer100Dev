@@ -686,13 +686,131 @@ rtw88_native_phy_set_channel(struct rtw88_native_softc *sc, uint8_t channel)
 }
 
 /*
+ * Linux RTW88's rtw_phy_dig_set_max_coverage() writes DIG_CVRG_MIN (0x1c)
+ * to both 8822B receive paths while scanning. Restore the pre-scan Path-A
+ * IGI on scan completion, matching rtw_phy_dig_reset().
+ */
+int
+rtw88_native_phy_scan_gain(struct rtw88_native_softc *sc, int enable)
+{
+	uint32_t igi_a;
+	uint8_t saved;
+	int error;
+
+	if (sc == NULL || (enable != 0 && enable != 1))
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->powered ||
+	    !sc->phy_initialized) {
+		mtx_unlock(&sc->mtx);
+		return (EAGAIN);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	if ((enable && sc->scan_igi_valid) ||
+	    (!enable && !sc->scan_igi_valid)) {
+		mtx_unlock(&sc->mtx);
+		return (0);
+	}
+	sc->hw_busy = 1;
+	saved = sc->scan_igi_saved;
+	mtx_unlock(&sc->mtx);
+
+	error = 0;
+	if (enable) {
+		if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
+		    USB_ERR_NORMAL_COMPLETION) {
+			error = EIO;
+		} else {
+			saved = (uint8_t)(igi_a & CH_BIT_MAC_RXIGI);
+			/*
+			 * DIG_CVRG_MIN=0x1c is the upstream RTW88 coverage
+			 * setting. Lower IGI means higher receive gain.
+			 */
+			error = rtw88_native_phy_write_mask32(sc,
+			    REG_CH_RXIGI_A, CH_BIT_MAC_RXIGI, 0x1c);
+			if (error == 0)
+				error = rtw88_native_phy_write_mask32(sc,
+				    REG_CH_RXIGI_B, CH_BIT_MAC_RXIGI, 0x1c);
+			if (error != 0) {
+				(void)rtw88_native_phy_write_mask32(sc,
+				    REG_CH_RXIGI_A, CH_BIT_MAC_RXIGI, saved);
+				(void)rtw88_native_phy_write_mask32(sc,
+				    REG_CH_RXIGI_B, CH_BIT_MAC_RXIGI, saved);
+			}
+		}
+	} else {
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+		    CH_BIT_MAC_RXIGI, saved);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+			    CH_BIT_MAC_RXIGI, saved);
+	}
+
+	mtx_lock(&sc->mtx);
+	if (error == 0) {
+		if (enable) {
+			sc->scan_igi_saved = saved;
+			sc->scan_igi_valid = 1;
+		} else {
+			sc->scan_igi_valid = 0;
+		}
+	}
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+	return (error);
+}
+
+/*
+ * RTL8822B adaptivity/EDCCA initialization from upstream
+ * rtw8822b_adaptivity_init(). Leaving these registers at reset defaults
+ * makes receive CCA behaviour board/firmware dependent.
+ */
+static int
+rtw88_native_phy_adaptivity_init(struct rtw88_native_softc *sc)
+{
+	int error;
+
+	/* EDCCA L2H/H2L thresholds are the low/high bytes of REG 0x08a4. */
+	error = rtw88_native_phy_write_mask32(sc, 0x08a4, 0x000000ffU,
+	    0x7f);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x08a4,
+		    0x0000ff00U, 0x7f);
+	/* Enable MAC EDCCA gating and its countdown source. */
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x0520,
+		    1U << 15, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x0524,
+		    1U << 11, 1);
+	/* RTL8822B default EDCCA source = 1. */
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x0944,
+		    3U << 28, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x08a0,
+		    3U, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x08dc,
+		    1U << 5, 1);
+
+	return (error);
+}
+
+/*
  * USB-specific RTL8822B PHY bring-up in the same order as upstream
  * rtw8822b_phy_set_param(): enable BB/RF domains, release RX path selection,
  * load MAC/BB/AGC and both RF path tables, apply eFuse crystal trim, then
  * restore RX path selection and configure the board top mux.
  *
- * Dynamic DIG, IQK/DPK, thermal tracking, TX power limits and antenna/TRX path
- * policy remain separate follow-on work; no 802.11 networking is advertised.
+ * Continuous dynamic DIG, IQK/DPK, thermal tracking, TX power limits and
+ * periodic antenna/TRX path policy remain separate follow-on work. Passive
+ * scan start/end separately apply/restore upstream maximum-coverage IGI.
  */
 int
 rtw88_native_phy_init(struct rtw88_native_softc *sc)
@@ -789,6 +907,8 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 
 	error = rtw88_native_phy_config_trx_mode(sc,
 	    sc->antenna_tx, sc->antenna_rx);
+	if (error == 0)
+		error = rtw88_native_phy_adaptivity_init(sc);
 	if (error != 0)
 		return (error);
 

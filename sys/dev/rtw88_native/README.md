@@ -111,6 +111,15 @@ compared against the programmed values.
   authentication, association, key handling and power management.
 - Suspend/resume, firmware recovery, watchdog and final hot-unplug tests.
 
+## Linux RTW88 receive-sensitivity parity
+
+The `fix/rtw8822bu-rx-sensitivity` development branch adds the upstream
+8822B EDCCA initialization and the RTW88 scan maximum-coverage IGI override.
+The diagnostic `rx_hw_status` output includes EDCCA threshold, TX protocol,
+read-control, source, power-average and decision register readback. These
+changes are targeted at intermittent passive-scan reception; they do not
+implement normal TX, association or DHCP and need a new physical scan test.
+
 ## FreeBSD API references
 
 The code is being developed against FreeBSD 15.1 and its in-tree native
@@ -174,6 +183,27 @@ change hardware configuration.
 The native 2.4-GHz channel sequence follows upstream ordering: baseband/ADC,
 MAC channel width and timing, RF synthesizer, RX DFIR, RX gain-index toggle,
 CCA thresholds, then RFE routing.
+The USB RX interface setup follows Linux RTW88's post-PHY HCI stage:
+RX burst size is programmed after the PHY tables, and
+`REG_TXDMA_OFFSET_CHK.BIT_DROP_DATA_EN` is enabled before bulk-IN is armed.
+The RXDMA status, packet count, data pointer and offset-check registers are
+exposed in `rx_hw_status` to distinguish PHY detection from a packet that
+actually reaches USB DMA.
+The 3081/RTL8822B driver-info configuration also applies Linux's
+`REG_TRXFF_BNDY + 1` low-nibble fix (`0x0115[3:0] = 0xf`). Upstream
+documents this as a fix for RX descriptors reporting a zero packet length.
+The diagnostic output includes this register's readback.
+
+The receive bring-up also ports the RTL8822B EDCCA/adaptivity initialization
+from Linux RTW88: both EDCCA thresholds are initialized to 0x7f, MAC EDCCA
+gating/countdown is enabled, and the source/decision fields are programmed.
+During passive scans, the net80211 scan callbacks apply Linux RTW88's
+maximum-coverage DIG value (IGI 0x1c) to both RX paths, then restore the
+pre-scan Path-A IGI at scan completion. This is the same coverage override
+used by upstream `rtw_core_scan_start()` / `rtw_core_scan_complete()`.
+This branch's EDCCA and scan-gain changes still require physical validation
+on the RTL8822BU; a successful compile does not establish that networks will
+be discovered in every RF environment.
 
 The channel setup also uses only the shared base RFE control registers for
 RFE option 3, matching upstream `rtw8822b_set_channel_rfe_ifem()`.

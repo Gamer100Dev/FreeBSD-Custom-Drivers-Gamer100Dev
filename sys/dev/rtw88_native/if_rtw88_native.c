@@ -140,7 +140,16 @@ rtw88_native_scan_start(struct ieee80211com *ic)
 	sc = ic->ic_softc;
 	if (ic->ic_scan != NULL)
 		ic->ic_scan->ss_flags &= ~IEEE80211_SCAN_ACTIVE;
-	device_printf(sc->dev, "starting passive 2.4-GHz scan (TX disabled)\n");
+	{
+		int error;
+
+		error = rtw88_native_phy_scan_gain(sc, 1);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not enable scan receive coverage: %d\n", error);
+	}
+	device_printf(sc->dev,
+	    "starting passive 2.4-GHz scan (TX disabled, max RX coverage)\n");
 }
 
 static void
@@ -149,6 +158,15 @@ rtw88_native_scan_end(struct ieee80211com *ic)
 	struct rtw88_native_softc *sc;
 
 	sc = ic->ic_softc;
+	{
+		int error;
+
+		error = rtw88_native_phy_scan_gain(sc, 0);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not restore receive gain after scan: %d\n",
+			    error);
+	}
 	device_printf(sc->dev, "passive scan finished\n");
 }
 
@@ -325,6 +343,11 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	uint32_t rcr, rx_psel, cck_crc, ofdm_crc, ht_crc, vht_crc;
 	uint32_t cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw;
 	uint32_t cca_sel, pdm_fth, cca_2nd, igi_a, igi_b;
+	uint32_t edcca_th, edcca_rd_ctrl, edcca_source;
+	uint32_t edcca_pow_ma, edcca_decision, tx_ptcl_ctrl;
+	uint16_t txdma_offset_chk;
+	uint8_t trxff_bndy_hi;
+	uint32_t rxpkt_num, rxdma_status, rxdma_dpr;
 	uint16_t intr_len;
 	size_t i;
 	int channel, error;
@@ -405,6 +428,28 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    rtw88_native_reg_read32(sc, 0x0c50, &igi_a) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, 0x0e50, &igi_b) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x08a4, &edcca_th) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0520, &tx_ptcl_ctrl) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0524, &edcca_rd_ctrl) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0944, &edcca_source) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x08a0, &edcca_pow_ma) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x08dc, &edcca_decision) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, 0x020c, &txdma_offset_chk) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read8(sc, 0x0115, &trxff_bndy_hi) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0284, &rxpkt_num) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0288, &rxdma_status) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x028c, &rxdma_dpr) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		error = EIO;
 
@@ -430,14 +475,21 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    "OFDM_CCA=%08x CCK_CCA=%08x RFESEL0=%08x RFESEL8=%08x "
 	    "RFEINV=%08x TRSW=%08x CCASEL=%08x PDMFTH=%08x "
 	    "CCA2ND=%08x IGI_A=%08x IGI_B=%08x "
-	    "INTR_LEN=%u INTR_DATA=%s",
+	    "EDCCA_TH=%08x TX_PTCL_CTRL=%08x RD_CTRL=%08x "
+	    "EDCCA_SOURCE=%08x EDCCA_POW_MA=%08x EDCCA_DECISION=%08x "
+	    "TXDMA_OFFSET_CHK=%04x TRXFF_BNDY_HI=%02x "
+	    "RXPKT_NUM=%08x RXDMA_STATUS=%08x "
+	    "RXDMA_DPR=%08x INTR_LEN=%u INTR_DATA=%s",
 	    channel, (unsigned int)cr, (unsigned int)pq_map,
 	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr,
 	    (unsigned int)rxfltmap0, (unsigned int)rxfltmap1,
 	    (unsigned int)rxfltmap2, rx_psel, (unsigned int)cck_fa,
 	    (unsigned int)ofdm_fa, cck_crc, ofdm_crc, ht_crc, vht_crc,
 	    cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw, cca_sel,
-	    pdm_fth, cca_2nd, igi_a, igi_b, (unsigned int)intr_len, intr_hex);
+	    pdm_fth, cca_2nd, igi_a, igi_b, edcca_th, tx_ptcl_ctrl,
+	    edcca_rd_ctrl, edcca_source, edcca_pow_ma, edcca_decision,
+	    (unsigned int)txdma_offset_chk, (unsigned int)trxff_bndy_hi,
+	    rxpkt_num, rxdma_status, rxdma_dpr, (unsigned int)intr_len, intr_hex);
 	return (sysctl_handle_string(oidp, status, sizeof(status), req));
 }
 

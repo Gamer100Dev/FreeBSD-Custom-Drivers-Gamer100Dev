@@ -490,6 +490,7 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define BIT_DMA_BURST_SIZE_512		1U
 #define BIT_DMA_BURST_SIZE_1024		0U
 #define BIT_RXDMA_AGG_PG_TH_RESERVED	(1U << 7)
+#define BIT_DROP_DATA_EN		(1U << 9)
 
 static int rtw88_native_write_mask8(struct rtw88_native_softc *, uint16_t,
     uint8_t, uint8_t);
@@ -500,12 +501,12 @@ static int rtw88_native_write_mask8(struct rtw88_native_softc *, uint16_t,
  * aggregation path. This adapter enumerates at USB 2.0 High Speed (512-byte
  * max packet); the 512-byte RX burst encoding is therefore selected.
  */
-static int
+int
 rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *sc)
 {
 	enum usb_dev_speed speed;
 	uint8_t rxdma, burst_size;
-	uint16_t agg;
+	uint16_t agg, txdma_offset_chk;
 
 	speed = usbd_get_speed(sc->udev);
 	rxdma = BIT_DMA_BURST_CNT | BIT_DMA_MODE;
@@ -528,6 +529,19 @@ rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *sc)
 	rxdma |= (uint8_t)(burst_size << 4);
 	if (rtw88_native_reg_write8(sc, RTW88_NATIVE_REG_RXDMA_MODE,
 	    rxdma) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/*
+	 * Linux rtw_usb_init_burst_pkt_len() sets BIT_DROP_DATA_EN in
+	 * REG_TXDMA_OFFSET_CHK as part of USB interface configuration.
+	 * Preserve the other offset-check controls while enabling it.
+	 */
+	if (rtw88_native_reg_read16(sc, 0x020c, &txdma_offset_chk) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	txdma_offset_chk |= BIT_DROP_DATA_EN;
+	if (rtw88_native_reg_write16(sc, 0x020c, txdma_offset_chk) !=
+	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
 	if (rtw88_native_write_mask8(sc, RTW88_NATIVE_REG_TXDMA_PQ_MAP,
@@ -871,6 +885,18 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 
 	/* Attach PHY-status records to RX descriptors for the later RX parser. */
 	if (rtw88_native_reg_write8(sc, REG_RX_DRVINFO_SZ, 4) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/*
+	 * Linux rtw_drv_info_cfg() applies this 3081-specific fix because
+	 * otherwise the RTL8822B RX descriptor length can be reported as zero.
+	 */
+	if (rtw88_native_reg_read8(sc, 0x0115, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	value8 = (value8 & 0xf0) | 0x0f;
+	if (rtw88_native_reg_write8(sc, 0x0115, value8) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, REG_RCR, &value32) !=
 	    USB_ERR_NORMAL_COMPLETION ||
@@ -886,9 +912,9 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 }
 
 /*
- * Configure DMA routing, the 3-endpoint FIFO page table, USB RXDMA burst/
- * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. net80211
- * attaches only after this hardware-start sequence has fully succeeded.
+ * Configure the 3-endpoint DMA routing, FIFO page table and 8822B MAC/WMAC
+ * defaults. USB RXDMA interface setup is performed after PHY table loading,
+ * matching Linux RTW88's post-phy HCI interface configuration.
  */
 int
 rtw88_native_mac_init(struct rtw88_native_softc *sc)
@@ -908,8 +934,6 @@ rtw88_native_mac_init(struct rtw88_native_softc *sc)
 		error = rtw88_native_h2c_init(sc);
 	if (error == 0)
 		error = rtw88_native_8822b_mac_init(sc);
-	if (error == 0)
-		error = rtw88_native_usb_rx_dma_init(sc);
 	if (error != 0)
 		return (error);
 
@@ -952,6 +976,14 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 	error = rtw88_native_phy_init(sc);
+	if (error != 0)
+		goto fail;
+
+	/*
+	 * Linux RTW88 configures USB burst length and RX aggregation in the
+	 * post-PHY HCI interface stage. Do the same before posting bulk-IN.
+	 */
+	error = rtw88_native_usb_rx_dma_init(sc);
 	if (error != 0)
 		goto fail;
 
@@ -1005,5 +1037,9 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
 	sc->current_channel = 0;
+	mtx_lock(&sc->mtx);
+	sc->scan_igi_valid = 0;
+	sc->scan_igi_saved = 0;
+	mtx_unlock(&sc->mtx);
 	rtw88_native_firmware_put(sc);
 }
