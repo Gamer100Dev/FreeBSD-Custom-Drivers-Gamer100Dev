@@ -10,7 +10,10 @@ set(KMOD_NAME "if_rtw88_native")
 set(KMOD_SOURCE_DIR "${FREEBSD_SRCROOT}/sys/modules/rtw88_native")
 set(KMOD_OUTPUT "${CMAKE_BINARY_DIR}/${KMOD_NAME}.ko")
 
-file(GLOB_RECURSE RTW88_DRIVER_INPUTS CONFIGURE_DEPENDS\n  "${CMAKE_SOURCE_DIR}/sys/dev/rtw88_native/*"\n  "${CMAKE_SOURCE_DIR}/sys/modules/rtw88_native/*"\n)\n\nfind_program(FREEBSD_MAKE NAMES make REQUIRED)
+file(GLOB_RECURSE RTW88_DRIVER_INPUTS CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/sys/dev/rtw88_native/*"
+  "${CMAKE_SOURCE_DIR}/sys/modules/rtw88_native/*"
+)\n\nfind_program(FREEBSD_MAKE NAMES make REQUIRED)
 
 add_custom_command(
   OUTPUT "${KMOD_OUTPUT}"
@@ -20,7 +23,8 @@ add_custom_command(
           "${KMOD_SOURCE_DIR}/${KMOD_NAME}.ko" "${KMOD_OUTPUT}"
   DEPENDS
     "${CMAKE_SOURCE_DIR}/tools/build-native-module.sh"
-    "${CMAKE_SOURCE_DIR}/sys/modules/rtw88_native/Makefile"\n    ${RTW88_DRIVER_INPUTS}
+    "${CMAKE_SOURCE_DIR}/sys/modules/rtw88_native/Makefile"
+    ${RTW88_DRIVER_INPUTS}
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   VERBATIM
   COMMENT "Building native RTW88 kernel module with FreeBSD kmod make system"
