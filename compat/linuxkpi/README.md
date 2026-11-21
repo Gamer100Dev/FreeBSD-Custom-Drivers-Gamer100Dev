@@ -1,10 +1,10 @@
-# LinuxKPI USB compatibility sources
+# LinuxKPI USB compatibility
 
-The actual FreeBSD stable/15 LinuxKPI USB compatibility implementation is vendored at:
+The working FreeBSD source files are at the normal source-tree paths:
 
-- `vendor/freebsd-stable-15/sys/compat/linuxkpi/common/src/linux_usb.c`
-- `vendor/freebsd-stable-15/sys/compat/linuxkpi/common/include/linux/usb.h`
+- `sys/compat/linuxkpi/common/src/linux_usb.c`
+- `sys/compat/linuxkpi/common/include/linux/usb.h`
 
-The FreeBSD upstream filename is `linux_usb.c`. Local experimental changes must be added as focused patches against this exact base revision, not assumed to be present in the imported upstream snapshot.
+The matching upstream stable/15 snapshots are kept under `vendor/freebsd-stable-15/`.
 
-See `upstream/IMPORT-MANIFEST.md`.
+The imported files are upstream base code. Your previous experimental LinuxKPI changes have not yet been applied to this clean baseline.

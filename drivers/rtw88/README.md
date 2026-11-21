@@ -1,13 +1,15 @@
-# RTW88 driver sources
+# RTW88 driver
 
-The actual vendored FreeBSD driver is at:
+The working FreeBSD driver source is at:
 
-`vendor/freebsd-stable-15/sys/contrib/dev/rtw88/`
+`/sys/contrib/dev/rtw88/`
 
-The complete directory snapshot is included, including USB transport and RTL8822BU chipset files. The corresponding FreeBSD module Makefile is at:
+In this repository, the path is:
 
-`vendor/freebsd-stable-15/sys/modules/rtw88/Makefile`
+`sys/contrib/dev/rtw88/`
 
-The focused Linux reference implementation is under `vendor/linux-master/drivers/net/wireless/realtek/rtw88/`.
+The matching module Makefile is `sys/modules/rtw88/Makefile`. The FreeBSD stable/15 snapshot is also retained under `vendor/freebsd-stable-15/` for upstream comparison.
 
-See `upstream/IMPORT-MANIFEST.md` for exact revisions.
+The Linux upstream reference is retained under `vendor/linux-master/drivers/net/wireless/realtek/rtw88/`.
+
+See `upstream/IMPORT-MANIFEST.md` for exact source revisions.
