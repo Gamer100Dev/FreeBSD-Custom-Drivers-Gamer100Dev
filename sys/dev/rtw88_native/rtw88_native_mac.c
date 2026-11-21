@@ -953,6 +953,14 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
+	/*
+	 * Linux RTW88 configures USB burst length and RX aggregation in the
+	 * post-PHY HCI interface stage. Do the same before posting bulk-IN.
+	 */
+	error = rtw88_native_usb_rx_dma_init(sc);
+	if (error != 0)
+		goto fail;
+
 	/* Start the event endpoint and raw bulk receive after PHY table setup. */
 	error = rtw88_native_usb_intr_start(sc);
 	if (error != 0 && error != EALREADY)
