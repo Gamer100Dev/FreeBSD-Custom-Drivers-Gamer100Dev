@@ -7,6 +7,7 @@
 
 #include <sys/param.h>
 #include <sys/lock.h>
+#include <sys/endian.h>
 #include <sys/mutex.h>
 #include <sys/systm.h>
 
@@ -14,6 +15,94 @@
 #include <dev/usb/usbdi.h>
 
 #include "if_rtw88_native.h"
+
+/*
+ * Parse only the framing information required to safely walk an RTW88 USB
+ * RX aggregation. This intentionally does not decode PHY status or pass
+ * 802.11 frames to net80211 yet. C2H records are identified using RXD word 2
+ * and retained as bounded metadata for the later event worker.
+ */
+static void
+rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
+    const uint8_t *buf, size_t length)
+{
+	uint32_t w0, w2;
+	size_t offset, remaining, driver_info, shift, packet_offset;
+	size_t packet_length, record_length, aligned_length, c2h_length;
+	const uint8_t *c2h;
+
+	offset = 0;
+	while (offset < length) {
+		remaining = length - offset;
+		if (remaining < RTW88_NATIVE_RX_DESC_SIZE) {
+			/* USB aggregation may end with a short pad fragment. */
+			if (remaining > 3)
+				sc->rx_malformed_count++;
+			break;
+		}
+
+		/* Avoid unaligned loads from the USB DMA buffer. */
+		memcpy(&w0, buf + offset, sizeof(w0));
+		memcpy(&w2, buf + offset + 8, sizeof(w2));
+		w0 = le32toh(w0);
+		w2 = le32toh(w2);
+		if (w0 == 0 && w2 == 0)
+			break;
+
+		packet_length = w0 & RTW88_NATIVE_RX_DESC_W0_PKT_LEN;
+		driver_info = ((w0 & RTW88_NATIVE_RX_DESC_W0_DRVINFO) >> 16) * 8;
+		shift = (w0 & RTW88_NATIVE_RX_DESC_W0_SHIFT) >> 24;
+		packet_offset = RTW88_NATIVE_RX_DESC_SIZE + driver_info + shift;
+		if (packet_length == 0 || packet_offset > remaining ||
+		    packet_length > remaining - packet_offset) {
+			sc->rx_malformed_count++;
+			break;
+		}
+
+		sc->rx_desc_count++;
+		if (w2 & RTW88_NATIVE_RX_DESC_W2_C2H) {
+			if (packet_length < RTW88_NATIVE_RX_C2H_HEADER_SIZE) {
+				sc->rx_malformed_count++;
+			} else {
+				c2h = buf + offset + packet_offset;
+				c2h_length = packet_length -
+				    RTW88_NATIVE_RX_C2H_HEADER_SIZE;
+				sc->rx_last_c2h_id = c2h[0];
+				sc->rx_last_c2h_seq = c2h[1];
+				sc->rx_last_c2h_len = (int)MIN(c2h_length,
+				    (size_t)RTW88_NATIVE_RX_C2H_PAYLOAD_MAX);
+				if (sc->rx_last_c2h_len != 0)
+					memcpy(sc->rx_last_c2h_payload, c2h + 2,
+					    sc->rx_last_c2h_len);
+				if ((size_t)sc->rx_last_c2h_len <
+				    sizeof(sc->rx_last_c2h_payload))
+					bzero(sc->rx_last_c2h_payload +
+					    sc->rx_last_c2h_len,
+					    sizeof(sc->rx_last_c2h_payload) -
+					    sc->rx_last_c2h_len);
+				sc->rx_c2h_count++;
+			}
+		} else {
+			/* The frame is counted but deliberately not injected yet. */
+			sc->rx_data_count++;
+		}
+
+		record_length = packet_offset + packet_length;
+		if (record_length > SIZE_MAX - 7) {
+			sc->rx_malformed_count++;
+			break;
+		}
+		aligned_length = (record_length + 7) & ~(size_t)7;
+		if (aligned_length > remaining) {
+			/* Last descriptor can end on the last byte without pad. */
+			if (record_length == remaining)
+				break;
+			sc->rx_malformed_count++;
+			break;
+		}
+		offset += aligned_length;
+	}
+}
 
 static void
 rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
@@ -28,8 +117,10 @@ rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	case USB_ST_TRANSFERRED:
 		usbd_xfer_status(xfer, &actlen, NULL, NULL, NULL);
 		actlen = MIN(actlen, sizeof(sc->rx_last));
-		if (actlen != 0)
+		if (actlen != 0) {
 			memcpy(sc->rx_last, sc->rx_buf, actlen);
+			rtw88_native_rx_parse_batch(sc, sc->rx_buf, actlen);
+		}
 		sc->rx_last_len = actlen;
 		sc->rx_count++;
 		sc->rx_error = USB_ERR_NORMAL_COMPLETION;

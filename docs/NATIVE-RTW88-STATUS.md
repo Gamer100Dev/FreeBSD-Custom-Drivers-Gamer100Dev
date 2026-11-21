@@ -19,6 +19,11 @@ USB ID `0bda:b812`.
 - Continuous bulk-IN receive and interrupt-IN report capture. Both external
   buffers are per-device state, and both transfers have explicit stop/drain
   routines for safe teardown.
+- Bounds-checked walking of the RTL8822B 24-byte RX descriptors, driver-info
+  and shift lengths, 8-byte aggregate alignment, and C2H record identification.
+- Read-only counters for aggregates, descriptors, data frames, C2H records
+  and malformed/truncated RX records; last C2H ID/sequence/length are exposed
+  through device sysctls.
 - Checked little-endian 8/16/32-bit register access.
 - RTL8822B USB security-section side operation at `0x04e0` for the
   register ranges used by upstream RTW88.
@@ -69,8 +74,8 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 
 - Full RFE board selection, HW-feature C2H report, PHY/BB/RF register tables,
   IQK/DPK, antenna and channel initialisation.
-- RTW88 RX descriptor parsing, aggregation handling and C2H event decoding/
-  dispatch.
+- RX PHY-status interpretation, C2H command-specific event decoding/
+  dispatch and delivery of normal 802.11 frames to net80211.
 - Normal TX data path, aggregation, per-frame queue mapping, completion and
   status reporting.
 - Native `net80211` interface and lifecycle integration.

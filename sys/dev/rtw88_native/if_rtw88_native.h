@@ -41,6 +41,14 @@
 #define RTW88_NATIVE_TX_QUEUES			3
 #define RTW88_NATIVE_TXQSEL_BEACON		16U
 #define RTW88_NATIVE_TXDMA_CHUNK		0x1000U
+#define RTW88_NATIVE_RX_DESC_SIZE		24U
+#define RTW88_NATIVE_RX_C2H_HEADER_SIZE	2U
+#define RTW88_NATIVE_RX_C2H_PAYLOAD_MAX	64U
+#define RTW88_NATIVE_RX_DESC_W0_PKT_LEN	0x00003fffU
+#define RTW88_NATIVE_RX_DESC_W0_DRVINFO	0x000f0000U
+#define RTW88_NATIVE_RX_DESC_W0_SHIFT	0x03000000U
+#define RTW88_NATIVE_RX_DESC_W2_C2H		(1U << 28)
+
 
 #define RTW88_NATIVE_REG_CR			0x0100
 #define RTW88_NATIVE_REG_TXDMA_PQ_MAP		0x010c
@@ -185,6 +193,14 @@ struct rtw88_native_softc {
 	uint8_t			rx_last[32 * 1024];
 	uint32_t		rx_last_len;
 	uint64_t		rx_count;
+	uint64_t		rx_desc_count;
+	uint64_t		rx_data_count;
+	uint64_t		rx_c2h_count;
+	uint64_t		rx_malformed_count;
+	int			rx_last_c2h_id;
+	int			rx_last_c2h_seq;
+	int			rx_last_c2h_len;
+	uint8_t		rx_last_c2h_payload[RTW88_NATIVE_RX_C2H_PAYLOAD_MAX];
 	usb_error_t		rx_error;
 };
 

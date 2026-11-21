@@ -81,19 +81,23 @@ meter, PA/LNA, board and RFE bytes. Full board/RFE selection, hardware-feature
 report handling, RF calibration and power-table programming are not yet
 implemented.
 
-Raw bulk-IN batches are currently copied to a per-device latest-buffer
-snapshot, with length and receive count. Raw interrupt-IN reports are
-similarly captured. Neither stream is parsed into 802.11 frames or C2H event
-messages yet; these are transport diagnostics and a foundation for the RX
-parser, not a working packet path.
+Bulk-IN batches are copied to a per-device latest-buffer snapshot and
+walked using the 24-byte RTL8822B RX descriptor layout. The parser validates
+packet length, driver-info length, shift and 8-byte aggregate alignment before
+advancing. It counts normal data frames and identifies C2H records using the
+RXD C2H bit, retaining the last command ID, sequence and bounded payload
+metadata. It does not yet decode PHY status, perform C2H dispatch or inject
+802.11 frames into net80211. The independent interrupt-IN endpoint remains
+a raw diagnostic capture.
 
 ## Not yet implemented
 
 - Full RFE/board selection and PHY/BB/RF register-table programming.
 - IQK/DPK calibration, antenna setup, channel control and regulatory
   handling.
-- RTW88 RX descriptor parsing, RX aggregation boundaries and C2H event
-  decoding/dispatch.
+- RX PHY-status decoding and full RX descriptor processing.
+- C2H command-specific event dispatch/workqueue and normal 802.11 frame
+  delivery into net80211.
 - Normal TX packet descriptors, queue scheduling, aggregation, retries and
   TX status reporting.
 - Native FreeBSD `net80211` attach/interface operations, scanning,

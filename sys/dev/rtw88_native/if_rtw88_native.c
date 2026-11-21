@@ -209,6 +209,42 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "intr_last_len", CTLFLAG_RD, &sc->last_intr_len, 0,
 	    "Length of the most recent USB interrupt report");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_count", CTLFLAG_RD, &sc->rx_count, 0,
+	    "Number of USB bulk-IN aggregates received");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_desc_count", CTLFLAG_RD, &sc->rx_desc_count, 0,
+	    "Number of RX descriptors parsed");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_data_count", CTLFLAG_RD, &sc->rx_data_count, 0,
+	    "Number of non-C2H RX frames identified");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_c2h_count", CTLFLAG_RD, &sc->rx_c2h_count, 0,
+	    "Number of firmware C2H RX records identified");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_malformed_count", CTLFLAG_RD, &sc->rx_malformed_count, 0,
+	    "Number of malformed/truncated RX records");
+	SYSCTL_ADD_U32(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_last_len", CTLFLAG_RD, &sc->rx_last_len, 0,
+	    "Length of the latest raw USB bulk-IN aggregate");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_last_c2h_id", CTLFLAG_RD, &sc->rx_last_c2h_id, 0,
+	    "C2H command ID from the latest firmware event");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_last_c2h_seq", CTLFLAG_RD, &sc->rx_last_c2h_seq, 0,
+	    "Sequence number from the latest firmware C2H event");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_last_c2h_len", CTLFLAG_RD, &sc->rx_last_c2h_len, 0,
+	    "Payload length from the latest firmware C2H event");
 
 	device_printf(dev,
 	    "deferred hardware start available at dev.rtw88_native.%d.hw_start\n",
