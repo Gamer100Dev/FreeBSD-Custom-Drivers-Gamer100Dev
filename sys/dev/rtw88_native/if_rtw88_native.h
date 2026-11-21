@@ -20,6 +20,13 @@
 #define RTW88_NATIVE_VENDOR_REALTEK		0x0bda
 #define RTW88_NATIVE_PRODUCT_RTL8822BU		0xb812
 
+/* Endpoint numbers reported by the RTL8822BU interface descriptor. */
+#define RTW88_NATIVE_USB_EP_BULK_IN		4
+#define RTW88_NATIVE_USB_EP_BULK_OUT_HIGH	5
+#define RTW88_NATIVE_USB_EP_BULK_OUT_NORMAL	6
+#define RTW88_NATIVE_USB_EP_INTERRUPT_IN	7
+#define RTW88_NATIVE_USB_EP_BULK_OUT_LOW	8
+
 #define RTW88_NATIVE_USB_REQUEST		0x05
 #define RTW88_NATIVE_USB_REQUEST_INDEX		0x0000
 #define RTW88_NATIVE_USB_TIMEOUT		1000
@@ -66,6 +73,8 @@
 #define RTW88_NATIVE_REG_DDMA_CH0DA		0x1204
 #define RTW88_NATIVE_REG_DDMA_CH0CTRL		0x1208
 #define RTW88_NATIVE_REG_H2CQ_CSR		0x1330
+#define RTW88_NATIVE_REG_RXDMA_AGG_PG_TH	0x0280
+#define RTW88_NATIVE_REG_RXDMA_MODE		0x0290
 
 #define RTW88_NATIVE_BIT_ENSWBCN		(1U << 8)
 #define RTW88_NATIVE_BIT_DIS_TSF_UDT		(1U << 4)
@@ -237,6 +246,9 @@ struct rtw88_native_softc {
 	uint64_t		rx_data_count;
 	uint64_t		rx_c2h_count;
 	uint64_t		rx_malformed_count;
+	uint64_t		rx_submit_count;
+	uint64_t		rx_error_count;
+	int			rx_error_code;
 	int			rx_last_c2h_id;
 	int			rx_last_c2h_seq;
 	int			rx_last_c2h_len;
