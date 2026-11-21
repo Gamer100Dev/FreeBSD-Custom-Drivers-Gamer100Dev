@@ -972,7 +972,7 @@ rtw88_native_hw_feature_read(struct rtw88_native_softc *sc)
 	uint8_t report[RTW88_NATIVE_HW_FEATURE_LEN];
 	uint8_t event_id;
 	uint32_t caps;
-	int error, i, tries;
+	int i, tries;
 
 	sc->hw_feature_valid = 0;
 	event_id = 0;
