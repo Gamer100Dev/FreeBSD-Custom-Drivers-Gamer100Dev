@@ -133,19 +133,17 @@ rtw88_native_phy_write_mask32(struct rtw88_native_softc *sc, uint16_t reg,
 }
 
 /*
- * RTW88's mixed RF write path uses the serial-interface port only for RF
- * register zero. All other RF registers are memory-mapped through the
- * path-specific RF base window. Keep that distinction here: sending a
- * nonzero RF address through HSSI/SIPI can leave the direct RF window
- * unchanged (in particular RF-B register 0x18), even though the USB control
- * transfer itself completes.
+ * RTL8822B's RTW88 chip operations use the HSSI/SIPI serial-interface
+ * write port for RF register writes, while the read operation uses the
+ * path-specific direct RF window. Keep the chipset-specific write behaviour
+ * rather than using the mixed direct-write path used by other RTW88 chips.
  */
 static int
 rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
     uint32_t addr, uint32_t value)
 {
 	uint32_t data_and_addr;
-	uint16_t base, sipi_reg;
+	uint16_t sipi_reg;
 
 	if (path >= sc->rf_path_num || path > 1)
 		return (EINVAL);
@@ -160,23 +158,14 @@ rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
 	if (addr > 0xff)
 		return (EINVAL);
 
-	if (addr == 0) {
-		sipi_reg = path == 0 ? RTW88_NATIVE_RF_SIPI_A :
-		    RTW88_NATIVE_RF_SIPI_B;
-		data_and_addr = value & RTW88_NATIVE_RFREG_MASK;
-		if (rtw88_native_reg_write32(sc, sipi_reg, data_and_addr) !=
-		    USB_ERR_NORMAL_COMPLETION)
-			return (EIO);
-		DELAY(13);
-		return (0);
-	}
-
-	base = path == 0 ? RF_PATH_A_BASE : RF_PATH_B_BASE;
-	if (rtw88_native_reg_write32(sc,
-	    base + (uint16_t)(addr << 2),
-	    value & RTW88_NATIVE_RFREG_MASK) != USB_ERR_NORMAL_COMPLETION)
+	sipi_reg = path == 0 ? RTW88_NATIVE_RF_SIPI_A :
+	    RTW88_NATIVE_RF_SIPI_B;
+	data_and_addr = (((addr & 0xffU) << 20) |
+	    (value & RTW88_NATIVE_RFREG_MASK)) & 0x0fffffffU;
+	if (rtw88_native_reg_write32(sc, sipi_reg, data_and_addr) !=
+	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
-	DELAY(1);
+	DELAY(13);
 	return (0);
 }
 
