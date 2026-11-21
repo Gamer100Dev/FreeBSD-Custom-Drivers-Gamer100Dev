@@ -19,7 +19,7 @@ find_program(FREEBSD_MAKE NAMES make REQUIRED)
 
 add_custom_command(
   OUTPUT "${KMOD_OUTPUT}"
-  COMMAND "${CMAKE_COMMAND}" -E env SRCROOT="${FREEBSD_SRCROOT}"
+  COMMAND "${CMAKE_COMMAND}" -E env "SRCROOT=${FREEBSD_SRCROOT}"
           sh "${CMAKE_SOURCE_DIR}/tools/build-native-module.sh"
   COMMAND "${CMAKE_COMMAND}" -E copy
           "${KMOD_SOURCE_DIR}/${KMOD_NAME}.ko" "${KMOD_OUTPUT}"
