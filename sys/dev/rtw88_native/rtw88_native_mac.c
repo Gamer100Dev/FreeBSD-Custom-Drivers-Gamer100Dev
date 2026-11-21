@@ -1005,5 +1005,9 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
 	sc->current_channel = 0;
+	mtx_lock(&sc->mtx);
+	sc->scan_igi_valid = 0;
+	sc->scan_igi_saved = 0;
+	mtx_unlock(&sc->mtx);
 	rtw88_native_firmware_put(sc);
 }
