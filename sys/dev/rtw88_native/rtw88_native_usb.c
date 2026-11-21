@@ -110,10 +110,9 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 }
 
 /*
- * Parse only the framing information required to safely walk an RTW88 USB
- * RX aggregation. This intentionally does not decode PHY status or pass
- * 802.11 frames to net80211 yet. C2H records are identified using RXD word 2
- * and retained as bounded metadata for the later event worker.
+ * Safely walk an RTW88 USB RX aggregation, retain bounded C2H metadata, and
+ * enqueue valid 802.11 frames for deferred net80211 input. C2H dispatch and
+ * full per-rate/chain PHY-statistics decoding remain follow-on work.
  */
 static void
 rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
