@@ -958,12 +958,18 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_net80211_attach(sc);
 	if (error != 0)
 		goto fail;
+	mtx_lock(&sc->mtx);
+	sc->tx_enabled = 1;
+	mtx_unlock(&sc->mtx);
 
 	device_printf(sc->dev,
 	    "RTL8822B startup complete; net80211 station/monitor VAP creation and passive 2.4-GHz scanning enabled (TX/association not implemented)\n");
 	return (0);
 
 fail:
+	mtx_lock(&sc->mtx);
+	sc->tx_enabled = 0;
+	mtx_unlock(&sc->mtx);
 	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
 	rtw88_native_mac_stop(sc);
@@ -976,24 +982,45 @@ void
 rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 {
 	struct ieee80211vap *vap;
+	struct ieee80211_node *ni;
 	struct mbuf *m;
+	struct mbufq pending;
 
 	if (sc == NULL)
 		return;
+	mtx_lock(&sc->mtx);
+	sc->tx_enabled = 0;
+	mtx_unlock(&sc->mtx);
 	if (sc->net80211_attached) {
 		TAILQ_FOREACH(vap, &sc->ic.ic_vaps, iv_next)
 			ieee80211_stop(vap);
 		ieee80211_drain(&sc->ic);
 	}
-	rtw88_native_usb_rx_stop(sc);
-	rtw88_native_usb_intr_stop(sc);
+	taskqueue_drain(taskqueue_thread, &sc->tx_task);
 	taskqueue_drain(taskqueue_thread, &sc->rx_task);
+	mbufq_init(&pending, 64);
 	mtx_lock(&sc->mtx);
+	while ((m = mbufq_dequeue(&sc->tx_queue)) != NULL) {
+		if (sc->tx_queue_depth > 0)
+			sc->tx_queue_depth--;
+		(void)mbufq_enqueue(&pending, m);
+	}
 	while ((m = mbufq_dequeue(&sc->rx_queue)) != NULL) {
 		sc->rx_input_drop_count++;
 		m_freem(m);
 	}
 	mtx_unlock(&sc->mtx);
+	while ((m = mbufq_dequeue(&pending)) != NULL) {
+		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
+		m->m_pkthdr.rcvif = NULL;
+		mtx_lock(&sc->mtx);
+		sc->tx_error_count++;
+		sc->tx_last_error = ENETDOWN;
+		mtx_unlock(&sc->mtx);
+		ieee80211_tx_complete(ni, m, 1);
+	}
+	rtw88_native_usb_rx_stop(sc);
+	rtw88_native_usb_intr_stop(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
