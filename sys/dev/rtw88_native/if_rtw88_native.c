@@ -318,8 +318,9 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	struct rtw88_native_softc *sc;
 	char status[768];
 	uint8_t cr, rxdma_mode;
-	uint16_t pq_map, agg, rxfltmap2, cck_fa, ofdm_fa;
-	uint32_t rcr, rxfltmap0, rx_psel, cck_crc, ofdm_crc, ht_crc, vht_crc;
+	uint16_t pq_map, agg, rxfltmap0, rxfltmap1, rxfltmap2;
+	uint16_t cck_fa, ofdm_fa;
+	uint32_t rcr, rx_psel, cck_crc, ofdm_crc, ht_crc, vht_crc;
 	uint32_t cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw;
 	uint32_t cca_sel, pdm_fth, cca_2nd, igi_a, igi_b;
 	int channel, error;
@@ -357,7 +358,9 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    &agg) != USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, 0x0608, &rcr) !=
 	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_read32(sc, 0x06a0, &rxfltmap0) !=
+	    rtw88_native_reg_read16(sc, 0x06a0, &rxfltmap0) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, 0x06a2, &rxfltmap1) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read16(sc, 0x06a4, &rxfltmap2) !=
 	    USB_ERR_NORMAL_COMPLETION ||
@@ -408,14 +411,16 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 
 	(void)snprintf(status, sizeof(status),
 	    "channel=%d CR=%02x PQ_MAP=%04x RXDMA_MODE=%02x "
-	    "RXDMA_AGG=%04x RCR=%08x RXFLTMAP0=%08x RXFLTMAP2=%04x "
+	    "RXDMA_AGG=%04x RCR=%08x RXFLTMAP0=%04x "
+	    "RXFLTMAP1=%04x RXFLTMAP2=%04x "
 	    "RX_PSEL=%08x CCK_FA=%04x OFDM_FA=%04x "
 	    "CCK_CRC=%08x OFDM_CRC=%08x HT_CRC=%08x VHT_CRC=%08x "
 	    "OFDM_CCA=%08x CCK_CCA=%08x RFESEL0=%08x RFESEL8=%08x "
 	    "RFEINV=%08x TRSW=%08x CCASEL=%08x PDMFTH=%08x "
 	    "CCA2ND=%08x IGI_A=%08x IGI_B=%08x",
 	    channel, (unsigned int)cr, (unsigned int)pq_map,
-	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr, rxfltmap0,
+	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr,
+	    (unsigned int)rxfltmap0, (unsigned int)rxfltmap1,
 	    (unsigned int)rxfltmap2, rx_psel, (unsigned int)cck_fa,
 	    (unsigned int)ofdm_fa, cck_crc, ofdm_crc, ht_crc, vht_crc,
 	    cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw, cca_sel,
