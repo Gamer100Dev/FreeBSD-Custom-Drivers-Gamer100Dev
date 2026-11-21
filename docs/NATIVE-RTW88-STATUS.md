@@ -16,14 +16,19 @@ USB ID `0bda:b812`.
   RTL8822B v1 RX aggregation threshold/timeout programming.
 - Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
   be distinguished from a callback that repeatedly fails.
+- RTL8822B firmware hardware-feature report request/decoder. It extracts
+  board antenna count and NSS from the 13-byte C2H report before MAC/PHY
+  initialisation, selecting RF-A/1T1R when firmware reports one antenna.
+  If the report cannot be obtained, the driver conservatively initialises
+  only RF-A rather than assuming both silicon RF paths are populated.
 - Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
   exposed as `dev.rtw88_native.N.channel` for channels 1-13. RF writes use
   the RTL8822B-specific HSSI/SIPI serial-interface ports, and RF18 is read
-  back through each selected path's direct RF window. If RF-B fails its
-  readback while RF-A is verified, the driver reconfigures TRX selection to
-  RF-A only (1T1R), applies the matching 1R CCA thresholds / antenna switch,
-  verifies RF-A again, and continues channel tuning. The fallback logs the
-  B-path SIPI command, RF control and WLRF1 state for later diagnosis.
+  back through each selected path's direct RF window. If RF-B still fails
+  its readback while RF-A is verified, the driver reconfigures TRX selection
+  to RF-A only (1T1R), applies the matching 1R CCA thresholds / antenna
+  switch, verifies RF-A again, and continues channel tuning. The fallback
+  logs the B-path SIPI command, RF control and WLRF1 state for later diagnosis.
 - Native net80211 radio registration after successful hardware start, with
   station/monitor VAP creation and 2.4-GHz channel advertisement.
 - Active and passive software scan callbacks: active scans use the
@@ -115,23 +120,31 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
   capture raw reports in a bounded buffer, and expose count/last-length
   diagnostics through read-only sysctls.
 
-## Current RF-B diagnostic response
+## Current RF-path diagnostic response
 
 The latest physical test showed RF-A reaching the requested RF18 value while
 RF-B remained at `0x00400`, causing channel changes to return `EIO`. The
-channel path now treats that as a per-chain failure rather than aborting all
-scanning: it switches both TX and RX to RF-A/1T1R, applies the single-chain
-CCA and TRSW settings, and checks RF-A again. This is a compatibility fallback,
-not a fix for RF-B itself. The RF-B SIPI / RF control snapshot is logged when
-the fallback is taken. The updated fallback has not yet been verified on the
-physical adapter, so successful scan results and packet reception remain
-unproven.
+review identified a missing upstream initialisation step: RTW88 requests a
+13-byte firmware hardware-feature report and uses its antenna-count field to
+select the board's actual RF path count. The native driver now requests and
+decodes that report before MAC/PHY setup. A reported one-antenna board is
+configured as RF-A/1T1R, so RF-B is not loaded or selected for channel tuning.
+If the report is missing or cannot be read, startup defaults to RF-A/1T1R.
+
+An additional runtime safeguard remains: if a dual-path configuration is
+reported but RF-B still fails RF18 readback, the channel path switches TX/RX
+to RF-A only, applies the 1R CCA and TRSW settings, verifies RF-A again, and
+continues channel tuning. The fallback logs the B-path SIPI command, RF control
+and WLRF1 state. These changes compile in CI, but neither the firmware report
+contents nor successful scan/RX behaviour has yet been confirmed on the
+physical adapter.
 
 ## Not yet implemented
 
-- Full RFE board selection, HW-feature C2H report, IQK/DPK, thermal tracking,
-  antenna diversity and TX-power calibration; 5-GHz and non-20-MHz channel
-  programming are not implemented.
+- Full RFE board selection, IQK/DPK, thermal tracking, antenna diversity and
+  TX-power calibration; 5-GHz and non-20-MHz channel programming are not
+  implemented. Runtime C2H event decoding remains incomplete; only the
+  startup hardware-feature report is decoded.
 - Full RX PHY-status/rate/chain interpretation, C2H command-specific event
   decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
 - Negotiated rate control, QoS/TID-specific queue mapping, TX aggregation,
