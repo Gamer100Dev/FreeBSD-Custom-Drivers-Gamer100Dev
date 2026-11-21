@@ -154,11 +154,12 @@ counts, RFE selection/inversion and TR-switch readback, CCA thresholds, both
 path IGI values, and the latest raw interrupt-IN report as hexadecimal bytes.
 The RX path-select register is included because upstream RTL8822B false-alarm
 accounting uses bit 28 of `0x0808` to determine whether CCK statistics are
-active. The interrupt report is captured under the device mutex and copied
-into the snapshot before formatting. This is intended to distinguish PHY
-detection and firmware event traffic from a MAC/RXDMA path that is failing to
-emit USB bulk-IN aggregates. It does not change hardware configuration and
-does not itself prove packet reception.
+active. The raw interrupt-IN payload is captured under the device mutex and copied
+into the snapshot before formatting. It is a transport diagnostic only:
+upstream RTW88 receives packet aggregates on bulk-IN and does not decode this
+interrupt payload in its normal RX path. Therefore, the interrupt payload is
+not evidence that 802.11 frames are reaching the host. The snapshot does not
+change hardware configuration.
 
 The native 2.4-GHz channel sequence follows upstream ordering: baseband/ADC,
 MAC channel width and timing, RF synthesizer, RX DFIR, RX gain-index toggle,
