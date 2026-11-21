@@ -13,7 +13,9 @@ set(KMOD_OUTPUT "${CMAKE_BINARY_DIR}/${KMOD_NAME}.ko")
 file(GLOB_RECURSE RTW88_DRIVER_INPUTS CONFIGURE_DEPENDS
   "${CMAKE_SOURCE_DIR}/sys/dev/rtw88_native/*"
   "${CMAKE_SOURCE_DIR}/sys/modules/rtw88_native/*"
-)\n\nfind_program(FREEBSD_MAKE NAMES make REQUIRED)
+)
+
+find_program(FREEBSD_MAKE NAMES make REQUIRED)
 
 add_custom_command(
   OUTPUT "${KMOD_OUTPUT}"
