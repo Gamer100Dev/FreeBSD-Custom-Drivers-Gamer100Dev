@@ -306,6 +306,93 @@ rtw88_native_rx_task(void *arg, int pending __unused)
 	}
 }
 
+/*
+ * Read back the MAC/RXDMA configuration and RTL8822B receive statistics.
+ * This is deliberately an explicit sysctl rather than attach-time logging:
+ * the register reads use vendor USB control transfers and should be sampled
+ * after a scan has finished, not from a USB callback or while channel hopping.
+ */
+static int
+rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
+{
+	struct rtw88_native_softc *sc;
+	char status[512];
+	uint8_t cr, rxdma_mode;
+	uint16_t pq_map, agg, rxfltmap2, cck_fa, ofdm_fa;
+	uint32_t rcr, rxfltmap0, cck_crc, ofdm_crc, ht_crc, vht_crc, cca;
+	int channel, error;
+
+	sc = arg1;
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching) {
+		mtx_unlock(&sc->mtx);
+		return (ENXIO);
+	}
+	if (!sc->hw_started) {
+		mtx_unlock(&sc->mtx);
+		return (EAGAIN);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	/*
+	 * Serialize this sleepable register snapshot against channel changes
+	 * and explicit hardware start/stop. Run it after scan completion.
+	 */
+	sc->hw_busy = 1;
+	channel = sc->current_channel;
+	mtx_unlock(&sc->mtx);
+
+	error = 0;
+	if (rtw88_native_reg_read8(sc, RTW88_NATIVE_REG_CR, &cr) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, RTW88_NATIVE_REG_TXDMA_PQ_MAP,
+	    &pq_map) != USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read8(sc, RTW88_NATIVE_REG_RXDMA_MODE,
+	    &rxdma_mode) != USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, RTW88_NATIVE_REG_RXDMA_AGG_PG_TH,
+	    &agg) != USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0608, &rcr) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x06a0, &rxfltmap0) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, 0x06a4, &rxfltmap2) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, 0x0a5c, &cck_fa) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read16(sc, 0x0f48, &ofdm_fa) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0f04, &cck_crc) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0f14, &ofdm_crc) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0f10, &ht_crc) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0f0c, &vht_crc) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, 0x0f08, &cca) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		error = EIO;
+
+	mtx_lock(&sc->mtx);
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+	if (error != 0)
+		return (error);
+
+	(void)snprintf(status, sizeof(status),
+	    "channel=%d CR=%02x PQ_MAP=%04x RXDMA_MODE=%02x "
+	    "RXDMA_AGG=%04x RCR=%08x RXFLTMAP0=%08x RXFLTMAP2=%04x "
+	    "CCK_FA=%04x OFDM_FA=%04x CCK_CRC=%08x OFDM_CRC=%08x "
+	    "HT_CRC=%08x VHT_CRC=%08x CCA=%08x",
+	    channel, cr, pq_map, rxdma_mode, agg, rcr, rxfltmap0,
+	    rxfltmap2, cck_fa, ofdm_fa, cck_crc, ofdm_crc, ht_crc,
+	    vht_crc, cca);
+	return (sysctl_handle_string(oidp, status, sizeof(status), req));
+}
+
 static int
 rtw88_native_sysctl_hw_start(SYSCTL_HANDLER_ARGS)
 {
@@ -523,6 +610,11 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "intr_last_len", CTLFLAG_RD, &sc->last_intr_len, 0,
 	    "Length of the most recent USB interrupt report");
+	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_hw_status", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE,
+	    sc, 0, rtw88_native_sysctl_rx_hw_status, "A",
+	    "Read live RTL8822B MAC/RXDMA and receive-error registers");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_count", CTLFLAG_RD, &sc->rx_count, 0,
