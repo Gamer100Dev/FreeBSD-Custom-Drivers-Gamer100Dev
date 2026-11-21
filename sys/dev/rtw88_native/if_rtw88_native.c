@@ -231,6 +231,8 @@ rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
 	ic->ic_opmode = IEEE80211_M_STA;
 	IEEE80211_ADDR_COPY(ic->ic_macaddr, sc->efuse.macaddr);
 	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR;
+	setbit(ic->ic_modecaps, IEEE80211_MODE_11B);
+	setbit(ic->ic_modecaps, IEEE80211_MODE_11G);
 	rtw88_native_getradiocaps(ic, IEEE80211_CHAN_MAX,
 	    &ic->ic_nchans, ic->ic_channels);
 	if (ic->ic_nchans == 0)
