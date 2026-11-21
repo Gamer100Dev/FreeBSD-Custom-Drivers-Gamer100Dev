@@ -854,8 +854,6 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 
 	if (sc == NULL || sc->dying || !sc->xfers_initialized)
 		return (EINVAL);
-	if (sc->mac_initialized)
-		return (0);
 
 	error = rtw88_native_chip_power_on(sc);
 	if (error != 0)
@@ -873,16 +871,20 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	/* Collect raw C2H/event reports after firmware and base MAC setup. */
+	/* Start the event endpoint and raw bulk receive after firmware startup. */
 	error = rtw88_native_usb_intr_start(sc);
+	if (error != 0 && error != EALREADY)
+		goto fail;
+	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
 
 	device_printf(sc->dev,
-	    "RTL8822B power, firmware, eFuse, FIFO and base MAC setup completed; interrupt reports enabled, bulk RX/net80211 still disabled\n");
+	    "RTL8822B power, firmware, eFuse, FIFO and base MAC setup completed; bulk RX and raw interrupt capture enabled, RX parsing/net80211 pending\n");
 	return (0);
 
 fail:
+	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
@@ -895,10 +897,10 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 {
 	if (sc == NULL)
 		return;
+	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
-	sc->efuse_initialized = 0;
 	rtw88_native_firmware_put(sc);
 }

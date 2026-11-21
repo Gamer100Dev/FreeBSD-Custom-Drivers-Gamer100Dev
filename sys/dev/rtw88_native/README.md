@@ -11,7 +11,8 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
   lifetime management for synchronous I/O.
 - `rtw88_native_usb.c`: descriptor-based allocation of one bulk-IN,
   three bulk-OUT and one interrupt-IN transfer; synchronous vendor-control
-  requests; completion-signalled synchronous bulk-OUT.
+  requests; completion-signalled synchronous bulk-OUT; continuous raw bulk-IN
+  and interrupt-IN transfers with callback/drain lifecycle.
 - `rtw88_native_reg.c`: checked 8/16/32-bit little-endian register access
   and the RTL8822B USB security-section write to register `0x04e0`.
 - `rtw88_native_fw.c`: FreeBSD firmware acquisition and RTW88 image parsing,
@@ -22,9 +23,6 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
   ring initialisation and base MAC/WMAC register configuration.
 - `rtw88_native_efuse.c`: native physical eFuse reads, packed logical-map
   decoding, and RTL8822BU MAC/board-field extraction.
-- Interrupt-IN path: a FreeBSD transfer callback continuously captures raw
-  64-byte RTL8822B event reports into a per-device ringless latest-report
-  buffer and counter. This is transport capture only; C2H dispatch is pending.
 - `if_rtw88_native.h`: hardware definitions, per-device state and API.
 
 ## Explicit hardware-start entry point
@@ -40,7 +38,7 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
    MAC address and board configuration bytes.
 5. Configure the 3-OUT-endpoint FIFO/page allocation, H2C ring and base
    8822B MAC/WMAC registers.
-6. Start the interrupt-IN endpoint and capture raw device event reports.
+6. Start continuous raw bulk-IN and interrupt-IN capture.
 
 This routine is **not called by USB attach**. Firmware retrieval may access the
 filesystem and therefore belongs in a sleepable device-start path after the
@@ -65,13 +63,19 @@ meter, PA/LNA, board and RFE bytes. Full board/RFE selection, hardware-feature
 report handling, RF calibration and power-table programming are not yet
 implemented.
 
+Raw bulk-IN batches are currently copied to a per-device latest-buffer
+snapshot, with length and receive count. Raw interrupt-IN reports are
+similarly captured. Neither stream is parsed into 802.11 frames or C2H event
+messages yet; these are transport diagnostics and a foundation for the RX
+parser, not a working packet path.
+
 ## Not yet implemented
 
 - Full RFE/board selection and PHY/BB/RF register-table programming.
 - IQK/DPK calibration, antenna setup, channel control and regulatory
   handling.
-- Active bulk-IN RX aggregation and C2H event parsing/dispatch (interrupt-IN
-  reports are currently captured but not interpreted).
+- RTW88 RX descriptor parsing, RX aggregation boundaries and C2H event
+  decoding/dispatch.
 - Normal TX packet descriptors, queue scheduling, aggregation, retries and
   TX status reporting.
 - Native FreeBSD `net80211` attach/interface operations, scanning,
@@ -84,7 +88,8 @@ The code is being developed against FreeBSD 15.1 and its in-tree native
 wireless/USB conventions:
 
 - `USBDI(9)`: `usbd_transfer_setup()`, `usbd_transfer_unsetup()`,
-  `usbd_do_request_flags()`, USB transfer callbacks and external buffers.
+  `usbd_transfer_drain()`, `usbd_do_request_flags()`, USB transfer
+  callbacks and external buffers.
 - `FIRMWARE(9)`: `firmware_get()` and `firmware_put()`.
 - Existing native USB driver patterns:
   `sys/dev/rtwn/usb/rtwn_usb_attach.c`,

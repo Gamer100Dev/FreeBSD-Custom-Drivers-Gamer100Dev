@@ -145,9 +145,6 @@ struct rtw88_native_softc {
 	int			tx_cv_initialized;
 	int			io_cv_initialized;
 	int			dying;
-	int			detaching;
-	int			hw_busy;
-	int			hw_started;
 	unsigned int		io_users;
 	int			xfers_initialized;
 	int			tx_busy[RTW88_NATIVE_TX_QUEUES];
@@ -180,12 +177,20 @@ struct rtw88_native_softc {
 	uint16_t		last_intr_len;
 	uint64_t		intr_count;
 	usb_error_t		intr_error;
+	int			rx_started;
+	uint8_t			rx_buf[32 * 1024];
+	uint8_t			rx_last[32 * 1024];
+	uint32_t		rx_last_len;
+	uint64_t		rx_count;
+	usb_error_t		rx_error;
 };
 
 usb_error_t	rtw88_native_usb_setup(struct rtw88_native_softc *);
 void		rtw88_native_usb_unsetup(struct rtw88_native_softc *);
 int		rtw88_native_usb_intr_start(struct rtw88_native_softc *);
 void		rtw88_native_usb_intr_stop(struct rtw88_native_softc *);
+int		rtw88_native_usb_rx_start(struct rtw88_native_softc *);
+void		rtw88_native_usb_rx_stop(struct rtw88_native_softc *);
 usb_error_t	rtw88_native_usb_control(struct rtw88_native_softc *,
 		    uint8_t, uint16_t, void *, uint16_t, uint16_t *);
 usb_error_t	rtw88_native_usb_tx_sync(struct rtw88_native_softc *, uint8_t,

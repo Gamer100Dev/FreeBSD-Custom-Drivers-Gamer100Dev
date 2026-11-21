@@ -16,6 +16,9 @@ USB ID `0bda:b812`.
   external transfer buffers, mutexes and condition variables.
 - Synchronous vendor-control requests with actual-length checking and
   I/O-user accounting for detach.
+- Continuous bulk-IN receive and interrupt-IN report capture. Both external
+  buffers are per-device state, and both transfers have explicit stop/drain
+  routines for safe teardown.
 - Checked little-endian 8/16/32-bit register access.
 - RTL8822B USB security-section side operation at `0x04e0` for the
   register ranges used by upstream RTW88.
@@ -52,8 +55,9 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 - Initialise the H2C ring pointers and check that the ring is empty.
 - Port the 8822B base EDCA, timing, beacon, RX-filter and WMAC register
   configuration.
-- Start the native interrupt-IN transfer after base hardware initialisation
-  and capture raw 64-byte device event reports with completion/drain support.
+- Start the native bulk-IN and interrupt-IN transfers only after firmware
+  and base MAC initialisation. Completed data is retained as raw USB batches
+  for the future descriptor/C2H parsers.
 - Add an explicit `rtw88_native_hw_start()` / `rtw88_native_hw_stop()`
   sequence. It is not invoked automatically from USB attach.
 
@@ -61,8 +65,8 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 
 - Full RFE board selection, HW-feature C2H report, PHY/BB/RF register tables,
   IQK/DPK, antenna and channel initialisation.
-- Active bulk RX aggregation, RX descriptor parsing and C2H event decoding/dispatch
-  (interrupt reports are captured raw but not yet parsed).
+- RTW88 RX descriptor parsing, aggregation handling and C2H event decoding/
+  dispatch.
 - Normal TX data path, aggregation, per-frame queue mapping, completion and
   status reporting.
 - Native `net80211` interface and lifecycle integration.
@@ -83,7 +87,7 @@ more of the driver is implemented.
 ## FreeBSD API basis
 
 - FreeBSD 15.1 `USBDI(9)` for transfer allocation/lifetime, synchronous
-  control requests, callbacks and buffer handling.
+  control requests, callbacks, drain semantics and buffer handling.
 - FreeBSD 15.1 `FIRMWARE(9)` for filesystem-backed firmware acquisition.
 - In-tree native USB wireless patterns under `sys/dev/rtwn/usb/`.
 - Vendored upstream RTW88 8822B source under `sys/contrib/dev/rtw88/`
