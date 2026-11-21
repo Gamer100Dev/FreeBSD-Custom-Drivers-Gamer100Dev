@@ -349,6 +349,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
 	uint8_t type;
+	int ac;
 	uint16_t seqctl;
 	usb_error_t uerr;
 	int error;
@@ -363,18 +364,51 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	wh = &whbuf;
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 	if (type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_CTL)
-		qsel = 18;		/* TX_DESC_QSEL_MGMT */
-	else if (type == IEEE80211_FC0_TYPE_DATA)
-		qsel = 0;		/* TX_DESC_QSEL_TID0 / best effort */
-	else
+	    type == IEEE80211_FC0_TYPE_CTL) {
+		qsel = RTW88_NATIVE_TXQSEL_MGMT;
+	} else if (type == IEEE80211_FC0_TYPE_DATA) {
+		/*
+		 * Match rtw_usb_tx_queue_mapping_to_qsel() in Linux RTW88:
+		 * group-addressed data uses QSEL_HIGH; unicast data uses the
+		 * TID corresponding to net80211's WME access category. FreeBSD
+		 * stores AC in M_WME_GETAC(), while the TX descriptor needs TID.
+		 */
+		if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
+			qsel = RTW88_NATIVE_TXQSEL_HIGH;
+		} else {
+			ac = M_WME_GETAC(m);
+			if (ac < WME_AC_BE || ac > WME_AC_VO)
+				return (EINVAL);
+			qsel = WME_AC_TO_TID(ac);
+		}
+	} else {
 		return (EOPNOTSUPP);
+	}
 
 	endpoint = sc->qsel_to_ep[qsel];
 	if (endpoint >= RTW88_NATIVE_TX_QUEUES)
 		return (EOPNOTSUPP);
 	frame_len = (uint16_t)m->m_pkthdr.len;
 	transfer_len = frame_len + RTW88_NATIVE_TX_DESC_SIZE;
+
+	/* Snapshot frame classification before the sleepable USB transmit. */
+	mtx_lock(&sc->mtx);
+	sc->tx_last_qsel = qsel;
+	sc->tx_last_endpoint = endpoint;
+	sc->tx_last_frame_control = (int)wh->i_fc[0] |
+	    ((int)wh->i_fc[1] << 8);
+	sc->tx_last_frame_len = frame_len;
+	if (type == IEEE80211_FC0_TYPE_MGT ||
+	    type == IEEE80211_FC0_TYPE_CTL)
+		sc->tx_mgmt_count++;
+	else {
+		sc->tx_data_count++;
+		if (qsel == RTW88_NATIVE_TXQSEL_HIGH)
+			sc->tx_group_count++;
+	}
+	if ((m->m_flags & M_EAPOL) != 0)
+		sc->tx_eapol_count++;
+	mtx_unlock(&sc->mtx);
 
 	buffer = malloc(transfer_len, M_DEVBUF, M_WAITOK);
 	if (buffer == NULL)
@@ -968,6 +1002,38 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_error_count", CTLFLAG_RD, &sc->tx_error_count, 0,
 	    "Number of frames that failed before or during USB transmission");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_mgmt_count", CTLFLAG_RD, &sc->tx_mgmt_count, 0,
+	    "Management/control frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_data_count", CTLFLAG_RD, &sc->tx_data_count, 0,
+	    "Data frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_group_count", CTLFLAG_RD, &sc->tx_group_count, 0,
+	    "Group-addressed data frames routed to QSEL_HIGH");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_eapol_count", CTLFLAG_RD, &sc->tx_eapol_count, 0,
+	    "EAPOL frames passed to the TX worker");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_qsel", CTLFLAG_RD, &sc->tx_last_qsel, 0,
+	    "Queue-select value for the most recent TX frame");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_endpoint", CTLFLAG_RD, &sc->tx_last_endpoint, 0,
+	    "Bulk-OUT transfer index for the most recent TX frame");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_frame_control", CTLFLAG_RD, &sc->tx_last_frame_control, 0,
+	    "Frame-control field for the most recent TX frame");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_frame_len", CTLFLAG_RD, &sc->tx_last_frame_len, 0,
+	    "MPDU length for the most recent TX frame");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_queue_depth", CTLFLAG_RD, &sc->tx_queue_depth, 0,
