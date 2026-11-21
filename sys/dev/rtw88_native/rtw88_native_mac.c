@@ -854,6 +854,8 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 
 	if (sc == NULL || sc->dying || !sc->xfers_initialized)
 		return (EINVAL);
+	if (sc->mac_initialized)
+		return (0);
 
 	error = rtw88_native_chip_power_on(sc);
 	if (error != 0)
@@ -897,5 +899,6 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
+	sc->efuse_initialized = 0;
 	rtw88_native_firmware_put(sc);
 }
