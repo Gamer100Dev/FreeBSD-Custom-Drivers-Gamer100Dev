@@ -44,11 +44,10 @@ enum {
 };
 
 struct rtw88_native_softc {
-	device_t		dev;
 	struct usb_device	*udev;
-	struct usb_xfer	*xfer[RTW88_NATIVE_N_XFERS];
+	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
-	uint8_t		iface_index;
+	uint8_t			iface_index;
 	int			mtx_initialized;
 	int			xfers_initialized;
 };
@@ -57,7 +56,7 @@ struct rtw88_native_softc {
  * Keep the initial port deliberately narrow: bind only to the adapter that
  * is being developed and only to its vendor-specific interface.
  */
-static STRUCT_USB_HOST_ID rtw88_native_devs[] = {
+static const STRUCT_USB_HOST_ID rtw88_native_devs[] = {
 	{
 		USB_VP(RTW88_NATIVE_VENDOR_REALTEK,
 		    RTW88_NATIVE_PRODUCT_RTL8822BU),
@@ -229,11 +228,11 @@ rtw88_native_attach(device_t dev)
 	usb_error_t uerr;
 
 	sc = device_get_softc(dev);
+	bzero(sc, sizeof(*sc));
 	uaa = device_get_ivars(dev);
 	if (uaa == NULL || uaa->device == NULL)
 		return (ENXIO);
 
-	sc->dev = dev;
 	sc->udev = uaa->device;
 	sc->iface_index = uaa->info.bIfaceIndex;
 
