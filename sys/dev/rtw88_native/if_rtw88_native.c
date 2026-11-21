@@ -346,6 +346,7 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	uint32_t edcca_th, edcca_rd_ctrl, edcca_source;
 	uint32_t edcca_pow_ma, edcca_decision, tx_ptcl_ctrl;
 	uint16_t txdma_offset_chk;
+	uint8_t trxff_bndy_hi;
 	uint32_t rxpkt_num, rxdma_status, rxdma_dpr;
 	uint16_t intr_len;
 	size_t i;
@@ -442,6 +443,8 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read16(sc, 0x020c, &txdma_offset_chk) !=
 	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read8(sc, 0x0115, &trxff_bndy_hi) !=
+	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, 0x0284, &rxpkt_num) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_read32(sc, 0x0288, &rxdma_status) !=
@@ -474,7 +477,8 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    "CCA2ND=%08x IGI_A=%08x IGI_B=%08x "
 	    "EDCCA_TH=%08x TX_PTCL_CTRL=%08x RD_CTRL=%08x "
 	    "EDCCA_SOURCE=%08x EDCCA_POW_MA=%08x EDCCA_DECISION=%08x "
-	    "TXDMA_OFFSET_CHK=%04x RXPKT_NUM=%08x RXDMA_STATUS=%08x "
+	    "TXDMA_OFFSET_CHK=%04x TRXFF_BNDY_HI=%02x "
+	    "RXPKT_NUM=%08x RXDMA_STATUS=%08x "
 	    "RXDMA_DPR=%08x INTR_LEN=%u INTR_DATA=%s",
 	    channel, (unsigned int)cr, (unsigned int)pq_map,
 	    (unsigned int)rxdma_mode, (unsigned int)agg, rcr,
@@ -484,8 +488,8 @@ rtw88_native_sysctl_rx_hw_status(SYSCTL_HANDLER_ARGS)
 	    cca, cck_cca, rfe_sel0, rfe_sel8, rfe_inv, trsw, cca_sel,
 	    pdm_fth, cca_2nd, igi_a, igi_b, edcca_th, tx_ptcl_ctrl,
 	    edcca_rd_ctrl, edcca_source, edcca_pow_ma, edcca_decision,
-	    (unsigned int)txdma_offset_chk, rxpkt_num, rxdma_status,
-	    rxdma_dpr, (unsigned int)intr_len, intr_hex);
+	    (unsigned int)txdma_offset_chk, (unsigned int)trxff_bndy_hi,
+	    rxpkt_num, rxdma_status, rxdma_dpr, (unsigned int)intr_len, intr_hex);
 	return (sysctl_handle_string(oidp, status, sizeof(status), req));
 }
 
