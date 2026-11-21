@@ -17,7 +17,10 @@ USB ID `0bda:b812`.
 - Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
   be distinguished from a callback that repeatedly fails.
 - Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
-  exposed as `dev.rtw88_native.N.channel` for channels 1-13.
+  exposed as `dev.rtw88_native.N.channel` for channels 1-13. Nonzero RF
+  registers use RTW88's per-path direct RF windows; RF register zero retains
+  SIPI access. RF18 is read back on every active path and a mismatch fails
+  channel tuning.
 - Native net80211 radio registration after successful hardware start, with
   station/monitor VAP creation and 2.4-GHz channel advertisement.
 - Active and passive software scan callbacks: active scans use the
