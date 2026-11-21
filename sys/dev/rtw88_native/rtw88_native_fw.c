@@ -47,6 +47,7 @@ struct rtw88_native_fw_header {
 	uint32_t	emem_addr;
 	uint32_t	imem_addr;
 } __packed;
+CTASSERT(sizeof(struct rtw88_native_fw_header) == RTW88_NATIVE_FW_HEADER_SIZE);
 
 static int
 rtw88_native_fw_parse(struct rtw88_native_softc *sc)

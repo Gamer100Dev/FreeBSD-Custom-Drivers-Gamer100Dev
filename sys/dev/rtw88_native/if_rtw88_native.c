@@ -123,6 +123,7 @@ static int
 rtw88_native_detach(device_t dev)
 {
 	struct rtw88_native_softc *sc;
+	int i;
 
 	sc = device_get_softc(dev);
 	rtw88_native_usb_unsetup(sc);

@@ -19,9 +19,9 @@ static void
 rtw88_native_xfer_callback(struct usb_xfer *xfer, usb_error_t error)
 {
 	/*
-	 * Transfer objects are allocated during transport bring-up but are not
-	 * submitted until firmware and the device-specific DMA state machine
-	 * have been implemented.  Keep this callback inert for now.
+	 * Bulk RX and interrupt RX are allocated but intentionally not started
+	 * during transport bring-up. Their state machines will be enabled only
+	 * after firmware startup and device interrupt handling are implemented.
 	 */
 	(void)xfer;
 	(void)error;

@@ -10,6 +10,7 @@
 
 #include <sys/types.h>
 #include <sys/bus.h>
+#include <sys/condvar.h>
 #include <sys/firmware.h>
 #include <sys/mutex.h>
 
@@ -46,6 +47,8 @@ enum {
 	RTW88_NATIVE_N_XFERS
 };
 
+#define RTW88_NATIVE_TX_QUEUES	3
+
 struct rtw88_native_fw_layout {
 	const uint8_t	*dmem;
 	size_t		dmem_size;
@@ -63,9 +66,16 @@ struct rtw88_native_softc {
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
+	struct cv		tx_cv[RTW88_NATIVE_TX_QUEUES];
 	uint8_t			iface_index;
 	int			mtx_initialized;
+	int			tx_cv_initialized;
 	int			xfers_initialized;
+	int			tx_busy[RTW88_NATIVE_TX_QUEUES];
+	int			tx_done[RTW88_NATIVE_TX_QUEUES];
+	usb_error_t		tx_error[RTW88_NATIVE_TX_QUEUES];
+	const uint8_t		*tx_data[RTW88_NATIVE_TX_QUEUES];
+	uint16_t		tx_len[RTW88_NATIVE_TX_QUEUES];
 	const struct firmware	*firmware;
 	struct rtw88_native_fw_layout fw_layout;
 };
@@ -74,6 +84,8 @@ usb_error_t	rtw88_native_usb_setup(struct rtw88_native_softc *);
 void		rtw88_native_usb_unsetup(struct rtw88_native_softc *);
 usb_error_t	rtw88_native_usb_control(struct rtw88_native_softc *,
 		    uint8_t, uint16_t, void *, uint16_t, uint16_t *);
+usb_error_t	rtw88_native_usb_tx_sync(struct rtw88_native_softc *, uint8_t,
+		    const void *, uint16_t);
 
 usb_error_t	rtw88_native_raw_reg_read32(struct rtw88_native_softc *,
 		    uint16_t, uint32_t *);
