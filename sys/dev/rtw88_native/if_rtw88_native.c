@@ -116,6 +116,55 @@ rtw88_native_sysctl_hw_start(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+
+static int
+rtw88_native_sysctl_channel(SYSCTL_HANDLER_ARGS)
+{
+	struct rtw88_native_softc *sc;
+	int value, error;
+
+	sc = arg1;
+	mtx_lock(&sc->mtx);
+	value = sc->current_channel;
+	mtx_unlock(&sc->mtx);
+
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value < 1 || value > 13)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching) {
+		mtx_unlock(&sc->mtx);
+		return (ENXIO);
+	}
+	if (!sc->hw_started || !sc->phy_initialized) {
+		mtx_unlock(&sc->mtx);
+		return (EAGAIN);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	sc->hw_busy = 1;
+	mtx_unlock(&sc->mtx);
+
+	error = rtw88_native_phy_set_channel(sc, (uint8_t)value);
+
+	mtx_lock(&sc->mtx);
+	if (error == 0)
+		sc->current_channel = value;
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	if (error != 0)
+		device_printf(sc->dev,
+		    "2.4-GHz channel %d configuration failed: %d\n", value, error);
+	return (error);
+}
+
 static int
 rtw88_native_attach(device_t dev)
 {
@@ -191,6 +240,21 @@ rtw88_native_attach(device_t dev)
 	    "hw_start", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	    sc, 0, rtw88_native_sysctl_hw_start, "I",
 	    "Start (1) or stop (0) RTL8822BU hardware and interrupt capture") == NULL) {
+		rtw88_native_usb_unsetup(sc);
+		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
+			cv_destroy(&sc->tx_cv[i]);
+		sc->tx_cv_initialized = 0;
+		cv_destroy(&sc->io_drain_cv);
+		sc->io_cv_initialized = 0;
+		mtx_destroy(&sc->mtx);
+		sc->mtx_initialized = 0;
+		return (ENOMEM);
+	}
+	if (SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "channel", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+	    sc, 0, rtw88_native_sysctl_channel, "I",
+	    "Tune RFE option 3 to a 2.4-GHz channel (1-13), 20 MHz") == NULL) {
 		rtw88_native_usb_unsetup(sc);
 		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 			cv_destroy(&sc->tx_cv[i]);
