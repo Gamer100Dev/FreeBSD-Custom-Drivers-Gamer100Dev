@@ -718,11 +718,15 @@ rtw88_native_fw_send_h2c_packet(struct rtw88_native_softc *sc,
 	    RTW88_NATIVE_H2C_PACKET_SIZE];
 	usb_error_t uerr;
 	uint16_t sequence;
+	uint8_t tx_queue;
 
 	if (sc == NULL || packet == NULL || !sc->firmware_running ||
 	    !sc->mac_initialized || !sc->phy_initialized ||
 	    !sc->xfers_initialized || sc->dying)
 		return (EINVAL);
+	tx_queue = sc->qsel_to_ep[RTW88_NATIVE_TXQSEL_H2C];
+	if (tx_queue >= RTW88_NATIVE_TX_QUEUES)
+		return (ENOTSUP);
 
 	bzero(&params, sizeof(params));
 	params.packet_size = RTW88_NATIVE_H2C_PACKET_SIZE;
@@ -737,8 +741,8 @@ rtw88_native_fw_send_h2c_packet(struct rtw88_native_softc *sc,
 	    RTW88_NATIVE_H2C_PACKET_SIZE);
 
 	sequence = sc->fw_h2c_seq;
-	uerr = rtw88_native_usb_tx_sync(sc, RTW88_NATIVE_TXQ_HIGH,
-	    tx_packet, sizeof(tx_packet));
+	uerr = rtw88_native_usb_tx_sync(sc, tx_queue, tx_packet,
+	    sizeof(tx_packet));
 	/* Linux advances the offload sequence after each attempted H2C packet. */
 	sc->fw_h2c_seq = (uint16_t)(sequence + 1);
 	if (uerr != USB_ERR_NORMAL_COMPLETION) {
