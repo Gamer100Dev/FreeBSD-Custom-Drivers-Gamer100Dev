@@ -266,6 +266,8 @@ struct rtw88_native_softc {
 	int			phy_initialized;
 	int			efuse_initialized;
 	int			current_channel;
+	uint8_t			scan_igi_saved;
+	int			scan_igi_valid;
 	int			intr_started;
 	uint8_t			intr_buf[64];
 	uint8_t			last_intr[64];
@@ -333,6 +335,8 @@ int		rtw88_native_mac_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_set_channel(struct rtw88_native_softc *,
 		    uint8_t);
+int		rtw88_native_phy_scan_gain(struct rtw88_native_softc *,
+		    int);
 void		rtw88_native_mac_stop(struct rtw88_native_softc *);
 int		rtw88_native_hw_start(struct rtw88_native_softc *);
 void		rtw88_native_hw_stop(struct rtw88_native_softc *);
