@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the native RTW88 module against a matching FreeBSD source tree.
+# Overlay and build the native RTW88 module in a FreeBSD source tree.
 set -eu
 
 SRCROOT="${SRCROOT:-/usr/src}"
