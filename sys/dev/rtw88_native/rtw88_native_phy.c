@@ -460,6 +460,7 @@ rtw88_native_phy_load_table(struct rtw88_native_softc *sc,
 #define REG_CH_PDMFTH			0x0830
 #define REG_CH_CCA2ND			0x0838
 #define REG_CH_RXIGI_A			0x0c50
+#define REG_CH_RXIGI_B			0x0e50
 #define REG_CH_AFE_CTRL1		0x0024
 #define REG_CH_USTIME_TSF		0x055c
 #define REG_CH_USTIME_EDCA		0x0638
@@ -471,6 +472,8 @@ rtw88_native_phy_load_table(struct rtw88_native_softc *sc,
 #define CH_RF18_BW_MASK		((1U << 11) | (1U << 10))
 #define CH_RF18_BW_20M			CH_RF18_BW_MASK
 #define CH_RF_MALSEL_MASK		((1U << 17) | (1U << 16) | (1U << 15))
+#define CH_RF_XTALX2_MASK		(1U << 19)
+#define CH_RF_LUTDBG_MASK		(1U << 18)
 #define CH_MAC_RFMOD_MASK		((1U << 8) | (1U << 7))
 #define CH_BIT_CHECK_CCK_EN		(1U << 7)
 #define CH_BIT_MAC_CLK_SEL		((1U << 21) | (1U << 20))
@@ -480,7 +483,8 @@ static int
 rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
     uint8_t channel)
 {
-	uint32_t rf18, igi, value32;
+	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg;
+	uint32_t igi_a, igi_b, value32;
 	uint8_t value8;
 	int error, path;
 
@@ -564,15 +568,29 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	rf18 &= ~(CH_RF18_BAND_MASK | CH_RF18_CHANNEL_MASK |
 	    CH_RF18_RFSI_MASK | CH_RF18_BW_MASK);
 	rf18 |= channel | CH_RF18_BW_20M;
-	if (rtw88_native_phy_rf_write(sc, 0, 0xbe, 0) != 0 ||
+	/*
+	 * RF register writes are masked in the upstream driver. Preserve all
+	 * unrelated RF bits rather than writing zero to the entire RF register.
+	 */
+	if (rtw88_native_phy_rf_read(sc, 0, 0xbe, &rf_malsel) != 0 ||
+	    rtw88_native_phy_rf_read(sc, 0, 0xdf, &rf_lutdbg) != 0 ||
+	    rtw88_native_phy_rf_read(sc, 0, 0xb8, &rf_xtalx2) != 0)
+		return (EIO);
+	rf_malsel &= ~CH_RF_MALSEL_MASK;
+	rf_lutdbg &= ~CH_RF_LUTDBG_MASK; /* channels 1-13 are below channel 144 */
+	if (rtw88_native_phy_rf_write(sc, 0, 0xbe, rf_malsel) != 0 ||
+	    rtw88_native_phy_rf_write(sc, 0, 0xdf, rf_lutdbg) != 0 ||
 	    rtw88_native_phy_rf_write(sc, 0, 0x18, rf18) != 0)
 		return (EIO);
 	for (path = 1; path < sc->rf_path_num; path++) {
 		if (rtw88_native_phy_rf_write(sc, path, 0x18, rf18) != 0)
 			return (EIO);
 	}
-	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, 0) != 0 ||
-	    rtw88_native_phy_rf_write(sc, 0, 0xb8, 1U << 19) != 0)
+	rf_xtalx2 &= ~CH_RF_XTALX2_MASK;
+	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
+		return (EIO);
+	rf_xtalx2 |= CH_RF_XTALX2_MASK;
+	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
 		return (EIO);
 
 	/* IFEM-extended RFE option 3: route both RF paths to the antennas. */
@@ -591,7 +609,13 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV,
 		    (1U << 11) | (1U << 10) | 0x3fU, 0);
 	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV + 0x200,
+		    (1U << 11) | (1U << 10) | 0x3fU, 0);
+	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW,
+		    0x0000ffffU, 0xa501);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW + 0x200,
 		    0x0000ffffU, 0xa501);
 	if (error != 0)
 		return (error);
@@ -605,18 +629,37 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
-	/* The upstream 8822B channel transition toggles IGI to refresh gain. */
-	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi) !=
+	/*
+	 * Match rtw8822b_toggle_igi(): toggle the gain index on both RF paths,
+	 * then pulse RX path selection with the configured dual-chain value.
+	 */
+	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, REG_CH_RXIGI_B, &igi_b) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
-	igi &= CH_BIT_MAC_RXIGI;
-	if (igi < 2)
+	igi_a &= CH_BIT_MAC_RXIGI;
+	igi_b &= CH_BIT_MAC_RXIGI;
+	if (igi_a < 2 || igi_b < 2)
 		return (EIO);
 	error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
-	    CH_BIT_MAC_RXIGI, igi - 2);
+	    CH_BIT_MAC_RXIGI, igi_a - 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+		    CH_BIT_MAC_RXIGI, igi_b - 2);
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
-		    CH_BIT_MAC_RXIGI, igi);
+		    CH_BIT_MAC_RXIGI, igi_a);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+		    CH_BIT_MAC_RXIGI, igi_b);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    0x000000ffU, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    0x000000ffU,
+		    sc->antenna_rx | (sc->antenna_rx << 4));
 	if (error != 0)
 		return (error);
 
