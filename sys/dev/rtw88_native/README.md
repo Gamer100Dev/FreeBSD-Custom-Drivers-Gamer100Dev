@@ -9,10 +9,11 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
 
 - `if_rtw88_native.c`: newbus USB probe/attach/detach, endpoint setup, and
   lifetime management for synchronous I/O.
-- `rtw88_native_usb.c`: descriptor-based allocation of one bulk-IN,
-  three bulk-OUT and one interrupt-IN transfer; synchronous vendor-control
-  requests; completion-signalled synchronous bulk-OUT; continuous raw bulk-IN
-  and interrupt-IN transfers with callback/drain lifecycle.
+- `rtw88_native_usb.c`: descriptor-based allocation of four concurrent
+  32 KiB bulk-IN transfers (matching upstream RTW88 USB RX queue depth), three
+  bulk-OUT transfers and one interrupt-IN diagnostic transfer; synchronous
+  vendor-control requests; completion-signalled synchronous bulk-OUT; callback
+  and drain lifecycle for all asynchronous transfers.
 - `rtw88_native_reg.c`: checked 8/16/32-bit little-endian register access
   and the RTL8822B USB security-section write to register `0x04e0`.
 - `rtw88_native_fw.c`: FreeBSD firmware acquisition and RTW88 image parsing,
