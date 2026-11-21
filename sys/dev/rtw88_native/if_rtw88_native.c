@@ -23,6 +23,7 @@
 #include <sys/lock.h>
 #include <sys/module.h>
 #include <sys/mbuf.h>
+#include <sys/malloc.h>
 #include <sys/taskqueue.h>
 #include <sys/mutex.h>
 #include <sys/systm.h>
@@ -431,7 +432,7 @@ rtw88_native_attach(device_t dev)
 	for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 		cv_init(&sc->tx_cv[i], "rtw88 native tx");
 	sc->tx_cv_initialized = 1;
-	mbufq_init(&sc->rx_queue, ifqmaxlen);
+	mbufq_init(&sc->rx_queue, 64);
 	TASK_INIT(&sc->rx_task, 0, rtw88_native_rx_task, sc);
 	cv_init(&sc->io_drain_cv, "rtw88 native io");
 	sc->io_cv_initialized = 1;
