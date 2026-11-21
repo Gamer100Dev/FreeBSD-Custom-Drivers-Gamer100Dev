@@ -4,10 +4,10 @@
  * Copyright (c) 2026 Gamer100Dev
  * All rights reserved.
  *
- * This file implements the initial native FreeBSD USB transport for the
- * Realtek RTL8822BU (USB ID 0bda:b812).  It intentionally does not register
- * a wlan interface yet; chipset startup, firmware download, data transfers,
- * and net80211 integration are subsequent porting stages.
+ * This file implements the native FreeBSD USB and net80211 glue for the
+ * Realtek RTL8822BU (USB ID 0bda:b812). It currently supports station and
+ * monitor VAP creation plus passive 2.4-GHz scanning; association and TX are
+ * not implemented yet.
  *
  * Register request format is the one used by the RTW88 USB hardware
  * interface: vendor control request 0x05, wValue = register address,
@@ -164,16 +164,32 @@ rtw88_native_set_channel(struct ieee80211com *ic)
 	if (c == NULL)
 		return;
 	channel = c->ic_ieee;
-	error = rtw88_native_phy_set_channel(sc, (uint8_t)channel);
-	if (error == 0) {
-		mtx_lock(&sc->mtx);
-		sc->current_channel = channel;
+
+	/* Serialize scan channel changes against sysctl start/stop/manual tune. */
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->hw_started || sc->hw_busy) {
 		mtx_unlock(&sc->mtx);
-	} else {
+		device_printf(sc->dev,
+		    "skipping channel %d change while hardware is busy or stopped\n",
+		    channel);
+		return;
+	}
+	sc->hw_busy = 1;
+	mtx_unlock(&sc->mtx);
+
+	error = rtw88_native_phy_set_channel(sc, (uint8_t)channel);
+
+	mtx_lock(&sc->mtx);
+	if (error == 0)
+		sc->current_channel = channel;
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	if (error != 0)
 		device_printf(sc->dev,
 		    "net80211 channel change to %d failed: %d\n",
 		    channel, error);
-	}
 }
 
 static void
