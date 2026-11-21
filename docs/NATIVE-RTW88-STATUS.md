@@ -130,18 +130,28 @@ was `0x1e` and aggregation register value `0x2005`; the user has not yet
 reported a bulk-IN completion after this configuration.
 
 The current branch adds a net80211 radio and a standard VAP creation path.
-After a successful `dev.rtw88_native.N.hw_start=1`, a station VAP can be
-created with `ifconfig wlan create wlandev rtw88_native0 wlanmode sta`.
-The software scan callback deliberately clears `IEEE80211_SCAN_ACTIVE`,
-so the initial scan is passive and does not issue probe requests.
+After a successful `dev.rtw88_native.N.hw_start=1`, create a station VAP and
+run a passive scan with:
 
-The RX callback copies valid non-C2H frames to mbufs and defers
+```sh
+ifconfig wlan create wlandev rtw88_native0 wlanmode sta
+ifconfig wlan0 up
+ifconfig wlan0 scan
+sleep 15
+ifconfig wlan0 list scan
+```
+
+The software scan callback deliberately clears `IEEE80211_SCAN_ACTIVE`, so
+this scan does not issue probe requests. The channel callback programs the
+radio as net80211 visits channels 1-13.
+
+The RX callback copies valid non-C2H frames to mbufs, removes the appended FCS,
+adds basic channel/RSSI/TSF metadata and defers
 `ieee80211_input_mimo_all()` to a taskqueue thread, avoiding net80211 input
-under the USB transfer mutex. This code now needs a FreeBSD 15.1 build and
-adapter test. The user's latest hardware test still had no completed
-bulk-IN transfer, so the driver may expose the interface and perform channel
-hops while scan results remain empty until RX traffic reaches the bulk-IN
-endpoint.
+under the USB transfer mutex. This code needs a FreeBSD 15.1 build and adapter
+test. The user's latest hardware test still had no completed bulk-IN transfer,
+so the VAP and scan/channel-hopping path may appear to work while scan results
+remain empty until RX aggregates reach the bulk-IN endpoint.
 
 **Wi-Fi operation is not yet fully verified.** Active scanning, TX,
 authentication, association, key management, complete C2H dispatch and
