@@ -500,7 +500,7 @@ static int rtw88_native_write_mask8(struct rtw88_native_softc *, uint16_t,
  * aggregation path. This adapter enumerates at USB 2.0 High Speed (512-byte
  * max packet); the 512-byte RX burst encoding is therefore selected.
  */
-static int
+int
 rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *sc)
 {
 	enum usb_dev_speed speed;
@@ -886,9 +886,9 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 }
 
 /*
- * Configure DMA routing, the 3-endpoint FIFO page table, USB RXDMA burst/
- * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. net80211
- * attaches only after this hardware-start sequence has fully succeeded.
+ * Configure the 3-endpoint DMA routing, FIFO page table and 8822B MAC/WMAC
+ * defaults. USB RXDMA interface setup is performed after PHY table loading,
+ * matching Linux RTW88's post-phy HCI interface configuration.
  */
 int
 rtw88_native_mac_init(struct rtw88_native_softc *sc)
@@ -908,8 +908,6 @@ rtw88_native_mac_init(struct rtw88_native_softc *sc)
 		error = rtw88_native_h2c_init(sc);
 	if (error == 0)
 		error = rtw88_native_8822b_mac_init(sc);
-	if (error == 0)
-		error = rtw88_native_usb_rx_dma_init(sc);
 	if (error != 0)
 		return (error);
 
