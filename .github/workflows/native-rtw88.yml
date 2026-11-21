@@ -47,6 +47,7 @@ jobs:
 
             cd /usr/src/sys/modules/rtw88_native
             make -j4
-            test -s if_rtw88_native.ko
-            file if_rtw88_native.ko
-            sha256 if_rtw88_native.ko
+            OBJDIR="$(make -V .OBJDIR)"
+            test -s "$OBJDIR/if_rtw88_native.ko"
+            file "$OBJDIR/if_rtw88_native.ko"
+            sha256 "$OBJDIR/if_rtw88_native.ko"
