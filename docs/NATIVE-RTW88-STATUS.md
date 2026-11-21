@@ -19,8 +19,11 @@ USB ID `0bda:b812`.
 - Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
   exposed as `dev.rtw88_native.N.channel` for channels 1-13. RF writes use
   the RTL8822B-specific HSSI/SIPI serial-interface ports, and RF18 is read
-  back through each path's direct RF window. A mismatch now fails channel
-  tuning and reports the path, written value and readback value.
+  back through each selected path's direct RF window. If RF-B fails its
+  readback while RF-A is verified, the driver reconfigures TRX selection to
+  RF-A only (1T1R), applies the matching 1R CCA thresholds / antenna switch,
+  verifies RF-A again, and continues channel tuning. The fallback logs the
+  B-path SIPI command, RF control and WLRF1 state for later diagnosis.
 - Native net80211 radio registration after successful hardware start, with
   station/monitor VAP creation and 2.4-GHz channel advertisement.
 - Active and passive software scan callbacks: active scans use the
@@ -111,6 +114,18 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 - Start the native interrupt-IN transfer after firmware/base MAC setup,
   capture raw reports in a bounded buffer, and expose count/last-length
   diagnostics through read-only sysctls.
+
+## Current RF-B diagnostic response
+
+The latest physical test showed RF-A reaching the requested RF18 value while
+RF-B remained at `0x00400`, causing channel changes to return `EIO`. The
+channel path now treats that as a per-chain failure rather than aborting all
+scanning: it switches both TX and RX to RF-A/1T1R, applies the single-chain
+CCA and TRSW settings, and checks RF-A again. This is a compatibility fallback,
+not a fix for RF-B itself. The RF-B SIPI / RF control snapshot is logged when
+the fallback is taken. The updated fallback has not yet been verified on the
+physical adapter, so successful scan results and packet reception remain
+unproven.
 
 ## Not yet implemented
 
