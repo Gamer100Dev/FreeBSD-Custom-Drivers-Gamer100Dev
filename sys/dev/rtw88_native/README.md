@@ -189,6 +189,10 @@ RX burst size is programmed after the PHY tables, and
 The RXDMA status, packet count, data pointer and offset-check registers are
 exposed in `rx_hw_status` to distinguish PHY detection from a packet that
 actually reaches USB DMA.
+The 3081/RTL8822B driver-info configuration also applies Linux's
+`REG_TRXFF_BNDY + 1` low-nibble fix (`0x0115[3:0] = 0xf`). Upstream
+documents this as a fix for RX descriptors reporting a zero packet length.
+The diagnostic output includes this register's readback.
 
 The receive bring-up also ports the RTL8822B EDCCA/adaptivity initialization
 from Linux RTW88: both EDCCA thresholds are initialized to 0x7f, MAC EDCCA
