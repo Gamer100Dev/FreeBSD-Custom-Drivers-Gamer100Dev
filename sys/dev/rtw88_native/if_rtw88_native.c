@@ -131,9 +131,9 @@ rtw88_native_vap_delete(struct ieee80211vap *vap)
 }
 
 /*
- * The software scanner calls this after it has populated ss_flags and before
- * visiting channels. TX is not implemented yet, so force a passive listen-only
- * scan rather than allowing net80211 to emit probe requests.
+ * The software scanner calls this after it has populated ss_flags. Keep the
+ * requested scan mode: the default net80211 scanner sends probe requests
+ * through ic_raw_xmit for active scans, and listens only for passive scans.
  */
 static void
 rtw88_native_scan_start(struct ieee80211com *ic)
@@ -320,17 +320,17 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.mac_id = 0;
 	params.queue_select = qsel;
 	/*
-	 * Use the 2.4-GHz B rate table for management frames at 1 Mbps. Data
-	 * frames start conservatively at 6 Mbps with the BG rate table; station
-	 * rate control and negotiated HT/VHT rates are not ported yet.
+	 * Use the 2.4-GHz B rate table for management frames at 1 Mbps. Until
+	 * association-specific rate control is ported, data uses the BG legacy
+	 * table at the universally supported 1-Mbps basic rate.
 	 */
 	if (type == IEEE80211_FC0_TYPE_MGT ||
 	    type == IEEE80211_FC0_TYPE_CTL) {
 		params.rate_id = 8;	/* RTW_RATEID_B_20M */
 		params.data_rate = 0;	/* DESC_RATE1M */
 	} else {
-		params.rate_id = 6;	/* RTW BG legacy rate table */
-		params.data_rate = 4;	/* DESC_RATE6M */
+		params.rate_id = 6;	/* RTW_RATEID_BG */
+		params.data_rate = 0;	/* DESC_RATE1M */
 	}
 	params.use_hardware_rate = true;
 	params.disable_rate_fallback = true;
