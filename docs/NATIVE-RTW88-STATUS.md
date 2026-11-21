@@ -14,8 +14,10 @@ USB ID `0bda:b812`.
   bulk-IN 0x84, bulk-OUT 0x05/0x06/0x08, and interrupt-IN 0x87.
 - USB RXDMA burst-mode setup selected from the negotiated USB speed, plus
   RTL8822B v1 RX aggregation threshold/timeout programming.
-- Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
-  be distinguished from a callback that repeatedly fails.
+- Four concurrent 32-KiB bulk-IN transfers (four independent DMA buffers),
+  matching Linux RTW88's `RTW_USB_RXCB_NUM=4` receive-URB queue. Each transfer
+  is resubmitted after completion; aggregate submit/completion/error counters
+  distinguish an idle endpoint from a callback that repeatedly fails.
 - RTL8822B firmware hardware-feature report request/decoder. It extracts
   board antenna count and NSS from the 13-byte C2H report before MAC/PHY
   initialisation, selecting RF-A/1T1R when firmware reports one antenna.
@@ -56,22 +58,23 @@ USB ID `0bda:b812`.
   and queues them to deferred net80211 input outside the USB transfer mutex.
 - Read-only counters for frames queued to net80211 and frames dropped before
   delivery.
-- Descriptor-indexed allocation of one bulk-IN, three bulk-OUT and one
+- Descriptor-indexed allocation of four bulk-IN, three bulk-OUT and one
   interrupt-IN transfer.
 - Completion-signalled synchronous bulk-OUT using FreeBSD USB callbacks,
   external transfer buffers, mutexes and condition variables.
 - Synchronous vendor-control requests with actual-length checking and
   I/O-user accounting for detach.
-- Continuous bulk-IN receive and interrupt-IN report capture. Both external
-  buffers are per-device state, and both transfers have explicit stop/drain
-  routines for safe teardown.
+- Continuous four-request bulk-IN receive and interrupt-IN report capture.
+  Each RX transfer has a separate per-device 32-KiB buffer. All four RX
+  transfers and the interrupt transfer have explicit stop/drain routines.
 - Bounds-checked walking of the RTL8822B 24-byte RX descriptors, driver-info
   and shift lengths, 8-byte aggregate alignment, and C2H record identification.
 - Read-only counters for aggregates, descriptors, data frames, C2H records
   and malformed/truncated RX records; last C2H ID/sequence/length are exposed
   through device sysctls.
 - A write-triggered `rx_diag` sysctl reads back live CR, TXDMA/RXDMA,
-  receive-filter, baseband/RF-control, RX-gain and both RF channel registers.
+  receive-filter, baseband/RF-control, WLRF1 BB/RF enable, RF-A/RF-B SIPI
+  command ports, RX path selection, RX gain and both RF channel registers.
   It serializes the register snapshot against the scanner's channel callback
   and logs both the receive-transfer counters and each register value.
 - Checked little-endian 8/16/32-bit register access.
@@ -111,9 +114,9 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 - Initialise the H2C ring pointers and check that the ring is empty.
 - Port the 8822B base EDCA, timing, beacon, RX-filter and WMAC register
   configuration.
-- Start the native bulk-IN and interrupt-IN transfers only after firmware
-  and base MAC initialisation. Completed data is retained as raw USB batches
-  for the future descriptor/C2H parsers.
+- Start all four native bulk-IN transfers and the interrupt-IN transfer only
+  after firmware and base MAC initialisation. Each completed 32-KiB USB batch
+  is parsed and any decoded frames are queued to the net80211 input task.
 - Add an explicit `rtw88_native_hw_start()` / `rtw88_native_hw_stop()`
   sequence, exposed by a serialized `dev.rtw88_native.N.hw_start` sysctl.
 - Start the native interrupt-IN transfer after firmware/base MAC setup,
@@ -154,8 +157,8 @@ confirmed on the physical adapter.
   integration and power-management operations. The current station path uses
   net80211 software WEP/TKIP/CCMP crypto and is not yet security-validated.
 - Verified RX packet delivery and verified scan results on the physical
-  adapter; the current RX DMA request had not yet completed during the user's
-  latest test.
+  adapter. The latest physical test predates the four-request bulk-IN queue
+  and the WLRF1/RXPSEL masked-write correction.
 - Suspend/resume, watchdog, recovery and full load/unload/device-unplug tests.
 
 ## Validation
@@ -171,8 +174,9 @@ User-reported local FreeBSD testing on the RTL8822BU adapter confirms:
 - On the RXDMA revision, the user reported `rx_started=1`,
   `rx_submit_count=1`, `rx_count=0`, `rx_error_count=0` and
   `rx_error_code=0`, with 46 interrupt-IN reports at the time of sampling.
-  This means one bulk-IN request was submitted and remained outstanding
-  without a reported USB error; it did not complete with a payload.
+  At that historical test point, one bulk-IN request was submitted and
+  remained outstanding without a reported USB error; it did not complete with
+  a payload. The current branch now posts four concurrent requests.
 - The same run logged a firmware module lookup warning (`error 8`) followed
   by successful validation of the 161240-byte binary image (DMEM 11216,
   IMEM 149960, EMEM 0). FreeBSD's firmware loader tries the binary-file
@@ -182,8 +186,8 @@ User-reported local FreeBSD testing on the RTL8822BU adapter confirms:
 
 The endpoint descriptor dump showed a USB 2.0 High-Speed device with bulk-IN
 0x84, bulk-OUT 0x05/0x06/0x08 and interrupt-IN 0x87. The reported RXDMA mode
-was `0x1e` and aggregation register value `0x2005`; the user has not yet
-reported a bulk-IN completion after this configuration.
+was `0x1e` and aggregation register value `0x2005`; the user had not reported a
+bulk-IN completion at that historical test point.
 
 The current branch registers a net80211 radio after successful hardware
 startup. Create a station VAP, bring it up, scan, and inspect results with:
@@ -223,9 +227,9 @@ TX-status C2H reports are not implemented.
 The RX callback copies valid non-C2H frames to mbufs, removes the configured
 appended FCS, adds basic channel/RSSI/TSF metadata and defers
 `ieee80211_input_mimo_all()` to a taskqueue thread outside the USB transfer
-mutex. The user's latest runtime test still showed no completed bulk-IN
-transfer, so an active scan may send probes and channel-hop but will not
-populate results until RX aggregates are actually delivered.
+mutex. The user's last runtime test predates the four-transfer RX queue and
+WLRF1/RXPSEL corrections; active scanning still requires physical confirmation
+that RX aggregates are delivered and parsed.
 
 The user's most recent local test built and loaded the preceding source
 revision successfully. Hardware startup completed and the net80211 scanner
@@ -237,8 +241,9 @@ rejected before queueing; the current source adds support for those defaults
 and exposes raw-callback attempt/reject counters. The corrected revision still
 needs a fresh local compile and a repeat hardware test. The current branch also
 adds `sysctl dev.rtw88_native.0.rx_diag=1` to read back the live RX/MAC/RF
-register state; this is the next diagnostic step because the RX bulk-IN request
-remains outstanding without a completion.
+register state, including WLRF1 and both RF SIPI command ports. Re-run this
+after rebuilding to verify that the BB/RF enable field and both RX path-select
+reset bits now latch, and that one of the four bulk-IN requests completes.
 
 Active probe TX and the net80211 authentication/association management-frame
 submission path are implemented in source, but neither over-the-air probe
