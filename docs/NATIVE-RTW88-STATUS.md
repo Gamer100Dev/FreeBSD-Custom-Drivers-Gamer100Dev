@@ -44,8 +44,10 @@ USB ID `0bda:b812`.
   management rate, retry count, power and group-frame NOACK). Unsupported
   radiotap/BPF features and hardware-crypto requests remain rejected.
 - Management/control frames use QSEL 18 on the high-priority OUT endpoint
-  (0x05), with a conservative 1-Mbps rate. Data frames currently use TID0/BE
-  on the low-priority OUT endpoint (0x08), also at a conservative 1-Mbps rate.
+  (0x05), with a conservative 1-Mbps rate. Group-addressed data uses QSEL_HIGH
+  (17) on the high-priority endpoint; unicast data maps FreeBSD's WME AC to
+  the corresponding 802.11 TID (BE 0, BK 1, VI 5, VO 6) and then to the
+  configured bulk-OUT endpoint. Data remains at a conservative 1-Mbps rate.
 - USB transmit completion is returned to net80211 through
   `ieee80211_tx_complete()`; separate queue, completion and error counters
   are exposed. Completion currently means USB bulk-OUT completion, not a
@@ -164,8 +166,9 @@ adapter.
   startup hardware-feature report is decoded.
 - Full RX PHY-status/rate/chain interpretation, C2H command-specific event
   decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
-- Negotiated rate control, QoS/TID-specific queue mapping, TX aggregation,
-  firmware TX-ACK report dispatch and verified over-the-air TX status.
+- Negotiated rate control, TX aggregation, firmware TX-ACK report dispatch
+  and verified over-the-air TX status. The current queue mapping selects the
+  basic AC/TID and group queue, but does not implement aggregation.
 - Hardware key-cache programming/offload, WPA3/GCMP, regulatory-domain
   integration and power-management operations. The current station path uses
   net80211 software WEP/TKIP/CCMP crypto and is not yet security-validated.
@@ -249,12 +252,14 @@ other unsupported overrides. The driver registers software WEP/TKIP/CCMP
 crypto, but key handling and WPA exchange have not been validated on hardware.
 
 TX counters distinguish raw net80211 callback entries/rejections, queued
-frames, successful USB bulk-OUT completions and errors. The new
-`tx_raw_count` and `tx_raw_reject_count` counters make it possible to tell
-whether a scan probe reached the driver and whether its parameters were
-accepted. A successful USB completion is not a radio ACK. The initial rate
-is fixed at 1 Mbps; negotiated rate control, QoS queue selection and
-TX-status C2H reports are not implemented.
+frames, successful USB bulk-OUT completions and errors. The `tx_raw_count` and
+`tx_raw_reject_count` counters show whether a management frame reached the
+callback and was accepted. The `tx_mgmt_count`, `tx_data_count`,
+`tx_group_count` and `tx_eapol_count` counters classify frames entering the
+worker; `tx_last_qsel`, `tx_last_endpoint`, `tx_last_frame_control` and
+`tx_last_frame_len` record the most recent descriptor decision. A successful
+USB completion is not a radio ACK. The initial rate is fixed at 1 Mbps;
+negotiated rate control and TX-status C2H reports are not implemented.
 
 The RX callback copies valid non-C2H frames to mbufs, removes the configured
 appended FCS, adds basic channel/RSSI/TSF metadata and defers
@@ -277,9 +282,26 @@ register state, including WLRF1 and both RF SIPI command ports. Re-run this
 after rebuilding to verify that the BB/RF enable field and both RX path-select
 reset bits now latch, and that one of the four bulk-IN requests completes.
 
-Active probe TX and the net80211 authentication/association management-frame
-submission path are implemented in source, but neither over-the-air probe
-delivery nor a successful AP connection/WPA exchange has been demonstrated.
+Latest physical RX test: the user reported four active bulk-IN transfers,
+171 submissions, 167 completions and zero USB errors. The scan cache contained
+three 2.4-GHz networks, including `DIGI-G5HP_RPT` (channel 8, about -81 dBm)
+on an earlier scan. Both RF-A and RF-B channel registers read back `0x00000c0a`
+while tuned to channel 10. A subsequent wpa_supplicant run stayed in
+`ASSOCIATING`, returned to `SCANNING`, and its later scan-results snapshot no
+longer contained `DIGI-G5HP_RPT`; no authentication/association rejection or
+EAPOL failure was captured because the supplicant was started in syslog mode
+without debug output. DHCP therefore correctly failed with no carrier. This
+proves USB RX and earlier scan reception, but not successful probe delivery,
+association, or WPA handshake.
+
+The TX queue-selection audit found that the FreeBSD implementation sent every
+data frame as TID0/BE. Linux RTW88 selects QSEL_HIGH for group-addressed data
+and uses the packet priority/TID for unicast data. The native path now mirrors
+that classification using FreeBSD `M_WME_GETAC()` and `WME_AC_TO_TID()`, and
+exposes frame-classification/QSEL diagnostics. Active probe TX and the
+net80211 authentication/association management-frame submission path remain
+unverified over the air; successful AP connection/WPA exchange has not been
+demonstrated.
 The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
 matching `releng/15.1` source. Do not consider the driver functional until
 the corrected revision builds and both TX and RX are verified on the adapter.
