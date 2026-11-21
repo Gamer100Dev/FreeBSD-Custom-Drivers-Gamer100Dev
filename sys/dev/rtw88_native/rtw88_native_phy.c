@@ -432,6 +432,220 @@ rtw88_native_phy_load_table(struct rtw88_native_softc *sc,
 	return (0);
 }
 
+
+/*
+ * Limited, passive 2.4-GHz/20-MHz channel setup for the RTL8822BU board
+ * identified by eFuse RFE option 3. This is a diagnostic tuning path: it
+ * does not start a scan, transmit frames, or replace net80211 channel state.
+ * The register sequence follows the corresponding 8822B RTW88 operations.
+ */
+#define REG_CH_DATA_SC			0x0483
+#define REG_CH_WMAC_TRXPTCL_CTL		0x0668
+#define REG_CH_CCK_CHECK		0x0454
+#define REG_CH_RXCCAMSK			0x0814
+#define REG_CH_ACGG2TBL			0x0958
+#define REG_CH_CLKTRK			0x0860
+#define REG_CH_TXSF2			0x0a24
+#define REG_CH_TXSF6			0x0a28
+#define REG_CH_ENTXCCK			0x0a80
+#define REG_CH_ADCCLK			0x08ac
+#define REG_CH_ADC160			0x08c4
+#define REG_CH_ACBB0			0x0948
+#define REG_CH_ACBBRXFIR		0x094c
+#define REG_CH_TXDFIR			0x0c20
+#define REG_CH_RFESEL0			0x0cb0
+#define REG_CH_RFESEL8			0x0cb4
+#define REG_CH_RFEINV			0x0cbc
+#define REG_CH_CCASEL			0x082c
+#define REG_CH_PDMFTH			0x0830
+#define REG_CH_CCA2ND			0x0838
+#define REG_CH_RXIGI_A			0x0c50
+#define REG_CH_AFE_CTRL1		0x0024
+#define REG_CH_USTIME_TSF		0x055c
+#define REG_CH_USTIME_EDCA		0x0638
+#define REG_CH_TRSW			0x0ca0
+
+#define CH_RF18_BAND_MASK		((1U << 16) | (1U << 9) | (1U << 8))
+#define CH_RF18_CHANNEL_MASK		0x000000ffU
+#define CH_RF18_RFSI_MASK		((1U << 18) | (1U << 17))
+#define CH_RF18_BW_MASK		((1U << 11) | (1U << 10))
+#define CH_RF18_BW_20M			CH_RF18_BW_MASK
+#define CH_RF_MALSEL_MASK		((1U << 17) | (1U << 16) | (1U << 15))
+#define CH_MAC_RFMOD_MASK		((1U << 8) | (1U << 7))
+#define CH_BIT_CHECK_CCK_EN		(1U << 7)
+#define CH_BIT_MAC_CLK_SEL		((1U << 21) | (1U << 20))
+#define CH_BIT_MAC_RXIGI		0x7f
+
+static int
+rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
+    uint8_t channel)
+{
+	uint32_t rf18, igi, value32;
+	uint8_t value8;
+	int error, path;
+
+	if (sc->efuse.rfe_option != 3 || sc->rf_path_num != 2 ||
+	    sc->antenna_rx != BB_PATH_AB || sc->antenna_tx != BB_PATH_AB)
+		return (ENOTSUP);
+
+	/* Baseband 2.4-GHz channel profile. */
+	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+	    1U << 28, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_CCK_CHECK,
+		    CH_BIT_CHECK_CCK_EN, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ENTXCCK,
+		    1U << 18, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXCCAMSK,
+		    0x0000fc00U, 15);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACGG2TBL,
+		    0x1f, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_CLKTRK,
+		    0x1ffe0000U, 0x96a);
+	if (error == 0)
+		error = rtw88_native_reg_write32(sc, REG_CH_TXSF2,
+		    0x384f6577U) == USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TXSF6,
+		    0x0000ffffU, 0x1525);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV,
+		    0x00000300U, 0x2);
+	if (error != 0)
+		return (error);
+
+	/* 20-MHz ADC and receive DFIR path. */
+	if (rtw88_native_reg_read32(sc, REG_CH_ADCCLK, &value32) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	value32 &= 0xffcffc00U;
+	if (rtw88_native_reg_write32(sc, REG_CH_ADCCLK, value32) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_ADC160,
+	    1U << 30, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBB0,
+		    (3U << 28), 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBBRXFIR,
+		    (3U << 28), 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TXDFIR,
+		    1U << 31, 1);
+	if (error != 0)
+		return (error);
+
+	/* MAC channel width and timing. Channel index zero means 20 MHz. */
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_WMAC_TRXPTCL_CTL,
+	    CH_MAC_RFMOD_MASK, 0);
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_CH_DATA_SC, 0) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_AFE_CTRL1,
+		    CH_BIT_MAC_CLK_SEL, 2);
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_CH_USTIME_TSF, 80) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_CH_USTIME_EDCA, 80) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error != 0)
+		return (error);
+
+	/* Select the 2.4-GHz RF synthesizer channel and 20-MHz bandwidth. */
+	if (rtw88_native_phy_rf_read(sc, 0, 0x18, &rf18) != 0)
+		return (EIO);
+	rf18 &= ~(CH_RF18_BAND_MASK | CH_RF18_CHANNEL_MASK |
+	    CH_RF18_RFSI_MASK | CH_RF18_BW_MASK);
+	rf18 |= channel | CH_RF18_BW_20M;
+	if (rtw88_native_phy_rf_write(sc, 0, 0xbe, 0) != 0 ||
+	    rtw88_native_phy_rf_write(sc, 0, 0x18, rf18) != 0)
+		return (EIO);
+	for (path = 1; path < sc->rf_path_num; path++) {
+		if (rtw88_native_phy_rf_write(sc, path, 0x18, rf18) != 0)
+			return (EIO);
+	}
+	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, 0) != 0 ||
+	    rtw88_native_phy_rf_write(sc, 0, 0xb8, 1U << 19) != 0)
+		return (EIO);
+
+	/* IFEM-extended RFE option 3: route both RF paths to the antennas. */
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0,
+	    0x00ffffffU, 0x00745774U);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0 + 0x200,
+		    0x00ffffffU, 0x00745774U);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL8,
+		    0x0000ff00U, 0x57);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL8 + 0x200,
+		    0x0000ff00U, 0x57);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV,
+		    (1U << 11) | (1U << 10) | 0x3fU, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW,
+		    0x0000ffffU, 0xa501);
+	if (error != 0)
+		return (error);
+
+	/* RFE-option-3 / IFEM-ext CCA thresholds, two receive paths. */
+	if (rtw88_native_reg_write32(sc, REG_CH_CCASEL, 0x75da8010U) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_CH_PDMFTH, 0x97a0eaacU) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_CH_CCA2ND, 0x86666341U) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/* The upstream 8822B channel transition toggles IGI to refresh gain. */
+	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	igi &= CH_BIT_MAC_RXIGI;
+	if (igi < 2)
+		return (EIO);
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+	    CH_BIT_MAC_RXIGI, igi - 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+		    CH_BIT_MAC_RXIGI, igi);
+	if (error != 0)
+		return (error);
+
+	if (rtw88_native_reg_read8(sc, REG_CH_CCK_CHECK, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write8(sc, REG_CH_CCK_CHECK,
+	    value8 & ~CH_BIT_CHECK_CCK_EN) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	device_printf(sc->dev,
+	    "RTL8822B tuned to 2.4-GHz channel %u at 20 MHz (RFE option 3)\n",
+	    channel);
+	return (0);
+}
+
+int
+rtw88_native_phy_set_channel(struct rtw88_native_softc *sc, uint8_t channel)
+{
+	if (sc == NULL || !sc->powered || !sc->firmware_running ||
+	    !sc->mac_initialized || !sc->phy_initialized || sc->dying)
+		return (EINVAL);
+	/* Keep the first hardware receive test inside 2.4-GHz channels 1-13. */
+	if (channel < 1 || channel > 13)
+		return (EINVAL);
+	if (sc->efuse.rfe_option != 3)
+		return (ENOTSUP);
+	return (rtw88_native_phy_set_channel_2g20(sc, channel));
+}
+
 /*
  * USB-specific RTL8822B PHY bring-up in the same order as upstream
  * rtw8822b_phy_set_param(): enable BB/RF domains, release RX path selection,
