@@ -237,11 +237,16 @@ rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 	struct rtw88_native_softc *sc;
 	int error;
 
-	(void)params;
 	if (ni == NULL || m == NULL) {
 		if (m != NULL)
 			m_freem(m);
 		return (EINVAL);
+	}
+	if (params != NULL) {
+		if (m->m_flags & M_TXCB)
+			ieee80211_process_callback(ni, m, 1);
+		m_freem(m);
+		return (EOPNOTSUPP);
 	}
 	sc = ni->ni_ic->ic_softc;
 	error = rtw88_native_tx_enqueue(sc, m);
@@ -271,10 +276,9 @@ rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
 static int
 rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 {
-	struct ieee80211_frame_min *wh;
-	struct rtw88_native_txdesc_params params;
 	struct ieee80211_frame_min whbuf;
 	struct ieee80211_frame_min *wh;
+	struct rtw88_native_txdesc_params params;
 	uint8_t *buffer;
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
@@ -339,7 +343,13 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 		params.enable_hardware_sequence = true;
 	} else if (type == IEEE80211_FC0_TYPE_DATA) {
 		/* Preserve the sequence number already assigned by net80211. */
-		memcpy(&seqctl, wh->i_seq, sizeof(seqctl));
+		if (frame_len < offsetof(struct ieee80211_frame, i_seq) +
+		    sizeof(seqctl)) {
+			error = EINVAL;
+			goto out;
+		}
+		m_copydata(m, offsetof(struct ieee80211_frame, i_seq),
+		    sizeof(seqctl), (caddr_t)&seqctl);
 		params.software_sequence =
 		    (le16toh(seqctl) >> IEEE80211_SEQ_SEQ_SHIFT) & 0x0fff;
 	}
@@ -355,6 +365,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 		if (uerr != USB_ERR_NORMAL_COMPLETION)
 			error = EIO;
 	}
+out:
 	free(buffer, M_DEVBUF);
 	return (error);
 }
