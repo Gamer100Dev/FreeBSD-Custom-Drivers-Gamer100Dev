@@ -244,10 +244,17 @@ rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 	}
 	/*
 	 * net80211 passes a zeroed params structure for ordinary auth/assoc
-	 * management frames. Only reject explicit hardware-crypto requests:
-	 * this initial path uses software ciphers, not descriptor key offload.
+	 * management frames. Reject non-default BPF/radiotap overrides until the
+	 * driver can honour rate, retry, crypto, RTS/CTS and padding controls.
 	 */
-	if (params != NULL && (params->ibp_flags & IEEE80211_BPF_CRYPTO) != 0) {
+	if (params != NULL &&
+	    (params->ibp_vers != 0 || params->ibp_len != 0 ||
+	    params->ibp_flags != 0 || params->ibp_pri != 0 ||
+	    params->ibp_try0 != 0 || params->ibp_rate0 != 0 ||
+	    params->ibp_power != 0 || params->ibp_ctsrate != 0 ||
+	    params->ibp_try1 != 0 || params->ibp_rate1 != 0 ||
+	    params->ibp_try2 != 0 || params->ibp_rate2 != 0 ||
+	    params->ibp_try3 != 0 || params->ibp_rate3 != 0)) {
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
