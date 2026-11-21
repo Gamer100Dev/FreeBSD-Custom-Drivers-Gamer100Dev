@@ -127,3 +127,22 @@ separate loadable module and does not modify `sys/conf/files`.
 compiled against the user's FreeBSD 15.1 tree and has not been run on the
 physical RTL8822BU device. Do not treat it as a working Wi-Fi driver until
 build, firmware, RX/TX and `net80211` validation passes.
+
+
+## RX hardware register snapshot
+
+The diagnostic branch adds a read-only sysctl that samples the MAC/RXDMA
+configuration and RTL8822B receive statistics through vendor-control reads.
+Run it after a scan has completed, because the register snapshot temporarily
+serializes against channel changes:
+
+```sh
+sysctl dev.rtw88_native.0.rx_hw_status
+```
+
+The output includes the MAC TRX enable register, TXDMA queue/arbiter map,
+RXDMA mode and aggregation threshold, receive filter configuration, CCK/OFDM
+false-alarm counters, per-modulation CRC counters and CCA count. This is
+intended to distinguish a PHY that is detecting traffic from a MAC/RXDMA path
+that is failing to emit USB bulk-IN aggregates. It does not change hardware
+configuration and does not itself prove packet reception.
