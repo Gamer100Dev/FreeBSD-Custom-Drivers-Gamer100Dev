@@ -13,6 +13,7 @@
 #include <sys/errno.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
+#include <sys/taskqueue.h>
 
 #include "if_rtw88_native.h"
 
@@ -879,9 +880,8 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 
 /*
  * Configure DMA routing, the 3-endpoint FIFO page table, USB RXDMA burst/
- * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. The USB
- * receive engine can collect aggregates after hardware start, but a wlan
- * interface, channel/scan control and packet path still require net80211.
+ * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. net80211
+ * attaches only after this hardware-start sequence has fully succeeded.
  */
 int
 rtw88_native_mac_init(struct rtw88_native_softc *sc)
@@ -955,14 +955,24 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
+	error = rtw88_native_net80211_attach(sc);
+	if (error != 0)
+		goto fail;
+	mtx_lock(&sc->mtx);
+	sc->tx_enabled = 1;
+	mtx_unlock(&sc->mtx);
 
 	device_printf(sc->dev,
-	    "RTL8822B power, firmware, eFuse, FIFO and base MAC setup completed; bulk RX and raw interrupt capture enabled, RX parsing/net80211 pending\n");
+	    "RTL8822B startup complete; net80211 station/monitor VAPs, probe TX and authentication/association management TX enabled\n");
 	return (0);
 
 fail:
+	mtx_lock(&sc->mtx);
+	sc->tx_enabled = 0;
+	mtx_unlock(&sc->mtx);
 	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
+	rtw88_native_net80211_detach(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	rtw88_native_firmware_put(sc);
@@ -972,10 +982,47 @@ fail:
 void
 rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 {
+	struct ieee80211vap *vap;
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+	struct mbufq pending;
+
 	if (sc == NULL)
 		return;
+	mtx_lock(&sc->mtx);
+	sc->tx_enabled = 0;
+	mtx_unlock(&sc->mtx);
+	/* Stop new USB completions before draining deferred packet work. */
 	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
+	if (sc->net80211_attached) {
+		TAILQ_FOREACH(vap, &sc->ic.ic_vaps, iv_next)
+			ieee80211_stop(vap);
+		ieee80211_drain(&sc->ic);
+	}
+	taskqueue_drain(taskqueue_thread, &sc->tx_task);
+	taskqueue_drain(taskqueue_thread, &sc->rx_task);
+	mbufq_init(&pending, 64);
+	mtx_lock(&sc->mtx);
+	while ((m = mbufq_dequeue(&sc->tx_queue)) != NULL) {
+		if (sc->tx_queue_depth > 0)
+			sc->tx_queue_depth--;
+		(void)mbufq_enqueue(&pending, m);
+	}
+	while ((m = mbufq_dequeue(&sc->rx_queue)) != NULL) {
+		sc->rx_input_drop_count++;
+		m_freem(m);
+	}
+	mtx_unlock(&sc->mtx);
+	while ((m = mbufq_dequeue(&pending)) != NULL) {
+		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
+		m->m_pkthdr.rcvif = NULL;
+		mtx_lock(&sc->mtx);
+		sc->tx_error_count++;
+		sc->tx_last_error = ENETDOWN;
+		mtx_unlock(&sc->mtx);
+		ieee80211_tx_complete(ni, m, 1);
+	}
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;

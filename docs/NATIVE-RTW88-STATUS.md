@@ -1,6 +1,6 @@
 # Native RTW88 implementation status
 
-Development branch: `work/native-rtw88-rxdma`
+Development branch: `work/native-rtw88-net80211`
 
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
@@ -17,8 +17,29 @@ USB ID `0bda:b812`.
 - Read-only RX transfer submit/error counters so an idle bulk-IN endpoint can
   be distinguished from a callback that repeatedly fails.
 - Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
-  exposed as `dev.rtw88_native.N.channel` for channels 1-13. This is a
-  passive receive diagnostic control, not a scan or association operation.
+  exposed as `dev.rtw88_native.N.channel` for channels 1-13.
+- Native net80211 radio registration after successful hardware start, with
+  station/monitor VAP creation and 2.4-GHz channel advertisement.
+- Active and passive software scan callbacks: active-scan probe requests are
+  routed through the driver's management-frame transmit callback.
+- Native `ic_raw_xmit` and `ic_transmit` hooks for net80211 management and
+  data frames. Frames are queued to a sleepable task and sent using the
+  RTL8822B 48-byte TX descriptor and the USB queue-to-endpoint map.
+- Management/control frames use QSEL 18 on the high-priority OUT endpoint
+  (0x05), with a conservative 1-Mbps rate. Data frames currently use TID0/BE
+  on the low-priority OUT endpoint (0x08), also at a conservative 1-Mbps rate.
+- USB transmit completion is returned to net80211 through
+  `ieee80211_tx_complete()`; separate queue, completion and error counters
+  are exposed. Completion currently means USB bulk-OUT completion, not a
+  confirmed over-the-air MAC acknowledgement.
+- WEP/TKIP/CCMP software crypto is registered with net80211. RX descriptors
+  that report hardware decryption are marked for net80211's hardware-decrypted
+  receive path; SWDEC frames are left for software decryption.
+- Bounds-checked RX descriptor handling now copies normal 802.11 MPDUs into
+  mbufs, removes the configured appended FCS, adds channel/RSSI/TSF metadata
+  and queues them to deferred net80211 input outside the USB transfer mutex.
+- Read-only counters for frames queued to net80211 and frames dropped before
+  delivery.
 - Descriptor-indexed allocation of one bulk-IN, three bulk-OUT and one
   interrupt-IN transfer.
 - Completion-signalled synchronous bulk-OUT using FreeBSD USB callbacks,
@@ -84,12 +105,16 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 - Full RFE board selection, HW-feature C2H report, IQK/DPK, thermal tracking,
   antenna diversity and TX-power calibration; 5-GHz and non-20-MHz channel
   programming are not implemented.
-- RX PHY-status interpretation, C2H command-specific event decoding/
-  dispatch and delivery of normal 802.11 frames to net80211.
-- Normal TX data path, aggregation, per-frame queue mapping, completion and
-  status reporting.
-- Native `net80211` interface and lifecycle integration.
-- Regulatory, scan/auth/association, key and power-management operations.
+- Full RX PHY-status/rate/chain interpretation, C2H command-specific event
+  decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
+- Negotiated rate control, QoS/TID-specific queue mapping, TX aggregation,
+  firmware TX-ACK report dispatch and verified over-the-air TX status.
+- Hardware key-cache programming/offload, WPA3/GCMP, regulatory-domain
+  integration and power-management operations. The current station path uses
+  net80211 software WEP/TKIP/CCMP crypto and is not yet security-validated.
+- Verified RX packet delivery and verified scan results on the physical
+  adapter; the current RX DMA request had not yet completed during the user's
+  latest test.
 - Suspend/resume, watchdog, recovery and full load/unload/device-unplug tests.
 
 ## Validation
@@ -119,15 +144,48 @@ The endpoint descriptor dump showed a USB 2.0 High-Speed device with bulk-IN
 was `0x1e` and aggregation register value `0x2005`; the user has not yet
 reported a bulk-IN completion after this configuration.
 
-The branch now adds a manual passive channel-tune control for the observed
-RFE option 3 (2.4 GHz, 20 MHz, channels 1-13). It must be rebuilt and tested
-against an access point whose actual 2.4-GHz channel is known.
+The current branch registers a net80211 radio after successful hardware
+startup. Create a station VAP, bring it up, scan, and inspect results with:
 
-**Wi-Fi operation is not yet verified.** The module still lacks a registered
-net80211 wlan interface, active scanning/association, command-specific C2H
-dispatch, RX delivery to net80211, and a normal TX data path. This branch
-therefore contains a controlled channel/RX diagnostic step, not a claim of
-working Wi-Fi.
+```sh
+ifconfig wlan create wlandev rtw88_native0 wlanmode sta
+ifconfig wlan0 up
+ifconfig wlan0 scan
+sleep 15
+ifconfig wlan0 list scan
+```
+
+The net80211 software scanner now retains the requested active/passive flag.
+Active scans generate probe requests via `ic_raw_xmit`; passive scans only
+listen. The channel callback programs channels 1-13 as the scanner visits them.
+
+The default net80211 station state machine also sends authentication and
+association management frames through `ic_raw_xmit`. Ordinary 802.11 data
+frames use `ic_transmit`. Both callbacks enqueue mbufs with their node
+references to a sleepable TX task; the task builds an RTL8822B descriptor and
+uses the correct management or data USB endpoint. The driver registers
+software WEP/TKIP/CCMP crypto, but key handling and WPA exchange have not been
+validated on hardware. Explicit BPF transmit overrides (including hardware
+crypto requests used by shared-key WEP authentication) are rejected; normal
+open-system authentication used by WPA/WPA2 passes zeroed default parameters.
+
+TX counters distinguish queued frames, successful USB bulk-OUT completions and
+errors. A successful USB completion is not a radio ACK. The initial rate is
+fixed at 1 Mbps; negotiated rate control, QoS queue selection and TX-status
+C2H reports are not implemented.
+
+The RX callback copies valid non-C2H frames to mbufs, removes the configured
+appended FCS, adds basic channel/RSSI/TSF metadata and defers
+`ieee80211_input_mimo_all()` to a taskqueue thread outside the USB transfer
+mutex. The user's latest runtime test still showed no completed bulk-IN
+transfer, so an active scan may send probes and channel-hop but will not
+populate results until RX aggregates are actually delivered.
+
+**This revision has not yet been compiled or tested on the adapter.** Active
+probe transmission and management-frame authentication/association handling
+are now implemented in source, but end-to-end connection and WPA security
+remain unverified. Monitor-mode raw injection with BPF transmit overrides is
+intentionally rejected until those parameters are supported.
 
 The GitHub Actions workflow builds inside a FreeBSD 15.1 amd64 VM against the
 matching `releng/15.1` source. Build and hardware validation must be reviewed

@@ -13,6 +13,10 @@
 #include <sys/condvar.h>
 #include <sys/firmware.h>
 #include <sys/mutex.h>
+#include <sys/mbuf.h>
+#include <sys/taskqueue.h>
+
+#include <net80211/ieee80211_var.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -54,7 +58,14 @@
 #define RTW88_NATIVE_RX_DESC_W0_PKT_LEN	0x00003fffU
 #define RTW88_NATIVE_RX_DESC_W0_DRVINFO	0x000f0000U
 #define RTW88_NATIVE_RX_DESC_W0_SHIFT	0x03000000U
+#define RTW88_NATIVE_RX_DESC_W0_CRCERR	(1U << 14)
+#define RTW88_NATIVE_RX_DESC_W0_ICVERR	(1U << 15)
+#define RTW88_NATIVE_RX_DESC_W0_ENC_TYPE	0x00700000U
+#define RTW88_NATIVE_RX_DESC_W0_PHYST	(1U << 26)
+#define RTW88_NATIVE_RX_DESC_W0_SWDEC	(1U << 27)
 #define RTW88_NATIVE_RX_DESC_W2_C2H		(1U << 28)
+#define RTW88_NATIVE_RX_FCS_LEN		4U
+#define RTW88_NATIVE_RX_MAX_FRAME		11454U
 
 
 #define RTW88_NATIVE_REG_CR			0x0100
@@ -189,6 +200,20 @@ struct rtw88_native_efuse {
 
 struct rtw88_native_softc {
 	device_t		dev;
+	struct ieee80211com	ic;
+	struct mbufq		rx_queue;
+	struct task		rx_task;
+	struct mbufq		tx_queue;
+	struct task		tx_task;
+	int			net80211_attached;
+	int			tx_enabled;
+	int			tx_queue_depth;
+	uint64_t		tx_queued_count;
+	uint64_t		tx_complete_count;
+	uint64_t		tx_error_count;
+	int			tx_last_error;
+	uint64_t		rx_input_count;
+	uint64_t		rx_input_drop_count;
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
@@ -302,5 +327,9 @@ int		rtw88_native_phy_set_channel(struct rtw88_native_softc *,
 void		rtw88_native_mac_stop(struct rtw88_native_softc *);
 int		rtw88_native_hw_start(struct rtw88_native_softc *);
 void		rtw88_native_hw_stop(struct rtw88_native_softc *);
+int		rtw88_native_net80211_attach(struct rtw88_native_softc *);
+void		rtw88_native_net80211_detach(struct rtw88_native_softc *);
+void		rtw88_native_rx_task(void *, int);
+void		rtw88_native_tx_task(void *, int);
 
 #endif /* _IF_RTW88_NATIVE_H_ */
