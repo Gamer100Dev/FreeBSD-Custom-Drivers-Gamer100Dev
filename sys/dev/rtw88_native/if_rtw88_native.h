@@ -14,7 +14,28 @@
 #include <sys/firmware.h>
 #include <sys/mutex.h>
 #include <sys/mbuf.h>
+#include <sys/socket.h>
 #include <sys/taskqueue.h>
+
+/*
+ * ieee80211_var.h expects the base interface, ifmedia, routing and Ethernet
+ * declarations to have been included by its consumer. Keep these prerequisites
+ * here because the driver softc embeds struct ieee80211com and this header is
+ * shared by all of the driver translation units.
+ */
+#include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_arp.h>
+#include <net/ethernet.h>
+#include <net/if_dl.h>
+#include <net/if_media.h>
+#include <net/if_types.h>
+
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/in_var.h>
+#include <netinet/if_ether.h>
+#include <netinet/ip.h>
 
 #include <net80211/ieee80211_var.h>
 
