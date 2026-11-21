@@ -13,6 +13,7 @@
 #include <sys/errno.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
+#include <sys/taskqueue.h>
 
 #include "if_rtw88_native.h"
 
@@ -879,9 +880,8 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 
 /*
  * Configure DMA routing, the 3-endpoint FIFO page table, USB RXDMA burst/
- * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. The USB
- * receive engine can collect aggregates after hardware start, but a wlan
- * interface, channel/scan control and packet path still require net80211.
+ * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. net80211
+ * attaches only after this hardware-start sequence has fully succeeded.
  */
 int
 rtw88_native_mac_init(struct rtw88_native_softc *sc)
@@ -955,9 +955,12 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
+	error = rtw88_native_net80211_attach(sc);
+	if (error != 0)
+		goto fail;
 
 	device_printf(sc->dev,
-	    "RTL8822B power, firmware, eFuse, FIFO and base MAC setup completed; bulk RX and raw interrupt capture enabled, RX parsing/net80211 pending\n");
+	    "RTL8822B startup complete; net80211 station/monitor VAP creation and passive 2.4-GHz scanning enabled (TX/association not implemented)\n");
 	return (0);
 
 fail:
@@ -972,10 +975,25 @@ fail:
 void
 rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 {
+	struct ieee80211vap *vap;
+	struct mbuf *m;
+
 	if (sc == NULL)
 		return;
+	if (sc->net80211_attached) {
+		TAILQ_FOREACH(vap, &sc->ic.ic_vaps, iv_next)
+			ieee80211_stop(vap);
+		ieee80211_drain(&sc->ic);
+	}
 	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
+	taskqueue_drain(taskqueue_thread, &sc->rx_task);
+	mtx_lock(&sc->mtx);
+	while ((m = mbufq_dequeue(&sc->rx_queue)) != NULL) {
+		sc->rx_input_drop_count++;
+		m_freem(m);
+	}
+	mtx_unlock(&sc->mtx);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
