@@ -380,7 +380,9 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 			ac = M_WME_GETAC(m);
 			if (ac < WME_AC_BE || ac > WME_AC_VO)
 				return (EINVAL);
-			qsel = WME_AC_TO_TID(ac);
+			/* Linux maps BE/BK to their TIDs and VI/VO to BEACON. */
+			qsel = ac <= WME_AC_BK ? WME_AC_TO_TID(ac) :
+			    RTW88_NATIVE_TXQSEL_BEACON;
 		}
 	} else {
 		return (EOPNOTSUPP);
@@ -400,9 +402,28 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	    ((int)wh->i_fc[1] << 8);
 	sc->tx_last_frame_len = frame_len;
 	if (type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_CTL)
+	    type == IEEE80211_FC0_TYPE_CTL) {
 		sc->tx_mgmt_count++;
-	else {
+		if (type == IEEE80211_FC0_TYPE_MGT) {
+			switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
+			case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
+				sc->tx_probe_req_count++;
+				break;
+			case IEEE80211_FC0_SUBTYPE_AUTH:
+				sc->tx_auth_req_count++;
+				break;
+			case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
+			case IEEE80211_FC0_SUBTYPE_REASSOC_REQ:
+				sc->tx_assoc_req_count++;
+				break;
+			case IEEE80211_FC0_SUBTYPE_DEAUTH:
+				sc->tx_deauth_req_count++;
+				break;
+			default:
+				break;
+			}
+		}
+	} else {
 		sc->tx_data_count++;
 		if (qsel == RTW88_NATIVE_TXQSEL_HIGH)
 			sc->tx_group_count++;
@@ -986,6 +1007,38 @@ rtw88_native_attach(device_t dev)
 	    "Number of RX frames discarded before net80211 input");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_auth_count", CTLFLAG_RD, &sc->rx_auth_count, 0,
+	    "Authentication management frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_auth_to_self_count", CTLFLAG_RD, &sc->rx_auth_to_self_count, 0,
+	    "Authentication frames addressed to this station MAC");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_assoc_resp_count", CTLFLAG_RD, &sc->rx_assoc_resp_count, 0,
+	    "Association/reassociation responses received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_deauth_count", CTLFLAG_RD, &sc->rx_deauth_count, 0,
+	    "Deauthentication management frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_disassoc_count", CTLFLAG_RD, &sc->rx_disassoc_count, 0,
+	    "Disassociation management frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_probe_resp_count", CTLFLAG_RD, &sc->rx_probe_resp_count, 0,
+	    "Probe responses received from access points");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_beacon_count", CTLFLAG_RD, &sc->rx_beacon_count, 0,
+	    "Beacon frames received from access points");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_eapol_count", CTLFLAG_RD, &sc->rx_eapol_count, 0,
+	    "EAPOL LLC/SNAP data frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_raw_count", CTLFLAG_RD, &sc->tx_raw_count, 0,
 	    "Number of raw net80211 frames passed to the driver");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
@@ -1020,6 +1073,22 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_eapol_count", CTLFLAG_RD, &sc->tx_eapol_count, 0,
 	    "EAPOL frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_probe_req_count", CTLFLAG_RD, &sc->tx_probe_req_count, 0,
+	    "Probe-request management frames submitted by the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_auth_req_count", CTLFLAG_RD, &sc->tx_auth_req_count, 0,
+	    "Authentication-request management frames submitted by the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_assoc_req_count", CTLFLAG_RD, &sc->tx_assoc_req_count, 0,
+	    "Association/reassociation request frames submitted by the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_deauth_req_count", CTLFLAG_RD, &sc->tx_deauth_req_count, 0,
+	    "Deauthentication request frames submitted by the TX worker");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_last_qsel", CTLFLAG_RD, &sc->tx_last_qsel, 0,
