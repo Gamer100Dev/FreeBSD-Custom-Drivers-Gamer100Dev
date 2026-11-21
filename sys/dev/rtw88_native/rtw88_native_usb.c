@@ -70,6 +70,8 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 		rxs.c_rate = legacy_rates[rate];
 		if (rate <= 3)
 			rxs.c_pktflags |= IEEE80211_RX_F_CCK;
+		else
+			rxs.c_pktflags |= IEEE80211_RX_F_OFDM;
 	}
 
 	channel = sc->current_channel;
