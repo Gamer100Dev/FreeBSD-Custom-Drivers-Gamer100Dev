@@ -33,8 +33,9 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
 	struct ieee80211_rx_stats rxs;
+	struct ieee80211_frame_min *wh;
 	struct mbuf *m;
-	uint32_t w3, w5, phy0;
+	uint32_t w3, w5, phy0, enc_type;
 	uint8_t rate, raw_a, raw_b;
 	int rssi, channel;
 
@@ -61,6 +62,18 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	m->m_len = (int)packet_length;
 	m->m_pkthdr.len = (int)packet_length;
 	memcpy(mtod(m, void *), frame, packet_length);
+
+	/*
+	 * The RCR requests appended FCS/MIC/ICV information. Tell net80211 when
+	 * the RTL8822B has already decrypted a protected MPDU; SWDEC means the
+	 * frame still needs the registered software cipher path.
+	 */
+	wh = mtod(m, struct ieee80211_frame_min *);
+	enc_type = (w0 & RTW88_NATIVE_RX_DESC_W0_ENC_TYPE) >> 20;
+	if ((wh->i_fc[1] & IEEE80211_FC1_PROTECTED) != 0 &&
+	    enc_type != 0 &&
+	    (w0 & RTW88_NATIVE_RX_DESC_W0_SWDEC) == 0)
+		m->m_flags |= M_WEP;
 
 	bzero(&rxs, sizeof(rxs));
 	memcpy(&w3, desc + 12, sizeof(w3));
