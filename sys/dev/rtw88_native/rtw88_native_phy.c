@@ -808,8 +808,9 @@ rtw88_native_phy_adaptivity_init(struct rtw88_native_softc *sc)
  * load MAC/BB/AGC and both RF path tables, apply eFuse crystal trim, then
  * restore RX path selection and configure the board top mux.
  *
- * Dynamic DIG, IQK/DPK, thermal tracking, TX power limits and antenna/TRX path
- * policy remain separate follow-on work; no 802.11 networking is advertised.
+ * Continuous dynamic DIG, IQK/DPK, thermal tracking, TX power limits and
+ * periodic antenna/TRX path policy remain separate follow-on work. Passive
+ * scan start/end separately apply/restore upstream maximum-coverage IGI.
  */
 int
 rtw88_native_phy_init(struct rtw88_native_softc *sc)
