@@ -622,6 +622,8 @@ rtw88_native_attach(device_t dev)
 	sc->tx_cv_initialized = 1;
 	mbufq_init(&sc->rx_queue, 64);
 	TASK_INIT(&sc->rx_task, 0, rtw88_native_rx_task, sc);
+	mbufq_init(&sc->tx_queue, 64);
+	TASK_INIT(&sc->tx_task, 0, rtw88_native_tx_task, sc);
 	cv_init(&sc->io_drain_cv, "rtw88 native io");
 	sc->io_cv_initialized = 1;
 
@@ -734,6 +736,30 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_input_drop_count", CTLFLAG_RD, &sc->rx_input_drop_count, 0,
 	    "Number of RX frames discarded before net80211 input");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_queued_count", CTLFLAG_RD, &sc->tx_queued_count, 0,
+	    "Number of 802.11 frames queued for USB transmission");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_complete_count", CTLFLAG_RD, &sc->tx_complete_count, 0,
+	    "Number of frames completed on USB bulk-OUT");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_error_count", CTLFLAG_RD, &sc->tx_error_count, 0,
+	    "Number of frames that failed before or during USB transmission");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_queue_depth", CTLFLAG_RD, &sc->tx_queue_depth, 0,
+	    "Number of 802.11 frames waiting for USB transmission");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_error", CTLFLAG_RD, &sc->tx_last_error, 0,
+	    "Last transmit error (zero means no error)");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_enabled", CTLFLAG_RD, &sc->tx_enabled, 0,
+	    "Whether the transmit worker may submit frames");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "net80211_attached", CTLFLAG_RD, &sc->net80211_attached, 0,
