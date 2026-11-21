@@ -720,6 +720,9 @@ rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
 		{ "RXFLTMAP2", 0x06a4, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "SYS_FUNC_EN", 0x0002, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RF_CTRL", 0x001f, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "WLRF1", 0x00ec, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_SIPI_A", 0x0c90, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_SIPI_B", 0x0e90, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXPSEL", 0x0808, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXIGI_A", 0x0c50, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXIGI_B", 0x0e50, 0, USB_ERR_NORMAL_COMPLETION },
@@ -766,8 +769,9 @@ rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
 	mtx_unlock(&sc->mtx);
 
 	device_printf(sc->dev,
-	    "RX diag: channel=%d started=%d submits=%ju completions=%ju errors=%ju last_error=%d\n",
-	    channel, rx_started, (uintmax_t)rx_submits, (uintmax_t)rx_count,
+	    "RX diag: channel=%d started=%d xfers=%u submits=%ju completions=%ju errors=%ju last_error=%d\n",
+	    channel, rx_started, RTW88_NATIVE_RX_XFERS,
+	    (uintmax_t)rx_submits, (uintmax_t)rx_count,
 	    (uintmax_t)rx_errors, rx_error_code);
 	error = 0;
 	for (i = 0; i < nitems(regs); i++) {
