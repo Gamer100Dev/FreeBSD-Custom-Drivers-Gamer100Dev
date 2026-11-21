@@ -124,16 +124,21 @@ rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 		sc->rx_last_len = actlen;
 		sc->rx_count++;
 		sc->rx_error = USB_ERR_NORMAL_COMPLETION;
+		sc->rx_error_code = USB_ERR_NORMAL_COMPLETION;
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
 		if (!sc->rx_started || sc->dying)
 			break;
 		usbd_xfer_set_frame_data(xfer, 0, sc->rx_buf,
 		    sizeof(sc->rx_buf));
+		sc->rx_submit_count++;
 		usbd_transfer_submit(xfer);
 		break;
 	case USB_ST_ERROR:
 		sc->rx_error = error;
+		sc->rx_error_code = (int)error;
+		if (error != USB_ERR_CANCELLED)
+			sc->rx_error_count++;
 		if (error != USB_ERR_CANCELLED && sc->rx_started &&
 		    !sc->dying) {
 			usbd_xfer_set_stall(xfer);
@@ -148,6 +153,7 @@ tr_setup:
 	if (sc->rx_started && !sc->dying) {
 		usbd_xfer_set_frame_data(xfer, 0, sc->rx_buf,
 		    sizeof(sc->rx_buf));
+		sc->rx_submit_count++;
 		usbd_transfer_submit(xfer);
 	}
 }
@@ -252,7 +258,8 @@ rtw88_native_tx2_callback(struct usb_xfer *xfer, usb_error_t error)
 static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = {
 	[RTW88_NATIVE_BULK_RX] = {
 		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_IN,
+		.ep_index = 0,
 		.direction = UE_DIR_IN,
 		.bufsize = 32 * 1024,
 		.flags = {
@@ -265,7 +272,7 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 	},
 	[RTW88_NATIVE_BULK_TX0] = {
 		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_OUT_HIGH,
 		.ep_index = 0,
 		.direction = UE_DIR_OUT,
 		.bufsize = 20 * 1024,
@@ -279,8 +286,8 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 	},
 	[RTW88_NATIVE_BULK_TX1] = {
 		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
-		.ep_index = 1,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_OUT_NORMAL,
+		.ep_index = 0,
 		.direction = UE_DIR_OUT,
 		.bufsize = 20 * 1024,
 		.flags = {
@@ -293,8 +300,8 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 	},
 	[RTW88_NATIVE_BULK_TX2] = {
 		.type = UE_BULK,
-		.endpoint = UE_ADDR_ANY,
-		.ep_index = 2,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_OUT_LOW,
+		.ep_index = 0,
 		.direction = UE_DIR_OUT,
 		.bufsize = 20 * 1024,
 		.flags = {
@@ -307,7 +314,8 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 	},
 	[RTW88_NATIVE_INTERRUPT_RX] = {
 		.type = UE_INTERRUPT,
-		.endpoint = UE_ADDR_ANY,
+		.endpoint = RTW88_NATIVE_USB_EP_INTERRUPT_IN,
+		.ep_index = 0,
 		.direction = UE_DIR_IN,
 		.bufsize = 64,
 		.flags = {
@@ -558,6 +566,7 @@ rtw88_native_usb_rx_start(struct rtw88_native_softc *sc)
 	bzero(sc->rx_last, sizeof(sc->rx_last));
 	sc->rx_last_len = 0;
 	sc->rx_error = USB_ERR_NORMAL_COMPLETION;
+	sc->rx_error_code = USB_ERR_NORMAL_COMPLETION;
 	sc->rx_started = 1;
 	usbd_transfer_start(xfer);
 	mtx_unlock(&sc->mtx);
