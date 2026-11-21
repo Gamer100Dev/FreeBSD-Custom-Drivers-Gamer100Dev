@@ -30,11 +30,27 @@
 
 #include "if_rtw88_native.h"
 
+#define RTW88_NATIVE_RX_BUFSIZE	(32 * 1024)
+#define RTW88_NATIVE_TX_BUFSIZE	(20 * 1024)
+#define RTW88_NATIVE_INT_BUFSIZE	64
+
+enum {
+	RTW88_NATIVE_BULK_RX,
+	RTW88_NATIVE_BULK_TX0,
+	RTW88_NATIVE_BULK_TX1,
+	RTW88_NATIVE_BULK_TX2,
+	RTW88_NATIVE_INTERRUPT_RX,
+	RTW88_NATIVE_N_XFERS
+};
+
 struct rtw88_native_softc {
 	device_t		dev;
 	struct usb_device	*udev;
+	struct usb_xfer	*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
+	uint8_t		iface_index;
 	int			mtx_initialized;
+	int			xfers_initialized;
 };
 
 /*
@@ -49,6 +65,80 @@ static STRUCT_USB_HOST_ID rtw88_native_devs[] = {
 		USB_IFACE_SUBCLASS(0xff),
 		USB_IFACE_PROTOCOL(0xff)
 	},
+};
+
+/*
+ * Transfers are allocated during attach but deliberately never started in
+ * this bring-up stage.  The callback is therefore inert; later stages will
+ * add RX/TX state machines and submit frames only after firmware and MAC
+ * initialisation have completed.
+ */
+static void
+rtw88_native_xfer_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	(void)xfer;
+	(void)error;
+}
+
+static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = {
+	[RTW88_NATIVE_BULK_RX] = {
+		.type = UE_BULK,
+		.endpoint = UE_ADDR_ANY,
+		.direction = UE_DIR_IN,
+		.bufsize = RTW88_NATIVE_RX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.short_xfer_ok = 1
+		},
+		.callback = rtw88_native_xfer_callback
+	},
+	[RTW88_NATIVE_BULK_TX0] = {
+		.type = UE_BULK,
+		.endpoint = UE_ADDR_ANY,
+		.ep_index = 0,
+		.direction = UE_DIR_OUT,
+		.bufsize = RTW88_NATIVE_TX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.force_short_xfer = 1
+		},
+		.callback = rtw88_native_xfer_callback
+	},
+	[RTW88_NATIVE_BULK_TX1] = {
+		.type = UE_BULK,
+		.endpoint = UE_ADDR_ANY,
+		.ep_index = 1,
+		.direction = UE_DIR_OUT,
+		.bufsize = RTW88_NATIVE_TX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.force_short_xfer = 1
+		},
+		.callback = rtw88_native_xfer_callback
+	},
+	[RTW88_NATIVE_BULK_TX2] = {
+		.type = UE_BULK,
+		.endpoint = UE_ADDR_ANY,
+		.ep_index = 2,
+		.direction = UE_DIR_OUT,
+		.bufsize = RTW88_NATIVE_TX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.force_short_xfer = 1
+		},
+		.callback = rtw88_native_xfer_callback
+	},
+	[RTW88_NATIVE_INTERRUPT_RX] = {
+		.type = UE_INTERRUPT,
+		.endpoint = UE_ADDR_ANY,
+		.direction = UE_DIR_IN,
+		.bufsize = RTW88_NATIVE_INT_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.short_xfer_ok = 1
+		},
+		.callback = rtw88_native_xfer_callback
+	}
 };
 
 static usb_error_t
@@ -145,6 +235,7 @@ rtw88_native_attach(device_t dev)
 
 	sc->dev = dev;
 	sc->udev = uaa->device;
+	sc->iface_index = uaa->info.bIfaceIndex;
 
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK, MTX_DEF);
 	sc->mtx_initialized = 1;
@@ -181,6 +272,10 @@ rtw88_native_detach(device_t dev)
 	struct rtw88_native_softc *sc;
 
 	sc = device_get_softc(dev);
+	if (sc->xfers_initialized) {
+		usbd_transfer_unsetup(sc->xfer, RTW88_NATIVE_N_XFERS);
+		sc->xfers_initialized = 0;
+	}
 	if (sc->mtx_initialized) {
 		mtx_destroy(&sc->mtx);
 		sc->mtx_initialized = 0;
