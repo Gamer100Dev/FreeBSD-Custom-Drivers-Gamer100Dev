@@ -20,6 +20,8 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
 - `rtw88_native_mac.c`: USB-applicable RTL8822B power sequences, MAC system
   configuration, 3-endpoint TX DMA mapping, TX FIFO/page-table setup, H2C
   ring initialisation and base MAC/WMAC register configuration.
+- `rtw88_native_efuse.c`: native physical eFuse reads, packed logical-map
+  decoding, and RTL8822BU MAC/board-field extraction.
 - `if_rtw88_native.h`: hardware definitions, per-device state and API.
 
 ## Explicit hardware-start entry point
@@ -31,7 +33,9 @@ condition variables. It does not use LinuxKPI or the Linuxulator.
    `firmware_get()`.
 3. Send DMEM/IMEM through the USB beacon/high-priority queue and RTL8822B
    DDMA engine; verify section checksums and firmware READY bits.
-4. Configure the 3-OUT-endpoint FIFO/page allocation, H2C ring and base
+4. Read and decode the physical/logical eFuse map; extract the permanent
+   MAC address and board configuration bytes.
+5. Configure the 3-OUT-endpoint FIFO/page allocation, H2C ring and base
    8822B MAC/WMAC registers.
 
 This routine is **not called by USB attach**. Firmware retrieval may access the
@@ -51,12 +55,17 @@ routine rejects it with `ENOTSUP` until its checksum/address behaviour is
 validated. The firmware sequence also does not yet perform the Bluetooth
 LTE-coexistence register save/restore used by the upstream RTW88 implementation.
 
+The eFuse reader decodes the packed map and extracts the USB variant's
+permanent MAC address, channel plan, country code, crystal cap, thermal
+meter, PA/LNA, board and RFE bytes. Full board/RFE selection, hardware-feature
+report handling, RF calibration and power-table programming are not yet
+implemented.
+
 ## Not yet implemented
 
-- RTL8822B efuse/logical-map reading, MAC-address extraction and board/RFE
-  configuration.
-- PHY/BB/RF register-table programming, IQK/DPK calibration, antenna setup,
-  channel control and regulatory handling.
+- Full RFE/board selection and PHY/BB/RF register-table programming.
+- IQK/DPK calibration, antenna setup, channel control and regulatory
+  handling.
 - Active bulk-IN RX and interrupt/C2H event state machines.
 - Normal TX packet descriptors, queue scheduling, aggregation, retries and
   TX status reporting.

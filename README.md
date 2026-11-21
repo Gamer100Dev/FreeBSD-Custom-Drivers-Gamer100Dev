@@ -12,8 +12,9 @@ Development is on `work/native-rtw88-usb`, separate from `main`:
 - **Implementation status:** `docs/NATIVE-RTW88-STATUS.md`
 
 The native code now contains USB/control-transfer primitives, checked
-register access, RTW8822B DDMA firmware-download logic, USB-specific power
-sequencing, 3-endpoint FIFO/page allocation, H2C ring setup and base MAC
+register access, RTL8822B DDMA firmware-download logic, USB-specific power
+sequencing, physical/logical eFuse decoding, permanent MAC/board-field
+extraction, 3-endpoint FIFO/page allocation, H2C ring setup and base MAC
 configuration. The start sequence is explicit and is not called from USB
 attach. Active RX/TX networking and native `net80211` integration remain
 unimplemented.

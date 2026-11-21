@@ -360,6 +360,7 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 		return (ENXIO);
 	cut_mask = (uint8_t)(1U << (cut + 1));
 	sc->cut_version = cut;
+	sc->rf_path_num = (chip_version & (1U << 27)) ? 2 : 1;
 
 	error = rtw88_native_mac_pre_system_cfg(sc);
 	if (error != 0)
@@ -861,6 +862,9 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 	error = rtw88_native_firmware_download(sc);
+	if (error != 0)
+		goto fail;
+	error = rtw88_native_efuse_read(sc);
 	if (error != 0)
 		goto fail;
 	error = rtw88_native_mac_init(sc);

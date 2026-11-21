@@ -116,6 +116,23 @@ struct rtw88_native_fw_layout {
 	uint32_t	emem_addr;
 };
 
+struct rtw88_native_efuse {
+	uint8_t	macaddr[6];
+	uint8_t	usb_mode;
+	uint8_t	channel_plan;
+	uint8_t	country_code[2];
+	uint8_t	rf_board_option;
+	uint8_t	rfe_option;
+	uint8_t	crystal_cap;
+	uint8_t	thermal_meter;
+	uint8_t	pa_type;
+	uint8_t	lna_type_2g;
+	uint8_t	lna_type_5g;
+	uint8_t	bt_setting;
+	uint8_t	rf_antenna_option;
+	bool	macaddr_valid;
+};
+
 struct rtw88_native_softc {
 	device_t		dev;
 	struct usb_device	*udev;
@@ -137,7 +154,9 @@ struct rtw88_native_softc {
 	uint16_t		tx_len[RTW88_NATIVE_TX_QUEUES];
 	const struct firmware	*firmware;
 	struct rtw88_native_fw_layout fw_layout;
+	struct rtw88_native_efuse efuse;
 	uint8_t			cut_version;
+	uint8_t			rf_path_num;
 	uint8_t			bulkout_num;
 	uint8_t			qsel_to_ep[20];
 	uint16_t		txff_pg_num;
@@ -151,6 +170,7 @@ struct rtw88_native_softc {
 	int			powered;
 	int			firmware_running;
 	int			mac_initialized;
+	int			efuse_initialized;
 };
 
 usb_error_t	rtw88_native_usb_setup(struct rtw88_native_softc *);
@@ -181,6 +201,7 @@ usb_error_t	rtw88_native_reg_write32(struct rtw88_native_softc *,
 int		rtw88_native_firmware_get(struct rtw88_native_softc *);
 void		rtw88_native_firmware_put(struct rtw88_native_softc *);
 int		rtw88_native_firmware_download(struct rtw88_native_softc *);
+int		rtw88_native_efuse_read(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);

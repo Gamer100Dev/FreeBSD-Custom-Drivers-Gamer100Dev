@@ -35,11 +35,16 @@ The current boot path supports the regular DMEM+IMEM image. An image with an
 optional EMEM segment is rejected with `ENOTSUP` pending validation. The
 upstream LTE-coexistence save/restore operation is also not yet ported.
 
-### Power and base MAC configuration
+### Power, eFuse and base MAC configuration
 
 - Port the USB-applicable commands from the 8822B card-dispose/card-emulation/
   active power transition tables.
 - Port the pre-system and post-power system-configuration register steps.
+- Read the 1-KiB physical eFuse map through the native register path.
+- Decode the packed one-/two-byte eFuse headers into the 768-byte logical
+  map, respecting the 96-byte protected tail.
+- Extract the RTL8822BU MAC address, channel plan, country code, crystal cap,
+  thermal meter, PA/LNA, board and RFE fields.
 - Route VO/VI to the NORMAL DMA map, BE/BK to LOW and MG/HI to HIGH for the
   three bulk-OUT endpoint layout.
 - Configure the 8822B TX FIFO page table, reserved pages, beacon boundary,
@@ -52,8 +57,8 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
 
 ## Not yet implemented
 
-- Efuse/logical-map reading, permanent MAC address and board/RFE extraction.
-- PHY/BB/RF tables, IQK/DPK, antenna and channel initialisation.
+- Full RFE board selection, HW-feature C2H report, PHY/BB/RF register tables,
+  IQK/DPK, antenna and channel initialisation.
 - Active RX and interrupt/C2H state machines.
 - Normal TX data path, aggregation, per-frame queue mapping, completion and
   status reporting.
