@@ -1023,8 +1023,6 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 		mtx_unlock(&sc->mtx);
 		ieee80211_tx_complete(ni, m, 1);
 	}
-	rtw88_native_usb_rx_stop(sc);
-	rtw88_native_usb_intr_stop(sc);
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
