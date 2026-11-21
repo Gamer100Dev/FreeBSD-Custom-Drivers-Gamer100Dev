@@ -1,0 +1,41 @@
+name: FreeBSD native RTW88 module build
+
+on:
+  push:
+    paths:
+      - "sys/dev/rtw88_native/**"
+      - "sys/modules/rtw88_native/**"
+      - ".github/workflows/freebsd-native-module.yml"
+  pull_request:
+    paths:
+      - "sys/dev/rtw88_native/**"
+      - "sys/modules/rtw88_native/**"
+      - ".github/workflows/freebsd-native-module.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          arch: "amd64"
+          mem: "4096"
+          copyback: false
+          prepare: |
+            pkg install -y git
+          run: |
+            set -eu
+            rm -rf /usr/src
+            git clone --depth 1 --branch releng/15.1 https://git.freebsd.org/src.git /usr/src
+            mkdir -p /usr/src/sys/dev/rtw88_native
+            cp -R sys/dev/rtw88_native/. /usr/src/sys/dev/rtw88_native/
+            mkdir -p /usr/src/sys/modules/rtw88_native
+            cp -R sys/modules/rtw88_native/. /usr/src/sys/modules/rtw88_native/
+            cd /usr/src/sys/modules/rtw88_native
+            make clean
+            make
+            test -f if_rtw88_native.ko
+            file if_rtw88_native.ko
