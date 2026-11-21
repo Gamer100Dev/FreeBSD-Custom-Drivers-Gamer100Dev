@@ -381,7 +381,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 			 * FreeBSD tags PAE frames M_EAPOL and promotes their WME
 			 * category to VO, but transmits them as non-QoS data.
 			 * Match the FreeBSD LinuxKPI RTW88 path: put EAPOL on
-			 * BE/TID0, not QSEL_BEACON (the reserved-page queue).
+			 * BE/TID0, rather than mapping the promoted VO category to QSEL_BEACON.
 			 */
 			qsel = RTW88_NATIVE_TXQSEL_TID0;
 		} else {
