@@ -718,10 +718,10 @@ rtw88_native_usb_intr_stop(struct rtw88_native_softc *sc)
 
 
 /*
- * Start continuous bulk-IN collection. The 32 KiB buffer stores USB
- * aggregation batches; this stage preserves the last completed raw batch
- * for inspection but does not yet parse RTW88 RX descriptors or pass frames
- * to net80211.
+ * Start the four concurrent 32 KiB bulk-IN requests used by Linux RTW88.
+ * Each request has an independent DMA buffer and is immediately resubmitted
+ * after completion so USB RX aggregation can progress without gaps. Raw
+ * batches are parsed and queued to the net80211 input task.
  */
 int
 rtw88_native_usb_rx_start(struct rtw88_native_softc *sc)
