@@ -242,7 +242,12 @@ rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 			m_freem(m);
 		return (EINVAL);
 	}
-	if (params != NULL) {
+	/*
+	 * net80211 passes a zeroed params structure for ordinary auth/assoc
+	 * management frames. Only reject explicit hardware-crypto requests:
+	 * this initial path uses software ciphers, not descriptor key offload.
+	 */
+	if (params != NULL && (params->ibp_flags & IEEE80211_BPF_CRYPTO) != 0) {
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
