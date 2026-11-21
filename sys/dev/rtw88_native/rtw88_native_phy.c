@@ -799,7 +799,7 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	static const uint16_t rf_sipi_addr[2] = {
 		RTW88_NATIVE_RF_SIPI_A, RTW88_NATIVE_RF_SIPI_B
 	};
-	uint32_t xtal;
+	uint32_t xtal, value32;
 	int error;
 
 	if (sc == NULL || !sc->powered || !sc->firmware_running ||
@@ -831,6 +831,7 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	    BIT_WLRF1_BBRF_EN, 0x7);
 	if (error != 0)
 		return (error);
+	value32 = 0;
 	if (rtw88_native_reg_read32(sc, REG_WLRF1, &value32) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    (value32 & BIT_WLRF1_BBRF_EN) != BIT_WLRF1_BBRF_EN) {
@@ -883,6 +884,7 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	    BIT_RX_PSEL_RST, 0x3);
 	if (error != 0)
 		return (error);
+	value32 = 0;
 	if (rtw88_native_reg_read32(sc, REG_RXPSEL, &value32) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    (value32 & BIT_RX_PSEL_RST) != BIT_RX_PSEL_RST) {
