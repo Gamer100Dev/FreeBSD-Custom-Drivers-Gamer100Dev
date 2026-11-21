@@ -594,29 +594,21 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
 		return (EIO);
 
-	/* IFEM-extended RFE option 3: route both RF paths to the antennas. */
+	/*
+	 * RFE option 3 is IFEM-ext. These are shared chip-level RFE controls;
+	 * upstream rtw8822b_set_channel_rfe_ifem() writes only the base addresses.
+	 * Do not mirror them at +0x200: those are distinct BB register addresses.
+	 */
 	error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0,
 	    0x00ffffffU, 0x00745774U);
 	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0 + 0x200,
-		    0x00ffffffU, 0x00745774U);
-	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL8,
-		    0x0000ff00U, 0x57);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL8 + 0x200,
 		    0x0000ff00U, 0x57);
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV,
 		    (1U << 11) | (1U << 10) | 0x3fU, 0);
 	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV + 0x200,
-		    (1U << 11) | (1U << 10) | 0x3fU, 0);
-	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW,
-		    0x0000ffffU, 0xa501);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW + 0x200,
 		    0x0000ffffU, 0xa501);
 	if (error != 0)
 		return (error);
