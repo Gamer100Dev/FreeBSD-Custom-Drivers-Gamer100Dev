@@ -67,9 +67,13 @@ struct rtw88_native_softc {
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
 	struct cv		tx_cv[RTW88_NATIVE_TX_QUEUES];
+	struct cv		io_drain_cv;
 	uint8_t			iface_index;
 	int			mtx_initialized;
 	int			tx_cv_initialized;
+	int			io_cv_initialized;
+	int			dying;
+	unsigned int		io_users;
 	int			xfers_initialized;
 	int			tx_busy[RTW88_NATIVE_TX_QUEUES];
 	int			tx_done[RTW88_NATIVE_TX_QUEUES];

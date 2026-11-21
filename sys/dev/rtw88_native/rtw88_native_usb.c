@@ -16,15 +16,66 @@
 #include "if_rtw88_native.h"
 
 static void
-rtw88_native_xfer_callback(struct usb_xfer *xfer, usb_error_t error)
+rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 {
 	/*
-	 * Bulk RX and interrupt RX are allocated but intentionally not started
-	 * during transport bring-up. Their state machines will be enabled only
-	 * after firmware startup and device interrupt handling are implemented.
+	 * RX and interrupt transfers are allocated but deliberately not started
+	 * until the RTL8822B event format and RX aggregation parser are ready.
 	 */
 	(void)xfer;
 	(void)error;
+}
+
+static void
+rtw88_native_tx_callback_common(struct usb_xfer *xfer, usb_error_t error,
+    uint8_t queue)
+{
+	struct rtw88_native_softc *sc;
+
+	sc = usbd_xfer_softc(xfer);
+	mtx_assert(&sc->mtx, MA_OWNED);
+
+	switch (USB_GET_STATE(xfer)) {
+	case USB_ST_SETUP:
+		if (!sc->tx_busy[queue])
+			break;
+		usbd_xfer_set_frame_data(xfer, 0,
+		    __DECONST(void *, sc->tx_data[queue]), sc->tx_len[queue]);
+		usbd_transfer_submit(xfer);
+		break;
+	case USB_ST_TRANSFERRED:
+		sc->tx_error[queue] = USB_ERR_NORMAL_COMPLETION;
+		sc->tx_done[queue] = 1;
+		cv_broadcast(&sc->tx_cv[queue]);
+		break;
+	case USB_ST_ERROR:
+		sc->tx_error[queue] = error;
+		sc->tx_done[queue] = 1;
+		if (error != USB_ERR_CANCELLED)
+			usbd_xfer_set_stall(xfer);
+		cv_broadcast(&sc->tx_cv[queue]);
+		break;
+	default:
+		break;
+	}
+}
+
+static void
+rtw88_native_tx0_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_tx_callback_common(xfer, error, 0);
+}
+
+static void
+rtw88_native_tx1_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_tx_callback_common(xfer, error, 1);
+}
+
+static void
+rtw88_native_tx2_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_tx_callback_common(xfer, error, 2);
 }
 
 static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = {
@@ -37,7 +88,7 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 			.pipe_bof = 1,
 			.short_xfer_ok = 1
 		},
-		.callback = rtw88_native_xfer_callback
+		.callback = rtw88_native_rx_callback
 	},
 	[RTW88_NATIVE_BULK_TX0] = {
 		.type = UE_BULK,
@@ -47,9 +98,11 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 		.bufsize = 20 * 1024,
 		.flags = {
 			.pipe_bof = 1,
-			.force_short_xfer = 1
+			.force_short_xfer = 1,
+			.ext_buffer = 1
 		},
-		.callback = rtw88_native_xfer_callback
+		.callback = rtw88_native_tx0_callback,
+		.timeout = 5000
 	},
 	[RTW88_NATIVE_BULK_TX1] = {
 		.type = UE_BULK,
@@ -59,9 +112,11 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 		.bufsize = 20 * 1024,
 		.flags = {
 			.pipe_bof = 1,
-			.force_short_xfer = 1
+			.force_short_xfer = 1,
+			.ext_buffer = 1
 		},
-		.callback = rtw88_native_xfer_callback
+		.callback = rtw88_native_tx1_callback,
+		.timeout = 5000
 	},
 	[RTW88_NATIVE_BULK_TX2] = {
 		.type = UE_BULK,
@@ -71,9 +126,11 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 		.bufsize = 20 * 1024,
 		.flags = {
 			.pipe_bof = 1,
-			.force_short_xfer = 1
+			.force_short_xfer = 1,
+			.ext_buffer = 1
 		},
-		.callback = rtw88_native_xfer_callback
+		.callback = rtw88_native_tx2_callback,
+		.timeout = 5000
 	},
 	[RTW88_NATIVE_INTERRUPT_RX] = {
 		.type = UE_INTERRUPT,
@@ -84,7 +141,7 @@ static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = 
 			.pipe_bof = 1,
 			.short_xfer_ok = 1
 		},
-		.callback = rtw88_native_xfer_callback
+		.callback = rtw88_native_rx_callback
 	}
 };
 
@@ -101,9 +158,8 @@ rtw88_native_usb_setup(struct rtw88_native_softc *sc)
 	error = usbd_transfer_setup(sc->udev, &sc->iface_index, sc->xfer,
 	    rtw88_native_xfer_config, RTW88_NATIVE_N_XFERS, sc, &sc->mtx);
 	if (error != USB_ERR_NORMAL_COMPLETION) {
-		/*
-		 * USBDI requires the transfer array to be unsetup after a setup
-		 * attempt, including partial allocation failures.
+		/* USBDI requires unsetup after a setup attempt, including partial
+		 * allocation failure. NULL transfer slots are accepted.
 		 */
 		usbd_transfer_unsetup(sc->xfer, RTW88_NATIVE_N_XFERS);
 		return (error);
@@ -119,6 +175,10 @@ rtw88_native_usb_unsetup(struct rtw88_native_softc *sc)
 	if (sc == NULL || !sc->xfers_initialized)
 		return;
 
+	/*
+	 * This may sleep and waits for callbacks. It must not be called with the
+	 * private USB mutex held.
+	 */
 	usbd_transfer_unsetup(sc->xfer, RTW88_NATIVE_N_XFERS);
 	bzero(sc->xfer, sizeof(sc->xfer));
 	sc->xfers_initialized = 0;
@@ -144,20 +204,88 @@ rtw88_native_usb_control(struct rtw88_native_softc *sc, uint8_t request_type,
 	USETW(req.wLength, len);
 
 	/*
-	 * The FreeBSD implementation releases and reacquires the supplied
-	 * mutex around the synchronous control request.  The caller therefore
-	 * enters with this mutex owned and returns with it owned.
+	 * FreeBSD's usbd_do_request_flags() releases and reacquires the supplied
+	 * private mutex around the control request. It returns with the mutex
+	 * owned, matching the entry/exit contract used here.
 	 */
 	mtx_lock(&sc->mtx);
+	if (sc->dying) {
+		mtx_unlock(&sc->mtx);
+		return (USB_ERR_CANCELLED);
+	}
+	sc->io_users++;
 	actual = 0;
 	error = usbd_do_request_flags(sc->udev, &sc->mtx, &req, data, 0,
 	    &actual, RTW88_NATIVE_USB_TIMEOUT);
+	sc->io_users--;
+	if (sc->io_users == 0 && sc->io_cv_initialized)
+		cv_broadcast(&sc->io_drain_cv);
 	mtx_unlock(&sc->mtx);
 
 	if (actlen != NULL)
 		*actlen = actual;
 	if (error == USB_ERR_NORMAL_COMPLETION && actual != len)
 		return (USB_ERR_SHORT_XFER);
+
+	return (error);
+}
+
+/*
+ * Send one bulk-OUT buffer and wait for the callback to report completion.
+ * The caller retains ownership of the buffer, which must stay valid until
+ * this function returns. This routine sleeps and must not be called from a
+ * USB callback, interrupt filter, or with sc->mtx already held.
+ */
+usb_error_t
+rtw88_native_usb_tx_sync(struct rtw88_native_softc *sc, uint8_t queue,
+    const void *data, uint16_t len)
+{
+	struct usb_xfer *xfer;
+	usb_error_t error;
+	uint8_t index;
+
+	if (sc == NULL || data == NULL || len == 0 ||
+	    queue >= RTW88_NATIVE_TX_QUEUES || !sc->mtx_initialized ||
+	    !sc->tx_cv_initialized || !sc->io_cv_initialized)
+		return (USB_ERR_INVAL);
+
+	index = RTW88_NATIVE_BULK_TX0 + queue;
+	mtx_lock(&sc->mtx);
+	if (sc->dying || !sc->xfers_initialized) {
+		mtx_unlock(&sc->mtx);
+		return (USB_ERR_CANCELLED);
+	}
+	if (sc->tx_busy[queue]) {
+		mtx_unlock(&sc->mtx);
+		return (USB_ERR_IN_USE);
+	}
+	xfer = sc->xfer[index];
+	if (xfer == NULL || len > usbd_xfer_max_len(xfer)) {
+		mtx_unlock(&sc->mtx);
+		return (USB_ERR_BAD_BUFSIZE);
+	}
+
+	sc->io_users++;
+	sc->tx_busy[queue] = 1;
+	sc->tx_done[queue] = 0;
+	sc->tx_error[queue] = USB_ERR_CANCELLED;
+	sc->tx_data[queue] = data;
+	sc->tx_len[queue] = len;
+
+	/* USBDI requires the private transfer mutex to be held here. */
+	usbd_transfer_start(xfer);
+	while (!sc->tx_done[queue])
+		cv_wait(&sc->tx_cv[queue], &sc->mtx);
+
+	error = sc->tx_error[queue];
+	sc->tx_data[queue] = NULL;
+	sc->tx_len[queue] = 0;
+	sc->tx_busy[queue] = 0;
+	sc->tx_done[queue] = 0;
+	sc->io_users--;
+	if (sc->io_users == 0)
+		cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
 
 	return (error);
 }

@@ -64,6 +64,7 @@ rtw88_native_attach(device_t dev)
 	struct usb_attach_arg *uaa;
 	uint32_t sys_cfg1;
 	usb_error_t uerr;
+	int i;
 
 	sc = device_get_softc(dev);
 	bzero(sc, sizeof(*sc));
@@ -77,6 +78,11 @@ rtw88_native_attach(device_t dev)
 
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK, MTX_DEF);
 	sc->mtx_initialized = 1;
+	for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
+		cv_init(&sc->tx_cv[i], "rtw88 native tx");
+	sc->tx_cv_initialized = 1;
+	cv_init(&sc->io_drain_cv, "rtw88 native io");
+	sc->io_cv_initialized = 1;
 
 	device_printf(dev,
 	    "native FreeBSD USB transport attached (RTL8822BU, 0bda:b812)\n");
@@ -89,6 +95,11 @@ rtw88_native_attach(device_t dev)
 	if (uerr != USB_ERR_NORMAL_COMPLETION) {
 		device_printf(dev, "could not allocate native USB transfers: %s\n",
 		    usbd_errstr(uerr));
+		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
+			cv_destroy(&sc->tx_cv[i]);
+		sc->tx_cv_initialized = 0;
+		cv_destroy(&sc->io_drain_cv);
+		sc->io_cv_initialized = 0;
 		mtx_destroy(&sc->mtx);
 		sc->mtx_initialized = 0;
 		return (ENXIO);
@@ -126,8 +137,31 @@ rtw88_native_detach(device_t dev)
 	int i;
 
 	sc = device_get_softc(dev);
+	if (sc->mtx_initialized) {
+		mtx_lock(&sc->mtx);
+		sc->dying = 1;
+		mtx_unlock(&sc->mtx);
+	}
+
+	/* Stop DMA callbacks first, then wait for synchronous I/O callers. */
 	rtw88_native_usb_unsetup(sc);
+	if (sc->mtx_initialized && sc->io_cv_initialized) {
+		mtx_lock(&sc->mtx);
+		while (sc->io_users != 0)
+			cv_wait(&sc->io_drain_cv, &sc->mtx);
+		mtx_unlock(&sc->mtx);
+	}
+
 	rtw88_native_firmware_put(sc);
+	if (sc->tx_cv_initialized) {
+		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
+			cv_destroy(&sc->tx_cv[i]);
+		sc->tx_cv_initialized = 0;
+	}
+	if (sc->io_cv_initialized) {
+		cv_destroy(&sc->io_drain_cv);
+		sc->io_cv_initialized = 0;
+	}
 	if (sc->mtx_initialized) {
 		mtx_destroy(&sc->mtx);
 		sc->mtx_initialized = 0;
