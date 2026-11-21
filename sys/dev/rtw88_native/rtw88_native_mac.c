@@ -480,6 +480,74 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define RTW88_NATIVE_DMA_NORMAL		2
 #define RTW88_NATIVE_DMA_HIGH		3
 
+#define BIT_RXDMA_AGG_EN		(1U << 2)
+#define BIT_DMA_MODE			(1U << 1)
+#define BIT_DMA_BURST_CNT		(3U << 2)
+#define BIT_DMA_BURST_SIZE		(3U << 4)
+#define BIT_DMA_BURST_SIZE_64		2U
+#define BIT_DMA_BURST_SIZE_512		1U
+#define BIT_DMA_BURST_SIZE_1024		0U
+#define BIT_RXDMA_AGG_PG_TH_RESERVED	(1U << 7)
+
+static int rtw88_native_write_mask8(struct rtw88_native_softc *, uint16_t,
+    uint8_t, uint8_t);
+
+/*
+ * Configure the RTL8822B USB receive DMA engine before posting bulk-IN.
+ * Values follow the upstream RTW88 USB interface configuration and v1 RX
+ * aggregation path. This adapter enumerates at USB 2.0 High Speed (512-byte
+ * max packet); the 512-byte RX burst encoding is therefore selected.
+ */
+static int
+rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *sc)
+{
+	enum usb_dev_speed speed;
+	uint8_t rxdma, burst_size;
+	uint16_t agg;
+
+	speed = usbd_get_speed(sc->udev);
+	rxdma = BIT_DMA_BURST_CNT | BIT_DMA_MODE;
+	switch (speed) {
+	case USB_SPEED_SUPER:
+		burst_size = BIT_DMA_BURST_SIZE_1024;
+		break;
+	case USB_SPEED_HIGH:
+		burst_size = BIT_DMA_BURST_SIZE_512;
+		break;
+	case USB_SPEED_FULL:
+	case USB_SPEED_LOW:
+		burst_size = BIT_DMA_BURST_SIZE_64;
+		break;
+	default:
+		device_printf(sc->dev, "unsupported USB speed %d for RXDMA\n",
+		    speed);
+		return (ENOTSUP);
+	}
+	rxdma |= (uint8_t)(burst_size << 4);
+	if (rtw88_native_reg_write8(sc, RTW88_NATIVE_REG_RXDMA_MODE,
+	    rxdma) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	if (rtw88_native_write_mask8(sc, RTW88_NATIVE_REG_TXDMA_PQ_MAP,
+	    BIT_RXDMA_AGG_EN, BIT_RXDMA_AGG_EN) != 0 ||
+	    rtw88_native_write_mask8(sc,
+	    RTW88_NATIVE_REG_RXDMA_AGG_PG_TH + 3,
+	    BIT_RXDMA_AGG_PG_TH_RESERVED, 0) != 0)
+		return (EIO);
+
+	/* RTL8822B USB RX aggregation: page threshold 5, timeout 0x20. */
+	agg = 0x0005U | (0x0020U << 8);
+	if (rtw88_native_reg_write16(sc,
+	    RTW88_NATIVE_REG_RXDMA_AGG_PG_TH, agg) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	device_printf(sc->dev,
+	    "USB RXDMA configured: speed=%d mode=0x%02x aggregation=0x%04x\n",
+	    speed, rxdma, agg);
+	return (0);
+}
+
 static int
 rtw88_native_write_mask8(struct rtw88_native_softc *sc, uint16_t reg,
     uint8_t mask, uint8_t value)
@@ -810,9 +878,10 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 }
 
 /*
- * Configure DMA routing, the 3-endpoint FIFO page table and the 8822B
- * MAC/WMAC timing/filter defaults. RX DMA is not started and there is no
- * interface/packet path until a later net80211 stage.
+ * Configure DMA routing, the 3-endpoint FIFO page table, USB RXDMA burst/
+ * aggregation mode and the 8822B MAC/WMAC timing/filter defaults. The USB
+ * receive engine can collect aggregates after hardware start, but a wlan
+ * interface, channel/scan control and packet path still require net80211.
  */
 int
 rtw88_native_mac_init(struct rtw88_native_softc *sc)
@@ -832,6 +901,8 @@ rtw88_native_mac_init(struct rtw88_native_softc *sc)
 		error = rtw88_native_h2c_init(sc);
 	if (error == 0)
 		error = rtw88_native_8822b_mac_init(sc);
+	if (error == 0)
+		error = rtw88_native_usb_rx_dma_init(sc);
 	if (error != 0)
 		return (error);
 
