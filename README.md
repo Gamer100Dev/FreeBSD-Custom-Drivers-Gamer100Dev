@@ -1,34 +1,59 @@
 # FreeBSD Custom Drivers — Gamer100Dev
 
-A source workspace for native FreeBSD driver development, starting with the
-Realtek RTL8822BU USB Wi-Fi adapter (USB ID `0bda:b812`).
+Native FreeBSD driver development, currently focused on the Realtek
+RTL8822BU USB Wi-Fi adapter (USB ID `0bda:b812`).
 
-## Native FreeBSD RTW88 implementation
+## Native RTW88 driver
 
-Development is on `work/native-rtw88-usb`, separate from `main`:
+The default `main` branch contains the native implementation:
 
-- **Native driver source:** `sys/dev/rtw88_native/`
-- **Loadable module:** `sys/modules/rtw88_native/`
-- **Implementation status:** `docs/NATIVE-RTW88-STATUS.md`
+- Kernel driver: `sys/dev/rtw88_native/`
+- Module build: `sys/modules/rtw88_native/`
+- Linux RTW88 comparison source: `vendor/linux-master/`
+- Current implementation notes: `docs/NATIVE-RTW88-STATUS.md`
+- Boot and USB hotplug setup: `docs/NATIVE-RTW88-AUTOSTART.md`
 
-The native code now contains USB/control-transfer primitives, checked
-register access, RTL8822B DDMA firmware-download logic, USB-specific power
-sequencing, physical/logical eFuse decoding, permanent MAC/board-field
-extraction, 3-endpoint FIFO/page allocation, H2C ring setup, base MAC
-configuration, and continuous raw bulk-IN/interrupt-IN capture. The start
-sequence is explicit and is not called from USB attach. RX descriptor parsing,
-normal TX, native `net80211` integration and Wi-Fi operation remain
-unimplemented.
+The driver binds to the RTL8822BU through the FreeBSD USB PNP table and
+provides a native USB transport, firmware download, RTL8822B MAC/PHY
+initialization, RX parsing, TX descriptors, and net80211 station/monitor
+interfaces. Hardware initialization is deferred out of the kernel USB attach
+callback because firmware access requires the root filesystem to be ready.
 
-**It has not been compiled or hardware-tested yet.** This repository does not
-claim functional Wi-Fi until the FreeBSD 15.1 build and adapter tests pass.
+## Build and install
 
-## Upstream source
+On the FreeBSD machine, with a matching FreeBSD source tree:
+
+```sh
+tools/build-native-module.sh
+tools/install-native-autostart.sh
+```
+
+The installer places `if_rtw88_native.ko` in `/boot/modules`, installs the
+rc service and devd hotplug rule, and configures the default VAP parent
+`wlans_rtw88_native0="wlan0"`. Set `ifconfig_wlan0="WPA DHCP"` and keep the
+network credentials in `/etc/wpa_supplicant.conf`. Reboot after installing
+a replacement module.
+
+The rc service loads the module after filesystems are mounted and starts
+attached adapters before `netif`; devd handles USB insertion after boot. Once
+installed, a manual `sysctl dev.rtw88_native.0.hw_start=1` should not be
+required.
+
+## Performance and scope
+
+Ordinary data frames now use the firmware rate-adaptation path instead of
+being forced to a fixed 1-Mbps rate. Management and EAPOL frames keep their
+robust fixed rates.
+
+This is not yet feature-equivalent to Linux RTW88. USB TX aggregation,
+peer-negotiated HT/VHT rate masks, AMPDU, hardware crypto offload, and complete
+TX rate/status feedback remain follow-up work. Build and runtime validation
+must be performed on the target FreeBSD kernel and adapter; source changes
+alone are not evidence of a successful build or measured performance gain.
+
+## Upstream references
 
 - FreeBSD RTW88 snapshot: `sys/contrib/dev/rtw88/`
-- FreeBSD LinuxKPI USB source: `sys/compat/linuxkpi/common/`
-- Linux RTW88 comparison subset: `vendor/linux-master/`
-- Source revisions and import scope: `upstream/IMPORT-MANIFEST.md`
-
-The original LinuxKPI implementation remains as a reference/fallback. The
-native driver code in `sys/dev/rtw88_native/` uses FreeBSD kernel APIs.
+- FreeBSD LinuxKPI source: `sys/compat/linuxkpi/common/`
+- Linux RTW88 comparison source: `vendor/linux-master/`
+- Imported source revisions: `upstream/IMPORT-MANIFEST.md`
