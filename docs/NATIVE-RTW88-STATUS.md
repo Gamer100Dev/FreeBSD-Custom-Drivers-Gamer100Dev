@@ -240,7 +240,7 @@ ifconfig wlan0 list scan
 
 The net80211 software scanner now retains the requested active/passive flag.
 Active scans generate probe requests via `ic_raw_xmit`; passive scans only
-listen. The channel callback programs channels 1-13 as the scanner visits them.
+listen. The channel callback programs 2.4-GHz channels 1-13 and the advertised\n5-GHz 20-MHz channel centers as the scanner visits them. All 5-GHz channels\nare marked passive-only pending country/regulatory and TX-power support.
 
 The default net80211 station state machine also sends authentication and
 association management frames through `ic_raw_xmit`. Ordinary 802.11 data
