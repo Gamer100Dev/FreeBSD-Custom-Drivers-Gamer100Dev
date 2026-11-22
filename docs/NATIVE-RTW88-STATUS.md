@@ -317,8 +317,9 @@ data frame as TID0/BE. Linux RTW88 selects QSEL_HIGH for group-addressed data
 and uses the packet priority/TID for unicast data. The native path now mirrors
 that classification using FreeBSD `M_WME_GETAC()` and `WME_AC_TO_TID()`, and
 exposes frame-classification/QSEL diagnostics. EAPOL-tagged PAE traffic is
-also assigned the conservative 1-Mbps B/management rate profile, following
-FreeBSD net80211's M_EAPOL transmit guidance. Active probe TX has now produced 68 raw net80211 management-frame submissions
+also assigned the conservative 1-Mbps B/management rate profile on
+2.4 GHz and the 6-Mbps OFDM profile on 5 GHz, following FreeBSD net80211's
+M_EAPOL transmit guidance. Active probe TX has now produced 68 raw net80211 management-frame submissions
 in the latest user test, all 68 completing on USB bulk-OUT with no driver TX
 errors. The final observed frame-control was 0x00b0 (authentication request)
 and length 30 bytes. This still does not prove an over-the-air acknowledgement.
