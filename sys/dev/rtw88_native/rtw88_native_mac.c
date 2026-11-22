@@ -1071,6 +1071,23 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
+	/* Firmware requires the General Info and PHYDM Info H2C packets. */
+	sc->fw_h2c_seq = 0;
+	sc->fw_h2c_error = 0;
+	error = rtw88_native_firmware_send_initial_h2c(sc);
+	if (error != 0)
+		goto fail;
+
+	/* Route supported Wi-Fi-only RFE3 boards to the WLAN antenna/grants. */
+	error = rtw88_native_coex_wifi_only_init(sc);
+	if (error == ENOTSUP) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only RFE route not applicable to this eFuse/RF topology; leaving board route unchanged\n");
+		error = 0;
+	} else if (error != 0) {
+		goto fail;
+	}
+
 	/*
 	 * Register the net80211 radio before posting receive requests, matching
 	 * Linux RTW88's order (rtw_register_hw() before rtw_usb_setup_rx()).
@@ -1095,6 +1112,8 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	return (0);
 
 fail:
+	sc->wifi_only_coex_initialized = 0;
+	sc->scan_igi_valid = 0;
 	mtx_lock(&sc->mtx);
 	sc->tx_enabled = 0;
 	mtx_unlock(&sc->mtx);
@@ -1155,6 +1174,11 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
 	sc->current_channel = 0;
+	sc->wifi_only_coex_initialized = 0;
+	mtx_lock(&sc->mtx);
+	sc->scan_igi_valid = 0;
+	sc->scan_igi_saved = 0;
+	mtx_unlock(&sc->mtx);
 	rtw88_native_firmware_put(sc);
 }
 

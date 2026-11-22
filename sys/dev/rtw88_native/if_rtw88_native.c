@@ -273,11 +273,16 @@ rtw88_native_scan_start(struct ieee80211com *ic)
 {
 	struct rtw88_native_softc *sc;
 	const char *mode;
+	int error;
 
 	sc = ic->ic_softc;
 	mode = (ic->ic_scan != NULL &&
 	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0) ?
 	    "active" : "passive";
+	error = rtw88_native_phy_scan_gain(sc, 1);
+	if (error != 0)
+		device_printf(sc->dev,
+		    "could not enable scan receive coverage: %d\n", error);
 	device_printf(sc->dev,
 	    "starting %s dual-band scan (2.4/5-GHz, 20-MHz channels)\n", mode);
 }
@@ -286,8 +291,13 @@ static void
 rtw88_native_scan_end(struct ieee80211com *ic)
 {
 	struct rtw88_native_softc *sc;
+	int error;
 
 	sc = ic->ic_softc;
+	error = rtw88_native_phy_scan_gain(sc, 0);
+	if (error != 0)
+		device_printf(sc->dev,
+		    "could not restore receive gain after scan: %d\n", error);
 	device_printf(sc->dev, "net80211 scan finished\n");
 }
 
@@ -1232,6 +1242,27 @@ rtw88_native_attach(device_t dev)
 	    "rx_last_disassoc_reason", CTLFLAG_RD,
 	    &sc->rx_last_disassoc_reason, 0,
 	    "Reason code in the most recent received disassociation frame");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_general_count", CTLFLAG_RD, &sc->fw_h2c_general_count, 0,
+	    "Successfully transferred firmware General Info H2C packets");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_phydm_count", CTLFLAG_RD, &sc->fw_h2c_phydm_count, 0,
+	    "Successfully transferred firmware PHYDM Info H2C packets");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_error_count", CTLFLAG_RD, &sc->fw_h2c_error_count, 0,
+	    "Failed firmware H2C USB transfers");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_error", CTLFLAG_RD, &sc->fw_h2c_error, 0,
+	    "Last firmware H2C transfer error code");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "wifi_only_coex_initialized", CTLFLAG_RD,
+	    &sc->wifi_only_coex_initialized, 0,
+	    "Whether the RTL8822B Wi-Fi-only WLAN antenna/grant route is active");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_probe_resp_count", CTLFLAG_RD, &sc->rx_probe_resp_count, 0,

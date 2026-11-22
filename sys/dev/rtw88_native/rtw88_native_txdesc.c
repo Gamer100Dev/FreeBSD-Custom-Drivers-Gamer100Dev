@@ -98,8 +98,9 @@ rtw88_native_txdesc_build(uint8_t *desc, size_t desc_size,
 
 	if (desc == NULL || p == NULL || desc_size < TXD_SIZE)
 		return (EINVAL);
-	if (p->descriptor_offset < TXD_SIZE ||
-	    p->queue_select > 0x1f || p->rate_id > 0x1f ||
+	if ((p->descriptor_offset < TXD_SIZE &&
+	    !(p->queue_select == RTW88_NATIVE_TXQSEL_H2C &&
+	    p->descriptor_offset == 0)) || p->queue_select > 0x1f || p->rate_id > 0x1f ||
 	    p->security_type > 0x03 || p->packet_offset > 0x1f ||
 	    p->ampdu_density > 0x07 || p->hw_ssn_select > 0x03 ||
 	    p->ampdu_factor > 0x1f || p->data_rate > 0x7f ||

@@ -369,3 +369,19 @@ The shutdown interlock distinguishes an actual hardware stop from an ordinary
 channel/diagnostic register operation: link teardown waits for ordinary
 hardware work to finish, but clears cached link state without waiting on the
 stop operation that is itself stopping the VAP.
+
+
+## Firmware H2C and Wi-Fi-only RF initialization
+
+Hardware start sends the RTL8822B General Info (H2C 0x0d) and PHYDM Info
+(H2C 0x11) packets after MAC/PHY setup and before net80211 exposes a station
+VAP. These use QSEL 19. RTW88 specifies descriptor offset zero for H2C, so the
+TX descriptor validator permits zero only for that queue. Firmware H2C counters
+measure USB transfer completion, not firmware acceptance or over-air TX.
+
+For supported RFE option 3 / 2T2R boards, startup configures the WLAN-only
+LTE grant and antenna-switch path. Unsupported eFuse/RF combinations are
+explicitly skipped; register I/O failures abort startup. PHY bring-up also
+initializes EDCCA thresholds, and scan start temporarily applies RTW88's
+maximum receive-coverage IGI before restoring the previous gain on scan end.
+Physical connection and EAPOL operation still require hardware validation.

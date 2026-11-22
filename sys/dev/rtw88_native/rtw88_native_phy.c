@@ -1091,6 +1091,392 @@ rtw88_native_phy_set_channel(struct rtw88_native_softc *sc, uint8_t channel)
 }
 
 /*
+ * Linux RTW88's rtw_phy_dig_set_max_coverage() writes DIG_CVRG_MIN (0x1c)
+ * to both 8822B receive paths while scanning. Restore the pre-scan Path-A
+ * IGI on scan completion, matching rtw_phy_dig_reset().
+ */
+int
+rtw88_native_phy_scan_gain(struct rtw88_native_softc *sc, int enable)
+{
+	uint32_t igi_a;
+	uint8_t saved;
+	int error;
+
+	if (sc == NULL || (enable != 0 && enable != 1))
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->powered ||
+	    !sc->phy_initialized) {
+		mtx_unlock(&sc->mtx);
+		return (EAGAIN);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	if ((enable && sc->scan_igi_valid) ||
+	    (!enable && !sc->scan_igi_valid)) {
+		mtx_unlock(&sc->mtx);
+		return (0);
+	}
+	sc->hw_busy = 1;
+	saved = sc->scan_igi_saved;
+	mtx_unlock(&sc->mtx);
+
+	error = 0;
+	if (enable) {
+		if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
+		    USB_ERR_NORMAL_COMPLETION) {
+			error = EIO;
+		} else {
+			saved = (uint8_t)(igi_a & CH_BIT_MAC_RXIGI);
+			/*
+			 * DIG_CVRG_MIN=0x1c is the upstream RTW88 coverage
+			 * setting. Lower IGI means higher receive gain.
+			 */
+			error = rtw88_native_phy_write_mask32(sc,
+			    REG_CH_RXIGI_A, CH_BIT_MAC_RXIGI, 0x1c);
+			if (error == 0)
+				error = rtw88_native_phy_write_mask32(sc,
+				    REG_CH_RXIGI_B, CH_BIT_MAC_RXIGI, 0x1c);
+			if (error != 0) {
+				(void)rtw88_native_phy_write_mask32(sc,
+				    REG_CH_RXIGI_A, CH_BIT_MAC_RXIGI, saved);
+				(void)rtw88_native_phy_write_mask32(sc,
+				    REG_CH_RXIGI_B, CH_BIT_MAC_RXIGI, saved);
+			}
+		}
+	} else {
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+		    CH_BIT_MAC_RXIGI, saved);
+		if (error == 0)
+			error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+			    CH_BIT_MAC_RXIGI, saved);
+	}
+
+	mtx_lock(&sc->mtx);
+	if (error == 0) {
+		if (enable) {
+			sc->scan_igi_saved = saved;
+			sc->scan_igi_valid = 1;
+		} else {
+			sc->scan_igi_valid = 0;
+		}
+	}
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+	return (error);
+}
+
+
+/*
+ * RTL8822B adaptivity/EDCCA initialization from upstream
+ * rtw8822b_adaptivity_init(). Leaving these registers at reset defaults
+ * makes receive CCA behaviour board/firmware dependent.
+ */
+static int
+rtw88_native_phy_adaptivity_init(struct rtw88_native_softc *sc)
+{
+	int error;
+
+	/* EDCCA L2H/H2L thresholds are the low/high bytes of REG 0x08a4. */
+	error = rtw88_native_phy_write_mask32(sc, 0x08a4, 0x000000ffU,
+	    0x7f);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x08a4,
+		    0x0000ff00U, 0x7f);
+	/* Enable MAC EDCCA gating and its countdown source. */
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x0520,
+		    1U << 15, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x0524,
+		    1U << 11, 1);
+	/* RTL8822B default EDCCA source = 1. */
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x0944,
+		    3U << 28, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x08a0,
+		    3U, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, 0x08dc,
+		    1U << 5, 1);
+
+	return (error);
+}
+
+
+/*
+ * RTL8822B LTE coexistence indirect-register interface, as used by Linux
+ * RTW88 util.c. The Wi-Fi-only RFE path still needs its grant state and
+ * external-antenna switch routed to WLAN even when Bluetooth coexistence is
+ * disabled in eFuse.
+ */
+#define REG_LTECOEX_ACCESS_CTRL		0x1700
+#define REG_LTECOEX_WRITE_DATA		0x1704
+#define REG_LTECOEX_READ_DATA		0x1708
+#define REG_SYS_SDIO_CTRL			0x0070
+#define REG_LED_CFG			0x004c
+#define REG_RFE_CTRL_E			0x0974
+#define REG_RFE_CTRL8			0x0cb4
+#define REG_RFE_INV8			0x0cbd
+#define REG_RFE_INV16			0x0cbe
+#define REG_RFESEL_CTRL			0x1990
+#define REG_WIFI_BT_INFO			0x00aa
+#define REG_BT_COEX_TABLE_H			0x06cc
+#define REG_BT_COEX_TABLE_H3			0x06cf
+#define REG_BT_TDMA_TIME			0x0790
+#define REG_BT_STAT_CTRL			0x0778
+#define REG_GPIO_MUXCFG			0x0040
+#define REG_QUEUE_CTRL			0x04c6
+#define REG_BT_COEX_V2			0x0762
+
+#define LTECOEX_READY			(1U << 29)
+#define BIT_LTE_MUX_CTRL_PATH		(1U << 26)
+#define BIT_LTE_COEX_EN			(1U << 7)
+#define BIT_RFE_BUF_EN			(1U << 3)
+#define BIT_BT_INT_EN			(1U << 15)
+#define BIT_BT_PTA_EN			(1U << 5)
+#define BIT_PO_BT_PTA_PINS		(1U << 9)
+#define BIT_PTA_WL_TX_EN		(1U << 4)
+#define BIT_PTA_EDCCA_EN		(1U << 5)
+#define BIT_GNT_BT_POLARITY		(1U << 12)
+
+static int
+rtw88_native_ltecoex_wait_ready(struct rtw88_native_softc *sc)
+{
+	uint32_t value;
+	int i;
+
+	for (i = 0; i < 1000; i++) {
+		if (rtw88_native_reg_read32(sc, REG_LTECOEX_ACCESS_CTRL,
+		    &value) != USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		if ((value & LTECOEX_READY) != 0)
+			return (0);
+		DELAY(10);
+	}
+	return (ETIMEDOUT);
+}
+
+static int
+rtw88_native_ltecoex_read(struct rtw88_native_softc *sc, uint16_t offset,
+    uint32_t *value)
+{
+	int error;
+
+	if (value == NULL)
+		return (EINVAL);
+	error = rtw88_native_ltecoex_wait_ready(sc);
+	if (error != 0)
+		return (error);
+	if (rtw88_native_reg_write32(sc, REG_LTECOEX_ACCESS_CTRL,
+	    0x800f0000U | offset) != USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, REG_LTECOEX_READ_DATA, value) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	return (0);
+}
+
+static int
+rtw88_native_ltecoex_write(struct rtw88_native_softc *sc, uint16_t offset,
+    uint32_t value)
+{
+	int error;
+
+	error = rtw88_native_ltecoex_wait_ready(sc);
+	if (error != 0)
+		return (error);
+	if (rtw88_native_reg_write32(sc, REG_LTECOEX_WRITE_DATA, value) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_LTECOEX_ACCESS_CTRL,
+	    0xc00f0000U | offset) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	return (0);
+}
+
+static int
+rtw88_native_ltecoex_write_mask(struct rtw88_native_softc *sc,
+    uint16_t offset, uint32_t mask, uint32_t value)
+{
+	uint32_t old, shift;
+	int error;
+
+	if (mask == 0)
+		return (EINVAL);
+	error = rtw88_native_ltecoex_read(sc, offset, &old);
+	if (error != 0)
+		return (error);
+	shift = __builtin_ctz(mask);
+	old = (old & ~mask) | ((value << shift) & mask);
+	return (rtw88_native_ltecoex_write(sc, offset, old));
+}
+
+static int
+rtw88_native_phy_write_mask8(struct rtw88_native_softc *sc, uint16_t reg,
+    uint8_t mask, uint8_t value)
+{
+	uint8_t old;
+
+	if (rtw88_native_reg_read8(sc, reg, &old) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	old = (old & ~mask) | (value & mask);
+	return (rtw88_native_reg_write8(sc, reg, old) ==
+	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO);
+}
+
+/*
+ * Linux calls rtw_coex_init_hw_config(wifi_only=true) for this board.
+ * Port only the required 8822B RFE routing and grant programming: no
+ * Bluetooth profile scheduler, PTA TDMA or BT firmware commands are enabled.
+ *
+ * For RFE option 3, the upstream driver selects the WLAN DPDT path by BBSW,
+ * drives GNT_BT low / GNT_WL high, selects the WLG route (0x77) and sets its
+ * inversion value (0x2). The existing RFESEL0/8 and RFEINV values remain
+ * preserved by masked writes.
+ */
+int
+rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
+{
+	uint32_t value;
+	int error;
+
+	if (sc == NULL || !sc->powered || !sc->firmware_running ||
+	    !sc->phy_initialized || sc->dying)
+		return (EINVAL);
+	if (sc->efuse.rfe_option != 3 || sc->rf_path_num != 2 ||
+	    sc->antenna_tx != BB_PATH_AB || sc->antenna_rx != BB_PATH_AB)
+		return (ENOTSUP);
+	if ((sc->efuse.rf_board_option & 0xe0U) == 0x20U)
+		return (ENOTSUP); /* Full BT coexistence is not implemented. */
+	if (sc->wifi_only_coex_initialized)
+		return (0);
+
+	/* rtw8822b_coex_cfg_rfe_type(): select the 8822B RFE signal path. */
+	error = rtw88_native_reg_write8(sc, REG_RFE_CTRL_E, 0xff) ==
+	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc,
+		    REG_RFESEL_CTRL + 1, 0x03, 0x00);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV16,
+		    BIT_RFE_BUF_EN, 0x00);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Linux disables LTE coexistence, then sets both WLAN/BT-vs-LTE
+	 * direction masks to all ones. Keep these indirect writes checked.
+	 */
+	error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+	    BIT_LTE_COEX_EN, 0);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x00a0,
+		    0x0000ffffU, 0xffff);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x00a4,
+		    0x0000ffffU, 0xffff);
+
+	/* COEX_SET_ANT_WONLY: grants are fixed to WLAN for this Wi-Fi-only board. */
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x0000c000U, 0x1);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x00000c00U, 0x1);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x00003000U, 0x3);
+	if (error == 0)
+		error = rtw88_native_ltecoex_write_mask(sc, 0x0038,
+		    0x00000300U, 0x3);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only LTE grant configuration failed: %d\n", error);
+		return (error);
+	}
+
+	/*
+	 * rtw8822b_coex_cfg_init(): initialise the shared grant/antenna GPIO,
+	 * WLAN-to-PTA indication and BT statistics sampling registers. These
+	 * are common 8822B setup writes and are also performed in wifi_only mode.
+	 */
+	error = rtw88_native_phy_write_mask8(sc, REG_BT_TDMA_TIME,
+	    0x3f, 0x05);
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_BT_STAT_CTRL, 0x01) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_GPIO_MUXCFG,
+		    BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS,
+		    BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_QUEUE_CTRL,
+		    BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN,
+		    BIT_PTA_WL_TX_EN);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_BT_COEX_V2,
+		    BIT_GNT_BT_POLARITY, BIT_GNT_BT_POLARITY);
+	/* Linux gives ACK/BA/CTS, beacon and beacon-queue traffic high priority. */
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc,
+		    REG_BT_COEX_TABLE_H, (1U << 3) | (1U << 4),
+		    (1U << 3) | (1U << 4));
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc,
+		    REG_BT_COEX_TABLE_H3, (1U << 3), (1U << 3));
+	if (error != 0)
+		return (error);
+
+	/* COEX_SET_ANT_WONLY: grant path control to WLAN. 8822B has no btg_reg. */
+	if (rtw88_native_phy_write_mask8(sc, REG_SYS_SDIO_CTRL + 3,
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24),
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) != 0)
+		return (EIO);
+
+	/*
+	 * rtw8822b_coex_cfg_ant_switch(BBSW, WLG): LED_CFG[23]=0,
+	 * LED_CFG[24]=1, RFE_CTRL8[7:0]=0x77, RFE_INV8[1:0]=2.
+	 */
+	error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 2,
+	    0x80, 0x00);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 3,
+		    0x01, 0x01);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_CTRL8,
+		    0xff, 0x77);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV8,
+		    0x03, 0x02);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * COEX_SCBD_ACTIVE | COEX_SCBD_ONOFF: tell firmware that WLAN is
+	 * active and its radio is enabled. This is the Wi-Fi-only scoreboard
+	 * state written by Linux after the WONLY antenna path is selected.
+	 */
+	if (rtw88_native_reg_write16(sc, REG_WIFI_BT_INFO,
+	    BIT_BT_INT_EN | 0x0003) != USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/* Read the LTE control register once more to ensure the path is ready. */
+	error = rtw88_native_ltecoex_read(sc, 0x0038, &value);
+	if (error != 0)
+		return (error);
+	sc->wifi_only_coex_initialized = 1;
+	device_printf(sc->dev,
+	    "RTL8822B Wi-Fi-only RFE route active: WLAN grants, WLG antenna path, LTE control=0x%08x\n",
+	    value);
+	return (0);
+}
+
+
+/*
  * USB-specific RTL8822B PHY bring-up in the same order as upstream
  * rtw8822b_phy_set_param(): enable BB/RF domains, release RX path selection,
  * load MAC/BB/AGC and both RF path tables, apply eFuse crystal trim, then
@@ -1224,6 +1610,8 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 
 	error = rtw88_native_phy_config_trx_mode(sc,
 	    sc->antenna_tx, sc->antenna_rx);
+	if (error == 0)
+		error = rtw88_native_phy_adaptivity_init(sc);
 	if (error != 0)
 		return (error);
 

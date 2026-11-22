@@ -685,6 +685,153 @@ rtw88_native_fw_start(struct rtw88_native_softc *sc)
 	return (0);
 }
 
+#define RTW88_NATIVE_H2C_PACKET_SIZE		32U
+#define RTW88_NATIVE_H2C_HEADER_SIZE		8U
+#define RTW88_NATIVE_H2C_CATEGORY		1U
+#define RTW88_NATIVE_H2C_COMMAND_ID		0xffU
+#define RTW88_NATIVE_H2C_GENERAL_INFO		0x0dU
+#define RTW88_NATIVE_H2C_PHYDM_INFO		0x11U
+#define RTW88_NATIVE_TXQSEL_H2C			19U
+#define RTW88_NATIVE_FW_RF_2T2R			2U
+
+static void
+rtw88_native_fw_h2c_put32(uint8_t packet[RTW88_NATIVE_H2C_PACKET_SIZE],
+    unsigned int word, uint32_t value)
+{
+	value = htole32(value);
+	memcpy(packet + (word * sizeof(value)), &value, sizeof(value));
+}
+
+/*
+ * Send a 32-byte firmware-offload H2C packet using the same USB path as
+ * Linux rtw_usb_write_data_h2c(): prepend the 48-byte 8822B TX descriptor,
+ * select queue 19 (H2C), and route it through bulk-OUT endpoint 0 / EP 0x05.
+ * A synchronous completion keeps the packet and descriptor alive until the
+ * host controller has finished transferring them.
+ */
+static int
+rtw88_native_fw_send_h2c_packet(struct rtw88_native_softc *sc,
+    const uint8_t packet[RTW88_NATIVE_H2C_PACKET_SIZE])
+{
+	struct rtw88_native_txdesc_params params;
+	uint8_t tx_packet[RTW88_NATIVE_TX_DESC_SIZE +
+	    RTW88_NATIVE_H2C_PACKET_SIZE];
+	usb_error_t uerr;
+	uint16_t sequence;
+	uint8_t tx_queue;
+
+	if (sc == NULL || packet == NULL || !sc->firmware_running ||
+	    !sc->mac_initialized || !sc->phy_initialized ||
+	    !sc->xfers_initialized || sc->dying)
+		return (EINVAL);
+	tx_queue = sc->qsel_to_ep[RTW88_NATIVE_TXQSEL_H2C];
+	if (tx_queue >= RTW88_NATIVE_TX_QUEUES)
+		return (ENOTSUP);
+
+	bzero(&params, sizeof(params));
+	params.packet_size = RTW88_NATIVE_H2C_PACKET_SIZE;
+	params.descriptor_offset = 0;
+	params.queue_select = RTW88_NATIVE_TXQSEL_H2C;
+
+	bzero(tx_packet, sizeof(tx_packet));
+	if (rtw88_native_txdesc_build(tx_packet,
+	    RTW88_NATIVE_TX_DESC_SIZE, &params) != 0)
+		return (EINVAL);
+	memcpy(tx_packet + RTW88_NATIVE_TX_DESC_SIZE, packet,
+	    RTW88_NATIVE_H2C_PACKET_SIZE);
+
+	sequence = sc->fw_h2c_seq;
+	uerr = rtw88_native_usb_tx_sync(sc, tx_queue, tx_packet,
+	    sizeof(tx_packet));
+	/* Linux advances the offload sequence after each attempted H2C packet. */
+	sc->fw_h2c_seq = (uint16_t)(sequence + 1);
+	if (uerr != USB_ERR_NORMAL_COMPLETION) {
+		sc->fw_h2c_error_count++;
+		sc->fw_h2c_error = (int)uerr;
+		device_printf(sc->dev,
+		    "firmware H2C transfer failed: seq=%u qsel=%u usb_error=%d\n",
+		    (unsigned int)sequence, RTW88_NATIVE_TXQSEL_H2C, (int)uerr);
+		return (EIO);
+	}
+	sc->fw_h2c_error = 0;
+	return (0);
+}
+
+/*
+ * Linux main.c sends both offload packets after USB HCI start. General Info
+ * advertises the reserved firmware TX buffer boundary; PHYDM Info identifies
+ * the RFE network, RF topology, silicon cut and active antenna paths. The
+ * RTL8822BU in this project is 2T2R / RFE option 3.
+ */
+int
+rtw88_native_firmware_send_initial_h2c(struct rtw88_native_softc *sc)
+{
+	uint8_t packet[RTW88_NATIVE_H2C_PACKET_SIZE];
+	uint32_t dword0, dword1, dword2;
+	uint16_t fw_boundary;
+	int error;
+
+	if (sc == NULL || !sc->firmware_running || !sc->mac_initialized ||
+	    !sc->phy_initialized || !sc->xfers_initialized ||
+	    sc->bulkout_num != 3 || sc->dying)
+		return (EINVAL);
+
+	if (sc->rsvd_fw_txbuf_addr <= sc->rsvd_boundary)
+		return (EINVAL);
+	fw_boundary = sc->rsvd_fw_txbuf_addr - sc->rsvd_boundary;
+	if (fw_boundary > 0xff)
+		return (ERANGE);
+
+	/* H2C_PKT_GENERAL_INFO (0x0d), total length 8 + 4 bytes. */
+	bzero(packet, sizeof(packet));
+	dword0 = RTW88_NATIVE_H2C_CATEGORY |
+	    (RTW88_NATIVE_H2C_COMMAND_ID << 8) |
+	    (RTW88_NATIVE_H2C_GENERAL_INFO << 16);
+	dword1 = (RTW88_NATIVE_H2C_HEADER_SIZE + 4U) |
+	    ((uint32_t)sc->fw_h2c_seq << 16);
+	dword2 = (uint32_t)fw_boundary << 16;
+	rtw88_native_fw_h2c_put32(packet, 0, dword0);
+	rtw88_native_fw_h2c_put32(packet, 1, dword1);
+	rtw88_native_fw_h2c_put32(packet, 2, dword2);
+
+	error = rtw88_native_fw_send_h2c_packet(sc, packet);
+	if (error != 0)
+		return (error);
+	sc->fw_h2c_general_count++;
+
+	/* H2C_PKT_PHYDM_INFO (0x11), total length 8 + 8 bytes. */
+	bzero(packet, sizeof(packet));
+	dword0 = RTW88_NATIVE_H2C_CATEGORY |
+	    (RTW88_NATIVE_H2C_COMMAND_ID << 8) |
+	    (RTW88_NATIVE_H2C_PHYDM_INFO << 16);
+	dword1 = (RTW88_NATIVE_H2C_HEADER_SIZE + 8U) |
+	    ((uint32_t)sc->fw_h2c_seq << 16);
+	dword2 = (uint32_t)sc->efuse.rfe_option |
+	    ((uint32_t)(sc->rf_path_num > 1 ?
+	    RTW88_NATIVE_FW_RF_2T2R : 4U) << 8) |
+	    ((uint32_t)sc->cut_version << 16) |
+	    ((uint32_t)(sc->antenna_tx & 0x0fU) << 24) |
+	    ((uint32_t)(sc->antenna_rx & 0x0fU) << 28);
+	rtw88_native_fw_h2c_put32(packet, 0, dword0);
+	rtw88_native_fw_h2c_put32(packet, 1, dword1);
+	rtw88_native_fw_h2c_put32(packet, 2, dword2);
+	rtw88_native_fw_h2c_put32(packet, 3, 0);
+
+	error = rtw88_native_fw_send_h2c_packet(sc, packet);
+	if (error != 0)
+		return (error);
+	sc->fw_h2c_phydm_count++;
+	device_printf(sc->dev,
+	    "firmware initial H2C complete: general=%u PHYDM=%u boundary=%u RF=%uT%uR RFE=%u cut=%u\n",
+	    (unsigned int)sc->fw_h2c_general_count,
+	    (unsigned int)sc->fw_h2c_phydm_count,
+	    (unsigned int)fw_boundary, (unsigned int)sc->rf_path_num,
+	    (unsigned int)sc->rf_path_num, (unsigned int)sc->efuse.rfe_option,
+	    (unsigned int)sc->cut_version);
+	return (0);
+}
+
+
 /*
  * Complete the RTL8822B (3081 MCU) DDMA firmware transfer and ready check.
  * This deliberately runs only when explicitly requested by the future
