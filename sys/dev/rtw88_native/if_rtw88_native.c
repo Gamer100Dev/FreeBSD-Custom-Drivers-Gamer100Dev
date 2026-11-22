@@ -553,10 +553,16 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc,
 	m_copydata(m, 0, sizeof(whbuf), (caddr_t)&whbuf);
 	if ((whbuf.i_fc[1] & IEEE80211_FC1_PROTECTED) != 0) {
 		if (ieee80211_crypto_encap(ni, m) == NULL) {
+			mtx_lock(&sc->mtx);
+			sc->tx_crypto_error_count++;
+			mtx_unlock(&sc->mtx);
 			device_printf(sc->dev,
 			    "software TX crypto encapsulation failed for protected frame\n");
 			return (ENOBUFS);
 		}
+		mtx_lock(&sc->mtx);
+		sc->tx_crypto_count++;
+		mtx_unlock(&sc->mtx);
 		if (m->m_pkthdr.len >
 		    20 * 1024 - RTW88_NATIVE_TX_DESC_SIZE)
 			return (EFBIG);
@@ -1649,6 +1655,14 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_eapol_count", CTLFLAG_RD, &sc->tx_eapol_count, 0,
 	    "EAPOL frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_crypto_count", CTLFLAG_RD, &sc->tx_crypto_count, 0,
+	    "Protected TX frames successfully software-encrypted by net80211");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_crypto_error_count", CTLFLAG_RD, &sc->tx_crypto_error_count, 0,
+	    "Protected TX frames rejected by net80211 software crypto");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_probe_req_count", CTLFLAG_RD, &sc->tx_probe_req_count, 0,
