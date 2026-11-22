@@ -5,6 +5,16 @@ Development branch: `main`
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
 
+## Latest user-reported runtime result (2026-11-22)
+
+The user confirmed the native Wi-Fi connection reached the internet with
+Ethernet disconnected. Their reported speed test was 4.1 Mbps download,
+4.3 Mbps upload and 36 ms latency (Sofia server). This verifies usable
+end-to-end connectivity for that test, but it is not a controlled driver
+benchmark. The subsequent automatic-start and firmware rate-adaptation
+changes documented below have not yet been built or tested on the target
+machine.
+
 ## Implemented in source
 
 ### USB and register layer
