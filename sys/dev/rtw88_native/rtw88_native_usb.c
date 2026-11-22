@@ -35,6 +35,8 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	static const uint8_t eapol_snap[8] = {
 		0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e
 	};
+	static const uint8_t broadcast_addr[IEEE80211_ADDR_LEN] =
+	    { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	struct ieee80211_rx_stats rxs;
 	struct ieee80211_frame *wh;
 	struct mbuf *m;
@@ -101,7 +103,7 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	 * reception and frames addressed to this station.
 	 */
 	if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
-		if (IEEE80211_ADDR_EQ(wh->i_addr1, etherbroadcastaddr))
+		if (IEEE80211_ADDR_EQ(wh->i_addr1, broadcast_addr))
 			sc->rx_ra_broadcast_count++;
 		else
 			sc->rx_ra_multicast_count++;
