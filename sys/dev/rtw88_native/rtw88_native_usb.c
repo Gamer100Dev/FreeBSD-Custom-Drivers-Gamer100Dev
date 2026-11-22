@@ -93,6 +93,24 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	fc0 = wh->i_fc[0];
 	fc1 = wh->i_fc[1];
 
+	/*
+	 * Classify the 802.11 receiver address (addr1), not the Ethernet
+	 * destination. In STA ToDS traffic these differ: DHCP/IP broadcasts
+	 * are sent to the AP's unicast BSSID in addr1 and carry the group
+	 * destination in addr3. These counters identify actual unicast
+	 * reception and frames addressed to this station.
+	 */
+	if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
+		if (IEEE80211_ADDR_EQ(wh->i_addr1, etherbroadcastaddr))
+			sc->rx_ra_broadcast_count++;
+		else
+			sc->rx_ra_multicast_count++;
+	} else {
+		sc->rx_ra_unicast_count++;
+		if (IEEE80211_ADDR_EQ(wh->i_addr1, sc->ic.ic_macaddr))
+			sc->rx_to_self_count++;
+	}
+
 	/* Classify received management responses before net80211 consumes them. */
 	if ((fc0 & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT) {
 		switch (fc0 & IEEE80211_FC0_SUBTYPE_MASK) {
