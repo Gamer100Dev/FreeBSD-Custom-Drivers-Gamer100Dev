@@ -73,24 +73,44 @@ static void
 rtw88_native_getradiocaps(struct ieee80211com *ic, int maxchans, int *nchans,
     struct ieee80211_channel chans[])
 {
-	uint8_t bands[IEEE80211_MODE_BYTES];
-	int count, i, out;
+	static const uint8_t chan_5g_band1[] =
+	    { 36, 40, 44, 48, 52, 56, 60, 64 };
+	static const uint8_t chan_5g_band2[] =
+	    { 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140 };
+	static const uint8_t chan_5g_band3[] = { 149, 153, 157, 161 };
+	uint8_t bands_2g[IEEE80211_MODE_BYTES];
+	uint8_t bands_5g[IEEE80211_MODE_BYTES];
+	int count, i;
 
 	(void)ic;
-	bzero(bands, sizeof(bands));
-	setbit(bands, IEEE80211_MODE_11B);
-	setbit(bands, IEEE80211_MODE_11G);
+	bzero(bands_2g, sizeof(bands_2g));
+	bzero(bands_5g, sizeof(bands_5g));
+	setbit(bands_2g, IEEE80211_MODE_11B);
+	setbit(bands_2g, IEEE80211_MODE_11G);
+	setbit(bands_5g, IEEE80211_MODE_11A);
 	count = 0;
 	(void)ieee80211_add_channels_default_2ghz(chans, maxchans, &count,
-	    bands, 0);
+	    bands_2g, 0);
+	(void)ieee80211_add_channel_list_5ghz(chans, maxchans, &count,
+	    chan_5g_band1, nitems(chan_5g_band1), bands_5g, 0);
+	(void)ieee80211_add_channel_list_5ghz(chans, maxchans, &count,
+	    chan_5g_band2, nitems(chan_5g_band2), bands_5g, 0);
+	(void)ieee80211_add_channel_list_5ghz(chans, maxchans, &count,
+	    chan_5g_band3, nitems(chan_5g_band3), bands_5g, 0);
 
-	/* This bring-up port only tunes channels 1-13 at 20 MHz. */
-	out = 0;
+	/*
+	 * Without a decoded country/regulatory profile and calibrated 5-GHz
+	 * transmit-power tables, scan 5-GHz channels passively. DFS channels
+	 * (52-140) are explicitly flagged as DFS as well as passive-only.
+	 */
 	for (i = 0; i < count; i++) {
-		if (chans[i].ic_ieee >= 1 && chans[i].ic_ieee <= 13)
-			chans[out++] = chans[i];
+		if (IEEE80211_IS_CHAN_5GHZ(&chans[i])) {
+			chans[i].ic_flags |= IEEE80211_CHAN_PASSIVE;
+			if (chans[i].ic_ieee >= 52 && chans[i].ic_ieee <= 140)
+				chans[i].ic_flags |= IEEE80211_CHAN_DFS;
+		}
 	}
-	*nchans = out;
+	*nchans = count;
 }
 
 static struct ieee80211vap *
@@ -147,7 +167,7 @@ rtw88_native_scan_start(struct ieee80211com *ic)
 	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0) ?
 	    "active" : "passive";
 	device_printf(sc->dev,
-	    "starting %s 2.4-GHz scan (channels 1-13)\n", mode);
+	    "starting %s dual-band scan (2.4/5-GHz, 20-MHz channels)\n", mode);
 }
 
 static void
@@ -350,7 +370,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
 	uint8_t type;
-	int ac;
+	int ac, channel;
 	uint16_t seqctl;
 	usb_error_t uerr;
 	int error;
@@ -404,6 +424,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 
 	/* Snapshot frame classification before the sleepable USB transmit. */
 	mtx_lock(&sc->mtx);
+	channel = sc->current_channel;
 	sc->tx_last_qsel = qsel;
 	sc->tx_last_endpoint = endpoint;
 	sc->tx_last_frame_control = (int)wh->i_fc[0] |
@@ -450,11 +471,14 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.mac_id = 0;
 	params.queue_select = qsel;
 	/*
-	 * Use the 2.4-GHz B rate table for management and EAPOL frames at 1 Mbps;
-	 * the FreeBSD net80211 M_EAPOL tag identifies PAE traffic that should use
-	 * the robust management rate. Ordinary data uses the BG legacy table.
+	 * CCK is not permitted in 5 GHz. Use the mandatory 6-Mbps OFDM
+	 * basic rate with the 11a/G rate mask there; retain the 1-Mbps
+	 * 802.11b profile for 2.4-GHz management and EAPOL traffic.
 	 */
-	if (type == IEEE80211_FC0_TYPE_MGT ||
+	if (channel >= 36) {
+		params.rate_id = 7;	/* RTW_RATEID_G / 11a OFDM */
+		params.data_rate = 4;	/* DESC_RATE6M */
+	} else if (type == IEEE80211_FC0_TYPE_MGT ||
 	    type == IEEE80211_FC0_TYPE_CTL ||
 	    (m->m_flags & M_EAPOL) != 0) {
 		params.rate_id = 8;	/* RTW_RATEID_B_20M */
@@ -557,7 +581,9 @@ rtw88_native_parent(struct ieee80211com *ic)
 /*
  * Attach a minimal native net80211 radio after firmware and PHY startup have
  * completed. A user-created wlan VAP will then be visible to ifconfig and can
- * use the standard software scan cache. Only 2.4-GHz channels 1-13 are exposed.
+ * use the standard software scan cache. It exposes 2.4-GHz and 20-MHz 5-GHz
+ * channels; 5-GHz scan channels are passive until regulatory and power limits
+ * are implemented.
  */
 int
 rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
@@ -579,6 +605,7 @@ rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
 	    IEEE80211_C_WPA;
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11B);
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11G);
+	setbit(ic->ic_modecaps, IEEE80211_MODE_11A);
 	rtw88_native_getradiocaps(ic, IEEE80211_CHAN_MAX,
 	    &ic->ic_nchans, ic->ic_channels);
 	if (ic->ic_nchans == 0)
@@ -603,7 +630,7 @@ rtw88_native_net80211_attach(struct rtw88_native_softc *sc)
 	sc->net80211_attached = 1;
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev,
-	    "net80211 radio attached as %s (2.4 GHz ch 1-13; management/data TX enabled)\n",
+	    "net80211 radio attached as %s (2.4/5 GHz, 20-MHz channels; 5-GHz scan passive)\n",
 	    ic->ic_name);
 	return (0);
 }
@@ -728,7 +755,8 @@ rtw88_native_sysctl_channel(SYSCTL_HANDLER_ARGS)
 	error = sysctl_handle_int(oidp, &value, 0, req);
 	if (error != 0 || req->newptr == NULL)
 		return (error);
-	if (value < 1 || value > 13)
+	if ((value < 1 || value > 13) &&
+	    (value < 36 || value > 161))
 		return (EINVAL);
 
 	mtx_lock(&sc->mtx);
@@ -758,7 +786,7 @@ rtw88_native_sysctl_channel(SYSCTL_HANDLER_ARGS)
 
 	if (error != 0)
 		device_printf(sc->dev,
-		    "2.4-GHz channel %d configuration failed: %d\n", value, error);
+		    "radio channel %d configuration failed: %d\n", value, error);
 	return (error);
 }
 
