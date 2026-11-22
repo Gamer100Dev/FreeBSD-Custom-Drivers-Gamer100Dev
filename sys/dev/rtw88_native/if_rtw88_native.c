@@ -835,14 +835,21 @@ rtw88_native_rx_task(void *arg, int pending __unused)
 	struct ifnet *ifp;
 	struct mbuf *m;
 	uint64_t ipackets_before, ipackets_after, ipackets_delta;
-	int attached, hw_started, input_result;
+	int attached, running, input_result;
 
 	sc = arg;
 	for (;;) {
 		mtx_lock(&sc->mtx);
 		m = mbufq_dequeue(&sc->rx_queue);
-		hw_started = sc->hw_started;
-		attached = sc->net80211_attached && hw_started && !sc->dying;
+		/*
+		 * Mirror Linux RTW_FLAG_RUNNING: ordinary RX frames must not be
+		 * handed to the 802.11 stack before startup completes or while
+		 * stop/detach is in progress. Firmware C2H records are parsed
+		 * separately and are not affected by this data-frame gate.
+		 */
+		running = sc->hw_started && !sc->hw_stopping &&
+		    !sc->detaching && !sc->dying;
+		attached = sc->net80211_attached && running;
 		mtx_unlock(&sc->mtx);
 		if (m == NULL)
 			break;
@@ -851,8 +858,8 @@ rtw88_native_rx_task(void *arg, int pending __unused)
 			m_freem(m);
 			mtx_lock(&sc->mtx);
 			sc->rx_input_drop_count++;
-			if (!hw_started)
-				sc->rx_prestart_drop_count++;
+			if (!running)
+				sc->rx_not_running_drop_count++;
 			mtx_unlock(&sc->mtx);
 			continue;
 		}
@@ -1307,8 +1314,8 @@ rtw88_native_attach(device_t dev)
 	    "RX MPDUs discarded before net80211 input");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
-	    "rx_prestart_drop_count", CTLFLAG_RD, &sc->rx_prestart_drop_count, 0,
-	    "RX MPDUs dropped before hardware was marked running");
+	    "rx_not_running_drop_count", CTLFLAG_RD, &sc->rx_not_running_drop_count, 0,
+	    "RX MPDUs dropped while the native radio is not in its running state");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_net80211_negative_result_count", CTLFLAG_RD,
