@@ -251,6 +251,9 @@ struct rtw88_native_softc {
 	uint64_t		tx_raw_reject_count;
 	uint64_t		tx_queued_count;
 	uint64_t		tx_complete_count;
+	uint64_t		tx_usb_submit_count;
+	uint64_t		tx_usb_complete_count;
+	uint64_t		tx_usb_error_count;
 	uint64_t		tx_error_count;
 	uint64_t		tx_mgmt_count;
 	uint64_t		tx_data_count;
@@ -284,6 +287,10 @@ struct rtw88_native_softc {
 	uint64_t		rx_ht_count;
 	uint64_t		rx_vht_count;
 	uint64_t		rx_decrypted_count;
+	uint64_t		rx_ra_unicast_count;
+	uint64_t		rx_ra_multicast_count;
+	uint64_t		rx_ra_broadcast_count;
+	uint64_t		rx_to_self_count;
 	uint64_t		rx_assoc_resp_to_self_count;
 	uint64_t		rx_disassoc_to_self_count;
 	uint64_t		rx_disassoc_from_bss_count;
