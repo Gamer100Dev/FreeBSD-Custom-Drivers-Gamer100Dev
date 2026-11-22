@@ -674,8 +674,17 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 		m_copydata(m, 0, frame_len,
 		    buffer + RTW88_NATIVE_TX_DESC_SIZE);
 	if (error == 0) {
+		mtx_lock(&sc->mtx);
+		sc->tx_usb_submit_count++;
+		mtx_unlock(&sc->mtx);
 		uerr = rtw88_native_usb_tx_sync(sc, endpoint, buffer,
 		    transfer_len);
+		mtx_lock(&sc->mtx);
+		if (uerr == USB_ERR_NORMAL_COMPLETION)
+			sc->tx_usb_complete_count++;
+		else
+			sc->tx_usb_error_count++;
+		mtx_unlock(&sc->mtx);
 		if (uerr != USB_ERR_NORMAL_COMPLETION)
 			error = EIO;
 	}
@@ -1222,6 +1231,22 @@ rtw88_native_attach(device_t dev)
 	    "RX frames marked as hardware-decrypted for net80211");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ra_unicast_count", CTLFLAG_RD, &sc->rx_ra_unicast_count, 0,
+	    "RX frames with a unicast 802.11 receiver address (addr1)");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ra_multicast_count", CTLFLAG_RD, &sc->rx_ra_multicast_count, 0,
+	    "RX frames with a multicast non-broadcast 802.11 receiver address");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ra_broadcast_count", CTLFLAG_RD, &sc->rx_ra_broadcast_count, 0,
+	    "RX frames with the broadcast 802.11 receiver address");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_to_self_count", CTLFLAG_RD, &sc->rx_to_self_count, 0,
+	    "RX unicast frames addressed to this adapter MAC");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_c2h_count", CTLFLAG_RD, &sc->rx_c2h_count, 0,
 	    "Number of firmware C2H RX records identified");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
@@ -1376,6 +1401,18 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_complete_count", CTLFLAG_RD, &sc->tx_complete_count, 0,
 	    "Number of frames completed on USB bulk-OUT");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_usb_submit_count", CTLFLAG_RD, &sc->tx_usb_submit_count, 0,
+	    "Bulk-OUT submissions attempted after descriptor construction");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_usb_complete_count", CTLFLAG_RD, &sc->tx_usb_complete_count, 0,
+	    "Bulk-OUT transfers completed by USB (not an over-the-air ACK)");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_usb_error_count", CTLFLAG_RD, &sc->tx_usb_error_count, 0,
+	    "Bulk-OUT transfers that returned a USB error");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_error_count", CTLFLAG_RD, &sc->tx_error_count, 0,
