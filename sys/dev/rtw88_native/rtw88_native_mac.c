@@ -1082,6 +1082,7 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 
 	/* Firmware requires the General Info and PHYDM Info H2C packets. */
 	sc->fw_h2c_seq = 0;
+	sc->fw_h2c_mailbox = 0;
 	sc->fw_h2c_error = 0;
 	error = rtw88_native_firmware_send_initial_h2c(sc);
 	if (error != 0)
@@ -1207,8 +1208,10 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 #define REG_HMEBOX0			0x01d0
 #define REG_HMEBOX0_EX			0x01f0
 #define H2C_CMD_MEDIA_STATUS_RPT	0x01U
+#define H2C_CMD_DEFAULT_PORT		0x2cU
 #define H2C_MAILBOX_COUNT		4
 #define H2C_MAILBOX_POLL_COUNT		30
+#define RTW88_NATIVE_STA_PORT		0U
 #define RTW88_NATIVE_STA_MACID		0U
 
 #define REG_PORT0_BSSID		0x0618
@@ -1224,10 +1227,9 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
  * BSSID/AID registers alone does not perform this firmware state transition.
  */
 static int
-rtw88_native_mac_media_status_report(struct rtw88_native_softc *sc,
-    int connected)
+rtw88_native_mac_h2c_send(struct rtw88_native_softc *sc, uint32_t message,
+    const char *command)
 {
-	uint32_t message;
 	uint8_t box, box_state;
 	int error, retry;
 
@@ -1247,14 +1249,7 @@ rtw88_native_mac_media_status_report(struct rtw88_native_softc *sc,
 		goto fail;
 	}
 
-	/*
-	 * H2C command word layout follows fw.h:
-	 * [7:0] command ID, [8] operation mode (1=connected),
-	 * [23:16] station MACID. The extended mailbox word is zero.
-	 */
-	message = H2C_CMD_MEDIA_STATUS_RPT |
-	    (connected ? (1U << 8) : 0) |
-	    (RTW88_NATIVE_STA_MACID << 16);
+	/* Upstream writes the extended dword first, then the command dword. */
 	if (rtw88_native_reg_write32(sc,
 	    REG_HMEBOX0_EX + (box * sizeof(uint32_t)), 0) !=
 	    USB_ERR_NORMAL_COMPLETION ||
@@ -1266,18 +1261,51 @@ rtw88_native_mac_media_status_report(struct rtw88_native_softc *sc,
 	}
 
 	sc->fw_h2c_mailbox = (box + 1) % H2C_MAILBOX_COUNT;
-	sc->fw_h2c_media_status_count++;
-	sc->fw_h2c_media_status_error = 0;
+	sc->fw_h2c_mailbox_count++;
+	sc->fw_h2c_mailbox_error = 0;
 	return (0);
 
 fail:
-	sc->fw_h2c_media_status_error_count++;
-	sc->fw_h2c_media_status_error = error;
+	sc->fw_h2c_mailbox_error_count++;
+	sc->fw_h2c_mailbox_error = error;
 	device_printf(sc->dev,
-	    "firmware media-status H2C %s failed (MACID %u mailbox %u): %d\n",
-	    connected ? "connect" : "disconnect",
-	    RTW88_NATIVE_STA_MACID, box, error);
+	    "firmware H2C mailbox %s failed (MACID %u mailbox %u): %d\n",
+	    command, RTW88_NATIVE_STA_MACID, box, error);
 	return (error);
+}
+
+/*
+ * Keep firmware station state in step with the port-0 BSSID/AID registers.
+ * These command fields match fw.h: MEDIA_STATUS_RPT command ID 0x01, operation
+ * mode in bit 8 and station MACID in bits 23:16.
+ */
+static int
+rtw88_native_mac_media_status_report(struct rtw88_native_softc *sc,
+    int connected)
+{
+	uint32_t message;
+
+	message = H2C_CMD_MEDIA_STATUS_RPT |
+	    (connected ? (1U << 8) : 0) |
+	    (RTW88_NATIVE_STA_MACID << 16);
+	return (rtw88_native_mac_h2c_send(sc, message,
+	    connected ? "MEDIA_STATUS_RPT connect" :
+	    "MEDIA_STATUS_RPT disconnect"));
+}
+
+/*
+ * Match upstream rtw_fw_default_port() for this single-interface driver:
+ * port 0 and MACID 0 are the only supported station port.
+ */
+static int
+rtw88_native_mac_default_port_report(struct rtw88_native_softc *sc)
+{
+	uint32_t message;
+
+	message = H2C_CMD_DEFAULT_PORT |
+	    (RTW88_NATIVE_STA_PORT << 8) |
+	    (RTW88_NATIVE_STA_MACID << 16);
+	return (rtw88_native_mac_h2c_send(sc, message, "DEFAULT_PORT"));
 }
 
 int
@@ -1360,6 +1388,12 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 	    (PORT0_NET_TYPE_MGD_LINKED << 16))
 		return (EIO);
 
-	/* Report the connected STA role to firmware after BSSID/AID are valid. */
-	return (rtw88_native_mac_media_status_report(sc, 1));
+	/*
+	 * Match upstream association handling: report the connected STA first,
+	 * then select its firmware default port for MACID 0 / port 0.
+	 */
+	media_error = rtw88_native_mac_media_status_report(sc, 1);
+	if (media_error != 0)
+		return (media_error);
+	return (rtw88_native_mac_default_port_report(sc));
 }
