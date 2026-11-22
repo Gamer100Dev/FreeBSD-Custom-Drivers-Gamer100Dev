@@ -452,6 +452,7 @@ int		rtw88_native_efuse_read(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
+int		rtw88_native_mac_set_scan_filter(struct rtw88_native_softc *, int);
 int		rtw88_native_mac_set_link(struct rtw88_native_softc *,
 		    const uint8_t *, uint16_t, int);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
