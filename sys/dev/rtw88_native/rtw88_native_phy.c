@@ -1801,60 +1801,125 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, RTW88_NATIVE_REG_BCN_CTRL,
-	    &value8) != USB_ERR_NORMAL_COMPLETION ||
-	    (value8 & RTW88_NATIVE_BIT_EN_BCN_FUNCTION) == 0) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: BCN_CTRL=0x%02x\n", value8);
+	    &value8) != USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: BCN_CTRL read failed\n");
+		return (EIO);
+	}
+	if ((value8 & RTW88_NATIVE_BIT_EN_BCN_FUNCTION) == 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: BCN_CTRL=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read32(sc, REG_GPIO_MUXCFG, &value) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    (value & (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS)) !=
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: GPIO_MUXCFG read failed\n");
+		return (EIO);
+	}
+	if ((value & (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS)) !=
 	    (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS)) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: GPIO_MUXCFG=0x%08x\n", value);
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: GPIO_MUXCFG=0x%08x\n",
+		    value);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, REG_QUEUE_CTRL, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    (value8 & (BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN)) !=
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: QUEUE_CTRL read failed\n");
+		return (EIO);
+	}
+	if ((value8 & (BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN)) !=
 	    BIT_PTA_WL_TX_EN) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: QUEUE_CTRL=0x%02x\n", value8);
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: QUEUE_CTRL=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read16(sc, REG_BT_COEX_V2, &value16) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    (value16 & BIT_GNT_BT_POLARITY) == 0) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: BT_COEX_V2=0x%04x\n", value16);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: BT_COEX_V2 read failed\n");
+		return (EIO);
+	}
+	if ((value16 & BIT_GNT_BT_POLARITY) == 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: BT_COEX_V2=0x%04x\n",
+		    value16);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, REG_SYS_SDIO_CTRL + 3, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    (value8 & (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) == 0) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: SYS_SDIO_CTRL+3=0x%02x\n", value8);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: SYS_SDIO_CTRL+3 read failed\n");
+		return (EIO);
+	}
+	if ((value8 & (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) == 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: SYS_SDIO_CTRL+3=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, REG_LED_CFG + 2, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x80) != 0) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: LED_CFG+2=0x%02x\n", value8);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: LED_CFG+2 read failed\n");
+		return (EIO);
+	}
+	if ((value8 & 0x80) != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: LED_CFG+2=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, REG_LED_CFG + 3, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x01) == 0) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: LED_CFG+3=0x%02x\n", value8);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: LED_CFG+3 read failed\n");
+		return (EIO);
+	}
+	if ((value8 & 0x01) == 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: LED_CFG+3=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, REG_RFE_CTRL8, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || value8 != 0x77) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: RFE_CTRL8=0x%02x\n", value8);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: RFE_CTRL8 read failed\n");
+		return (EIO);
+	}
+	if (value8 != 0x77) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: RFE_CTRL8=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read8(sc, REG_RFE_INV8, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x03) != 0x02) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: RFE_INV8=0x%02x\n", value8);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: RFE_INV8 read failed\n");
+		return (EIO);
+	}
+	if ((value8 & 0x03) != 0x02) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: RFE_INV8=0x%02x\n",
+		    value8);
 		return (EIO);
 	}
 	if (rtw88_native_reg_read16(sc, REG_WIFI_BT_INFO, &value16) !=
-	    USB_ERR_NORMAL_COMPLETION || (value16 & 0x0003) != 0x0003) {
-		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: WIFI_BT_INFO=0x%04x\n", value16);
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: WIFI_BT_INFO read failed\n");
+		return (EIO);
+	}
+	if ((value16 & 0x0003) != 0x0003) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence readback: WIFI_BT_INFO=0x%04x\n",
+		    value16);
 		return (EIO);
 	}
 	sc->wifi_only_coex_initialized = 1;
