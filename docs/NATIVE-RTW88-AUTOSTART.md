@@ -54,6 +54,8 @@ service rtw88_native status
 service rtw88_native start
 service rtw88_native stop
 sysctl dev.rtw88_native.0.hw_start
+sysctl dev.rtw88_native.0.station_ra_mask
+sysctl dev.rtw88_native.0.station_rate_id
 ifconfig wlan0
 ```
 
