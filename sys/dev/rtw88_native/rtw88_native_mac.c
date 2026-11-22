@@ -1344,6 +1344,7 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 #define H2C_CMD_MEDIA_STATUS_RPT	0x01U
 #define H2C_CMD_DEFAULT_PORT		0x2cU
 #define H2C_CMD_RA_INFO			0x40U
+#define RA_INFO_INIT_RA_LEVEL_1		(1U << 21)
 #define RA_INFO_DISABLE_PT		(1U << 30)
 #define H2C_MAILBOX_COUNT		4
 #define H2C_MAILBOX_POLL_COUNT		30
@@ -1530,7 +1531,8 @@ rtw88_native_mac_send_legacy_ra(struct rtw88_native_softc *sc,
 
 	message = H2C_CMD_RA_INFO |
 	    (RTW88_NATIVE_STA_MACID << 8) |
-	    ((uint32_t)rate_id << 16) | RA_INFO_DISABLE_PT;
+	    ((uint32_t)rate_id << 16) |
+	    RA_INFO_INIT_RA_LEVEL_1 | RA_INFO_DISABLE_PT;
 	error = rtw88_native_mac_h2c_send(sc, message, ra_mask, "RA_INFO");
 	if (error != 0)
 		return (error);
