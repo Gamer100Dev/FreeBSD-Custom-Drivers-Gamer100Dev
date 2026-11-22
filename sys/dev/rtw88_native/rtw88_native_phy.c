@@ -1611,6 +1611,7 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	uint32_t value;
 	uint8_t value8;
 	uint16_t value16;
+	const char *stage;
 	int error;
 
 	if (sc == NULL || !sc->powered || !sc->firmware_running ||
@@ -1625,6 +1626,7 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 		return (0);
 
 	/* rtw8822b_coex_cfg_rfe_type(): select the 8822B RFE signal path. */
+	stage = "RFE_CTRL_E/RFESEL_CTRL/RFE_INV16";
 	error = rtw88_native_reg_write8(sc, REG_RFE_CTRL_E, 0xff) ==
 	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
 	if (error == 0)
@@ -1633,8 +1635,11 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	if (error == 0)
 		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV16,
 		    BIT_RFE_BUF_EN, 0x00);
-	if (error != 0)
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence failed at %s: %d\n", stage, error);
 		return (error);
+	}
 
 	/*
 	 * Establish the board's WLAN-owned antenna path before touching the
@@ -1643,15 +1648,20 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	 * external RF switch pointed away from WLAN or prevent radio attach.
 	 */
 	/* COEX_SET_ANT_WONLY: grant path control to WLAN. 8822B has no btg_reg. */
+	stage = "SYS_SDIO_CTRL grant mux";
 	if (rtw88_native_phy_write_mask8(sc, REG_SYS_SDIO_CTRL + 3,
 	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24),
-	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) != 0)
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence failed at %s\n", stage);
 		return (EIO);
+	}
 
 	/*
 	 * rtw8822b_coex_cfg_ant_switch(BBSW, WLG): LED_CFG[23]=0,
 	 * LED_CFG[24]=1, RFE_CTRL8[7:0]=0x77, RFE_INV8[1:0]=2.
 	 */
+	stage = "LED_CFG/RFE_CTRL8/RFE_INV8 antenna switch";
 	error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 2,
 	    0x80, 0x00);
 	if (error == 0)
@@ -1663,9 +1673,11 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	if (error == 0)
 		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV8,
 		    0x03, 0x02);
-	if (error != 0)
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence failed at %s: %d\n", stage, error);
 		return (error);
-
+	}
 
 	/*
 	 * Linux disables LTE coexistence, then sets both WLAN/BT-vs-LTE
@@ -1699,6 +1711,7 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 		return (error);
 	}
 
+	stage = "BCN_CTRL/PTA GPIO/queue configuration";
 	/*
 	 * rtw8822b_coex_cfg_init(): enable beacon/TBTT processing, initialise
 	 * the shared grant/antenna GPIO, WLAN-to-PTA indication and BT
@@ -1748,26 +1761,36 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	if (error == 0)
 		error = rtw88_native_phy_write_mask8(sc,
 		    REG_BT_COEX_TABLE_H3, (1U << 3), (1U << 3));
-	if (error != 0)
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence failed at %s: %d\n", stage, error);
 		return (error);
-
+	}
 
 	/*
 	 * COEX_SCBD_ACTIVE | COEX_SCBD_ONOFF: tell firmware that WLAN is
 	 * active and its radio is enabled. This is the Wi-Fi-only scoreboard
 	 * state written by Linux after the WONLY antenna path is selected.
 	 */
+	stage = "WIFI_BT_INFO scoreboard write";
 	if (rtw88_native_reg_write16(sc, REG_WIFI_BT_INFO,
-	    BIT_BT_INT_EN | 0x0003) != USB_ERR_NORMAL_COMPLETION)
+	    BIT_BT_INT_EN | 0x0003) != USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence failed at %s\n", stage);
 		return (EIO);
+	}
 
 	/*
 	 * Read back the complete route. USB completion only confirms the
 	 * host transaction, not that the MAC/BB/indirect fields latched.
 	 */
+	stage = "LTE grant readback";
 	error = rtw88_native_ltecoex_read(sc, 0x0038, &value);
-	if (error != 0)
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only coexistence failed at %s: %d\n", stage, error);
 		return (error);
+	}
 	if ((value & BIT_LTE_COEX_EN) != 0 ||
 	    (value & 0x0000c000U) != 0x00004000U ||
 	    (value & 0x00000c00U) != 0x00000400U ||
@@ -1779,41 +1802,61 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	}
 	if (rtw88_native_reg_read8(sc, RTW88_NATIVE_REG_BCN_CTRL,
 	    &value8) != USB_ERR_NORMAL_COMPLETION ||
-	    (value8 & RTW88_NATIVE_BIT_EN_BCN_FUNCTION) == 0)
+	    (value8 & RTW88_NATIVE_BIT_EN_BCN_FUNCTION) == 0) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: BCN_CTRL=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read32(sc, REG_GPIO_MUXCFG, &value) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    (value & (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS)) !=
-	    (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS))
+	    (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS)) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: GPIO_MUXCFG=0x%08x\n", value);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read8(sc, REG_QUEUE_CTRL, &value8) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    (value8 & (BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN)) !=
-	    BIT_PTA_WL_TX_EN)
+	    BIT_PTA_WL_TX_EN) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: QUEUE_CTRL=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read16(sc, REG_BT_COEX_V2, &value16) !=
 	    USB_ERR_NORMAL_COMPLETION ||
-	    (value16 & BIT_GNT_BT_POLARITY) == 0)
+	    (value16 & BIT_GNT_BT_POLARITY) == 0) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: BT_COEX_V2=0x%04x\n", value16);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read8(sc, REG_SYS_SDIO_CTRL + 3, &value8) !=
 	    USB_ERR_NORMAL_COMPLETION ||
-	    (value8 & (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) == 0)
+	    (value8 & (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) == 0) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: SYS_SDIO_CTRL+3=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read8(sc, REG_LED_CFG + 2, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x80) != 0)
+	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x80) != 0) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: LED_CFG+2=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read8(sc, REG_LED_CFG + 3, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x01) == 0)
+	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x01) == 0) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: LED_CFG+3=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read8(sc, REG_RFE_CTRL8, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || value8 != 0x77)
+	    USB_ERR_NORMAL_COMPLETION || value8 != 0x77) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: RFE_CTRL8=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read8(sc, REG_RFE_INV8, &value8) !=
-	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x03) != 0x02)
+	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x03) != 0x02) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: RFE_INV8=0x%02x\n", value8);
 		return (EIO);
+	}
 	if (rtw88_native_reg_read16(sc, REG_WIFI_BT_INFO, &value16) !=
-	    USB_ERR_NORMAL_COMPLETION || (value16 & 0x0003) != 0x0003)
+	    USB_ERR_NORMAL_COMPLETION || (value16 & 0x0003) != 0x0003) {
+		device_printf(sc->dev, "Wi-Fi-only coexistence readback failed: WIFI_BT_INFO=0x%04x\n", value16);
 		return (EIO);
+	}
 	sc->wifi_only_coex_initialized = 1;
 	device_printf(sc->dev,
 	    "RTL8822B Wi-Fi-only RFE route active: WLAN grants, WLG antenna path, LTE control=0x%08x\n",
