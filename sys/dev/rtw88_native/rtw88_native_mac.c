@@ -963,6 +963,8 @@ rtw88_native_mac_set_scan_filter(struct rtw88_native_softc *sc, int scanning)
 	return (error);
 }
 
+#define REG_PORT0_MACID		0x0610
+
 /*
  * Program the station address into RTL8822B port 0 before entering the
  * station state machine. Linux rtw_ops_add_interface() calls
@@ -1346,7 +1348,6 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 #define RTW88_NATIVE_STA_PORT		0U
 #define RTW88_NATIVE_STA_MACID		0U
 
-#define REG_PORT0_MACID		0x0610
 #define REG_PORT0_BSSID		0x0618
 #define REG_PORT0_AID		0x06a8
 #define PORT0_NET_TYPE_MASK	0x00030000U
