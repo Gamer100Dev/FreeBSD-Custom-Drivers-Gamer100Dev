@@ -479,45 +479,6 @@ rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
 }
 
 /*
- * Return the actual 802.11 destination address classification. In STA
- * transmit direction (ToDS), addr1 is the AP receiver/BSSID and addr3 is
- * the Ethernet destination. For four-address frames addr3 is also the DA.
- * Testing addr1 unconditionally misclassifies DHCP/ARP/IP multicast as
- * unicast and sends it through the wrong RTW88 hardware queue.
- */
-static int
-rtw88_native_tx_is_group(struct mbuf *m,
-    const struct ieee80211_frame_min *wh, int *is_group)
-{
-	uint8_t da[IEEE80211_ADDR_LEN];
-	uint8_t dir;
-
-	if (m == NULL || wh == NULL || is_group == NULL)
-		return (EINVAL);
-
-	dir = wh->i_fc[1] & IEEE80211_FC1_DIR_MASK;
-	switch (dir) {
-	case IEEE80211_FC1_DIR_NODS:
-	case IEEE80211_FC1_DIR_FROMDS:
-		memcpy(da, wh->i_addr1, sizeof(da));
-		break;
-	case IEEE80211_FC1_DIR_TODS:
-	case IEEE80211_FC1_DIR_DSTODS:
-		if (m->m_pkthdr.len <
-		    offsetof(struct ieee80211_frame, i_addr3) + sizeof(da))
-			return (EINVAL);
-		m_copydata(m, offsetof(struct ieee80211_frame, i_addr3),
-		    sizeof(da), (caddr_t)da);
-		break;
-	default:
-		return (EINVAL);
-	}
-
-	*is_group = IEEE80211_IS_MULTICAST(da);
-	return (0);
-}
-
-/*
  * Send one 802.11 MPDU through the RTW88 48-byte descriptor and the USB
  * endpoint selected by the RTL8822B queue map. Management/control frames use
  * QSEL_MGMT; group-addressed data uses QSEL_HIGH; unicast data maps the
@@ -534,7 +495,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
 	uint8_t type;
-	int ac, channel, is_group;
+	int ac, channel;
 	uint16_t seqctl;
 	usb_error_t uerr;
 	int do_rfk, rfk_error, error;
@@ -577,22 +538,23 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 		}
 	}
 
-	/* Management/control frames use addr1 as their receiver/destination. */
-	is_group = IEEE80211_IS_MULTICAST(wh->i_addr1);
+	/*
+	 * RTW88's BMC descriptor bit and USB QSEL_HIGH selection follow the
+	 * 802.11 receiver address (addr1), matching rtw_tx_pkt_info_update()
+	 * and rtw_usb_tx_queue_mapping_to_qsel() in the upstream driver.
+	 * For ToDS station traffic, addr1 is the AP/BSSID even when addr3
+	 * contains a broadcast Ethernet destination.
+	 */
 	if (type == IEEE80211_FC0_TYPE_MGT ||
 	    type == IEEE80211_FC0_TYPE_CTL) {
 		qsel = RTW88_NATIVE_TXQSEL_MGMT;
 	} else if (type == IEEE80211_FC0_TYPE_DATA) {
 		/*
-		 * Resolve DA using the DS direction before choosing the hardware
-		 * queue. For STA->AP (ToDS), addr1 is the unicast BSSID while
-		 * addr3 carries the original Ethernet DA (including ff:ff:ff:ff:ff:ff
-		 * for DHCP Discover). RTW88 group traffic must use QSEL_HIGH.
+		 * Group receiver-addressed data uses QSEL_HIGH; unicast receiver
+		 * data uses the TID corresponding to net80211's WME access category.
+		 * FreeBSD stores AC in M_WME_GETAC(), while the descriptor needs TID.
 		 */
-		error = rtw88_native_tx_is_group(m, wh, &is_group);
-		if (error != 0)
-			return (error);
-		if (is_group) {
+		if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
 			qsel = RTW88_NATIVE_TXQSEL_HIGH;
 		} else if ((m->m_flags & M_EAPOL) != 0) {
 			/*
@@ -652,7 +614,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 		}
 	} else {
 		sc->tx_data_count++;
-		if (is_group)
+		if (qsel == RTW88_NATIVE_TXQSEL_HIGH)
 			sc->tx_group_count++;
 	}
 	if ((m->m_flags & M_EAPOL) != 0)
@@ -687,7 +649,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.use_hardware_rate = true;
 	params.disable_rate_fallback = true;
 	params.last_segment = true;
-	params.bmc = is_group;
+	params.bmc = IEEE80211_IS_MULTICAST(wh->i_addr1);
 	params.more_data = (m->m_flags & M_MORE_DATA) != 0;
 	if (type == IEEE80211_FC0_TYPE_MGT) {
 		/* Match RTW88 management frames: hardware sequence on QSEL_MGMT. */
