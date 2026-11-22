@@ -318,6 +318,8 @@ struct rtw88_native_softc {
 	int			station_linked;
 	uint16_t		station_aid;
 	uint8_t		station_bssid[IEEE80211_ADDR_LEN];
+	uint32_t		station_ra_mask;
+	uint8_t		station_rate_id;
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
@@ -458,7 +460,8 @@ int		rtw88_native_mac_set_scan_filter(struct rtw88_native_softc *, int);
 int		rtw88_native_mac_set_address(struct rtw88_native_softc *,
 		    const uint8_t [IEEE80211_ADDR_LEN]);
 int		rtw88_native_mac_set_link(struct rtw88_native_softc *,
-		    const uint8_t *, uint16_t, int);
+		    const uint8_t *, uint16_t, int,
+		    const struct ieee80211_rateset *);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
 int		rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_scan_gain(struct rtw88_native_softc *, int);
