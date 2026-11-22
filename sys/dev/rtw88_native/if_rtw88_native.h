@@ -259,6 +259,8 @@ struct rtw88_native_softc {
 	uint64_t		tx_data_count;
 	uint64_t		tx_group_count;
 	uint64_t		tx_eapol_count;
+	uint64_t		tx_crypto_count;
+	uint64_t		tx_crypto_error_count;
 	uint64_t		tx_probe_req_count;
 	uint64_t		tx_auth_req_count;
 	uint64_t		tx_assoc_req_count;
