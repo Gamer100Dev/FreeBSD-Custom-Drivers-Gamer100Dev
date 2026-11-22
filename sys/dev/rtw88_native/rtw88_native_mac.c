@@ -1361,8 +1361,8 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
  * BSSID/AID registers alone does not perform this firmware state transition.
  */
 static int
-rtw88_native_mac_h2c_send(struct rtw88_native_softc *sc, uint32_t message,
-    const char *command)
+rtw88_native_mac_h2c_send(struct rtw88_native_softc *sc,
+    uint32_t message, uint32_t extended, const char *command)
 {
 	uint8_t box, box_state;
 	int error, retry;
@@ -1385,7 +1385,7 @@ rtw88_native_mac_h2c_send(struct rtw88_native_softc *sc, uint32_t message,
 
 	/* Upstream writes the extended dword first, then the command dword. */
 	if (rtw88_native_reg_write32(sc,
-	    REG_HMEBOX0_EX + (box * sizeof(uint32_t)), 0) !=
+	    REG_HMEBOX0_EX + (box * sizeof(uint32_t)), extended) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_write32(sc,
 	    REG_HMEBOX0 + (box * sizeof(uint32_t)), message) !=
@@ -1422,7 +1422,7 @@ rtw88_native_mac_media_status_report(struct rtw88_native_softc *sc,
 	message = H2C_CMD_MEDIA_STATUS_RPT |
 	    (connected ? (1U << 8) : 0) |
 	    (RTW88_NATIVE_STA_MACID << 16);
-	return (rtw88_native_mac_h2c_send(sc, message,
+	return (rtw88_native_mac_h2c_send(sc, message, 0,
 	    connected ? "MEDIA_STATUS_RPT connect" :
 	    "MEDIA_STATUS_RPT disconnect"));
 }
@@ -1439,12 +1439,108 @@ rtw88_native_mac_default_port_report(struct rtw88_native_softc *sc)
 	message = H2C_CMD_DEFAULT_PORT |
 	    (RTW88_NATIVE_STA_PORT << 8) |
 	    (RTW88_NATIVE_STA_MACID << 16);
-	return (rtw88_native_mac_h2c_send(sc, message, "DEFAULT_PORT"));
+	return (rtw88_native_mac_h2c_send(sc, message, 0, "DEFAULT_PORT"));
+}
+
+/*
+ * Construct the legacy-rate portion of the RTW88 RA mask from the
+ * negotiated net80211 Supported Rates set. This driver currently advertises
+ * 11b/g on 2.4 GHz and 11a on 5 GHz; HT/VHT rate bits are intentionally not
+ * enabled until those PHY modes are implemented and advertised.
+ *
+ * Linux RTW88's RA_INFO H2C uses CCK bits 0..3 and OFDM bits 4..11 in the
+ * low 32-bit mask. FreeBSD stores rates in 500-kbit/s units, with BASIC in
+ * the high bit, so map by rate value rather than the AP's IE ordering.
+ */
+static int
+rtw88_native_mac_build_legacy_ra(const struct ieee80211_rateset *rates,
+    int channel, uint32_t *ra_mask, uint8_t *rate_id)
+{
+	uint32_t mask;
+	uint8_t rate;
+	int i, bit;
+
+	if (rates == NULL || ra_mask == NULL || rate_id == NULL ||
+	    rates->rs_nrates == 0 || rates->rs_nrates > IEEE80211_RATE_MAXSIZE)
+		return (EINVAL);
+
+	mask = 0;
+	for (i = 0; i < rates->rs_nrates; i++) {
+		rate = rates->rs_rates[i] & IEEE80211_RATE_VAL;
+		switch (rate) {
+		case 2:   bit = 0; break;  /* 1 Mbps */
+		case 4:   bit = 1; break;  /* 2 Mbps */
+		case 11:  bit = 2; break;  /* 5.5 Mbps */
+		case 22:  bit = 3; break;  /* 11 Mbps */
+		case 12:  bit = 4; break;  /* 6 Mbps */
+		case 18:  bit = 5; break;  /* 9 Mbps */
+		case 24:  bit = 6; break;  /* 12 Mbps */
+		case 36:  bit = 7; break;  /* 18 Mbps */
+		case 48:  bit = 8; break;  /* 24 Mbps */
+		case 72:  bit = 9; break;  /* 36 Mbps */
+		case 96:  bit = 10; break; /* 48 Mbps */
+		case 108: bit = 11; break; /* 54 Mbps */
+		default:
+			continue;
+		}
+		if (channel >= 36 && bit < 4)
+			continue;
+		mask |= (1U << bit);
+	}
+
+	if (mask == 0)
+		return (EINVAL);
+
+	if (channel >= 36)
+		*rate_id = 7; /* RTW_RATEID_G: 5-GHz OFDM */
+	else if ((mask & 0x00000fU) == 0)
+		*rate_id = 7; /* OFDM only */
+	else if ((mask & 0x000ff0U) == 0)
+		*rate_id = 8; /* CCK only */
+	else
+		*rate_id = 6; /* BG mixed mode */
+
+	*ra_mask = mask;
+	return (0);
+}
+
+/*
+ * Port of Linux rtw_fw_send_ra_info() for the advertised legacy modes.
+ * HMEBOX0_EX carries the RA mask (H2C dword 1); HMEBOX0 carries the packed
+ * command/rate-id fields (H2C dword 0).
+ */
+static int
+rtw88_native_mac_send_legacy_ra(struct rtw88_native_softc *sc,
+    const struct ieee80211_rateset *rates)
+{
+	uint32_t message, ra_mask;
+	uint8_t rate_id;
+	int error, channel;
+
+	channel = sc->current_channel;
+	error = rtw88_native_mac_build_legacy_ra(rates, channel, &ra_mask,
+	    &rate_id);
+	if (error != 0)
+		return (error);
+
+	message = 0x40U | (RTW88_NATIVE_STA_MACID << 8) |
+	    ((uint32_t)rate_id << 16) | (1U << 30);
+	error = rtw88_native_mac_h2c_send(sc, message, ra_mask, "RA_INFO");
+	if (error != 0)
+		return (error);
+
+	sc->station_ra_mask = ra_mask;
+	sc->station_rate_id = rate_id;
+	device_printf(sc->dev,
+	    "firmware legacy RA configured: MACID %u rate-id %u mask 0x%08x channel %d\n",
+	    RTW88_NATIVE_STA_MACID, rate_id, ra_mask, channel);
+	return (0);
 }
 
 int
 rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
-    const uint8_t *bssid, uint16_t aid, int linked)
+    const uint8_t *bssid, uint16_t aid, int linked,
+    const struct ieee80211_rateset *rates)
 {
 	uint32_t cr, aid_reg, bssid_lo, check32;
 	uint16_t bssid_hi, check16;
@@ -1468,6 +1564,8 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 		    USB_ERR_NORMAL_COMPLETION)
 			return (EIO);
 		media_error = rtw88_native_mac_media_status_report(sc, 0);
+		sc->station_ra_mask = 0;
+		sc->station_rate_id = 0;
 		aid_reg &= ~PORT0_AID_MASK;
 		if (rtw88_native_reg_write32(sc, REG_PORT0_AID, aid_reg) !=
 		    USB_ERR_NORMAL_COMPLETION ||
@@ -1529,5 +1627,8 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 	media_error = rtw88_native_mac_media_status_report(sc, 1);
 	if (media_error != 0)
 		return (media_error);
-	return (rtw88_native_mac_default_port_report(sc));
+	media_error = rtw88_native_mac_default_port_report(sc);
+	if (media_error != 0)
+		return (media_error);
+	return (rtw88_native_mac_send_legacy_ra(sc, rates));
 }
