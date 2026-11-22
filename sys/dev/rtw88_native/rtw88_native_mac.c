@@ -963,11 +963,90 @@ rtw88_native_mac_set_scan_filter(struct rtw88_native_softc *sc, int scanning)
 	return (error);
 }
 
+/*
+ * Program the station address into RTL8822B port 0 before entering the
+ * station state machine. Linux rtw_ops_add_interface() calls
+ * rtw_vif_port_config(PORT_SET_MAC_ADDR), whose port-0 MAC register is
+ * 0x0610. BSSID/AID programming alone is not enough: RCR.APM performs
+ * physical-address filtering in hardware, so leaving MACID0 unset can
+ * admit group traffic while rejecting unicast frames for the station.
+ */
+int
+rtw88_native_mac_set_address(struct rtw88_native_softc *sc,
+    const uint8_t addr[IEEE80211_ADDR_LEN])
+{
+	uint32_t mac_lo, check32;
+	uint16_t mac_hi, check16;
+	int error;
+
+	if (sc == NULL || addr == NULL || (addr[0] & 0x01) != 0)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->hw_started ||
+	    !sc->mac_initialized || !sc->firmware_running) {
+		mtx_unlock(&sc->mtx);
+		return (ENETDOWN);
+	}
+	if (sc->station_mac_programmed &&
+	    IEEE80211_ADDR_EQ(sc->station_macaddr, addr)) {
+		mtx_unlock(&sc->mtx);
+		return (0);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	sc->hw_busy = 1;
+	mtx_unlock(&sc->mtx);
+
+	/* Port-0 MAC address is stored in little-endian register order. */
+	mac_lo = (uint32_t)addr[0] | ((uint32_t)addr[1] << 8) |
+	    ((uint32_t)addr[2] << 16) | ((uint32_t)addr[3] << 24);
+	mac_hi = (uint16_t)addr[4] | ((uint16_t)addr[5] << 8);
+
+	error = 0;
+	if (rtw88_native_reg_write32(sc, REG_PORT0_MACID, mac_lo) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write16(sc, REG_PORT0_MACID + 4, mac_hi) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, REG_PORT0_MACID, &check32) !=
+	    USB_ERR_NORMAL_COMPLETION || check32 != mac_lo ||
+	    rtw88_native_reg_read16(sc, REG_PORT0_MACID + 4, &check16) !=
+	    USB_ERR_NORMAL_COMPLETION || check16 != mac_hi)
+		error = EIO;
+
+	mtx_lock(&sc->mtx);
+	if (error == 0) {
+		IEEE80211_ADDR_COPY(sc->station_macaddr, addr);
+		sc->station_mac_programmed = 1;
+	} else {
+		sc->station_mac_programmed = 0;
+		bzero(sc->station_macaddr, sizeof(sc->station_macaddr));
+	}
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	if (error != 0)
+		device_printf(sc->dev,
+		    "failed to program/verify port-0 station MAC %6D: %d\n",
+		    addr, ":", error);
+	else
+		device_printf(sc->dev,
+		    "programmed port-0 station MAC %6D\n", addr, ":");
+	return (error);
+}
+
 void
 rtw88_native_mac_stop(struct rtw88_native_softc *sc)
 {
 	if (sc == NULL || !sc->mac_initialized)
 		return;
+	mtx_lock(&sc->mtx);
+	sc->station_mac_programmed = 0;
+	bzero(sc->station_macaddr, sizeof(sc->station_macaddr));
+	mtx_unlock(&sc->mtx);
 	(void)rtw88_native_reg_write16(sc, REG_TXPAUSE, 0xffff);
 	(void)rtw88_native_reg_write8(sc, RTW88_NATIVE_REG_CR, 0);
 	sc->phy_initialized = 0;
@@ -1267,6 +1346,7 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 #define RTW88_NATIVE_STA_PORT		0U
 #define RTW88_NATIVE_STA_MACID		0U
 
+#define REG_PORT0_MACID		0x0610
 #define REG_PORT0_BSSID		0x0618
 #define REG_PORT0_AID		0x06a8
 #define PORT0_NET_TYPE_MASK	0x00030000U
