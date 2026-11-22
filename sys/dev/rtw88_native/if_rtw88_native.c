@@ -1121,6 +1121,7 @@ rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
 		if (regs[i].width == 2) {
 			uint16_t value16;
 
+			value16 = 0;
 			regs[i].error = rtw88_native_reg_read16(sc, regs[i].reg,
 			    &value16);
 			regs[i].value = value16;
