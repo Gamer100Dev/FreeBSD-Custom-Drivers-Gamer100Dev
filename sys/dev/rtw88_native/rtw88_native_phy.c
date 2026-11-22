@@ -1082,8 +1082,8 @@ rtw88_native_phy_valid_5g_channel(uint8_t channel)
  * RTL8822B rate-power programming for the supported RFE option 3 profile.
  *
  * eFuse records are struct rtw_txpwr_idx from RTW88 main.h:
- * 2G (15 bytes): CCK base[6], BW40 base[5], HT1S diff, HT2S/3S/4S diffs.
- * 5G (23 bytes): BW40 base[14], HT1S/2S/3S/4S, OFDM and VHT diffs.
+ * 2G (18 bytes): CCK base[6], BW40 base[5], HT1S diff, HT2S/3S/4S diffs.
+ * 5G (24 bytes): BW40 base[14], HT1S/2S/3S/4S, OFDM and VHT diffs.
  *
  * The RFE-3 BB-PG table stores BCD rate values. RTW88 normalises each
  * rate section to its final rate, yielding CCK {6,4,2,0} and legacy OFDM
@@ -1282,7 +1282,8 @@ rtw88_native_phy_set_tx_power(struct rtw88_native_softc *sc,
 
 		/*
 		 * Byte 11 is the 2G OFDM adjustment after CCK[6]/BW40[5].
-		 * Byte 29 is its 5G counterpart after the 14-entry BW40 array.
+		 * Byte 32 is its 5G counterpart after the 14-entry BW40 array and
+		 * four one-byte HT-difference records.
 		 * The 4-bit signed value is valid even when its byte is 0xff.
 		 */
 		if (band_2g) {
@@ -1292,10 +1293,10 @@ rtw88_native_phy_set_tx_power(struct rtw88_native_softc *sc,
 			base += rtw88_native_phy_signed_nibble(idx[11]);
 			base_offset = 28;
 		} else {
-			base = idx[15 + group];
+			base = idx[18 + group];
 			if (base > 0x3f)
 				return (ENXIO);
-			base += rtw88_native_phy_signed_nibble(idx[29]);
+			base += rtw88_native_phy_signed_nibble(idx[32]);
 			base_offset = 26;
 		}
 		raw_limit = rtw88_native_phy_txpwr_limit(channel, false);

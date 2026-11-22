@@ -108,7 +108,7 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
   map, respecting the 96-byte protected tail.
 - Extract the RTL8822BU MAC address, channel plan, country code, crystal cap,
   thermal meter, PA/LNA, board and RFE fields.
-- Capture the first two packed 38-byte `rtw_txpwr_idx` records (RF A/B) from
+- Capture the first two packed 42-byte `rtw_txpwr_idx` records (RF A/B) from
   logical eFuse offset `0x10`.
 - Program RFE-option-3 legacy TXAGC values on every channel change: 2.4-GHz
   CCK/OFDM and 5-GHz OFDM use upstream BB-PG rate deltas, eFuse bases and

@@ -199,8 +199,8 @@ rtw88_native_efuse_parse_8822bu(struct rtw88_native_softc *sc,
 	efuse->rf_antenna_option = logical[0xc9];
 	/*
 	 * struct rtw8822b_efuse stores four packed struct rtw_txpwr_idx
-	 * records at logical offset 0x10. Each record is 15 bytes of 2.4-GHz
-	 * power indices followed by 23 bytes of 5-GHz power indices. The
+	 * records at logical offset 0x10. Each record is 18 bytes of 2.4-GHz
+	 * power indices followed by 24 bytes of 5-GHz power indices. The
 	 * native RTL8822BU path supports the first two RF chains (A and B).
 	 */
 	memcpy(efuse->txpwr_idx, logical + 0x10,
