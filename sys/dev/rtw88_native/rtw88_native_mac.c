@@ -1274,7 +1274,7 @@ fail:
 	sc->fw_h2c_media_status_error_count++;
 	sc->fw_h2c_media_status_error = error;
 	device_printf(sc->dev,
-	    "firmware media-status H2C %s failed (MACID %u mailbox %u): %d\\n",
+	    "firmware media-status H2C %s failed (MACID %u mailbox %u): %d\n",
 	    connected ? "connect" : "disconnect",
 	    RTW88_NATIVE_STA_MACID, box, error);
 	return (error);
@@ -1286,7 +1286,7 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 {
 	uint32_t cr, aid_reg, bssid_lo, check32;
 	uint16_t bssid_hi, check16;
-
+	int media_error;
 	if (sc == NULL || !sc->mac_initialized || !sc->firmware_running)
 		return (ENETDOWN);
 	if (linked && (bssid == NULL || (bssid[0] & 0x01) != 0 ||
@@ -1299,7 +1299,6 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 		return (EIO);
 
 	if (!linked) {
-		int media_error;
 
 		/* Disable the managed link, then tell firmware the station left. */
 		cr &= ~PORT0_NET_TYPE_MASK;
