@@ -494,6 +494,7 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg, rf18_check;
 	uint32_t igi_a, igi_b, value32, sipi_b, rf_ctrl, wlrf1;
 	uint8_t value8, active_paths;
+	uint16_t trx_switch;
 	int error, path, rf_write_error;
 
 	/*
@@ -793,7 +794,6 @@ rtw88_native_phy_set_channel_5g20(struct rtw88_native_softc *sc,
 	uint32_t igi_a, igi_b, value32, sipi_b, rf_ctrl, wlrf1;
 	uint32_t rf_be, ccamask, pdmfth, cca2nd;
 	uint8_t active_paths;
-	uint16_t trx_switch;
 	int error, path, rf_write_error;
 
 	if (sc->efuse.rfe_option != 3 || sc->rf_path_num == 0 ||
