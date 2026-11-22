@@ -293,6 +293,17 @@ struct rtw88_native_softc {
 	uint64_t		rx_ht_count;
 	uint64_t		rx_vht_count;
 	uint64_t		rx_decrypted_count;
+	uint64_t		rx_mgmt_frame_count;
+	uint64_t		rx_ctl_frame_count;
+	uint64_t		rx_data_frame_count;
+	uint64_t		rx_ext_frame_count;
+	uint64_t		rx_protected_frame_count;
+	uint64_t		rx_descriptor_swdec_count;
+	uint64_t		rx_descriptor_encrypted_count;
+	uint64_t		rx_net80211_mgmt_result_count;
+	uint64_t		rx_net80211_ctl_result_count;
+	uint64_t		rx_net80211_data_result_count;
+	uint64_t		rx_net80211_other_result_count;
 	uint64_t		rx_ra_unicast_count;
 	uint64_t		rx_ra_multicast_count;
 	uint64_t		rx_ra_broadcast_count;
