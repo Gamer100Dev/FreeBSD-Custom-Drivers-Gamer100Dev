@@ -1203,11 +1203,82 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	rtw88_native_firmware_put(sc);
 }
 
+#define REG_HMETFR			0x01cc
+#define REG_HMEBOX0			0x01d0
+#define REG_HMEBOX0_EX			0x01f0
+#define H2C_CMD_MEDIA_STATUS_RPT	0x01U
+#define H2C_MAILBOX_COUNT		4
+#define H2C_MAILBOX_POLL_COUNT		30
+#define RTW88_NATIVE_STA_MACID		0U
+
 #define REG_PORT0_BSSID		0x0618
 #define REG_PORT0_AID		0x06a8
 #define PORT0_NET_TYPE_MASK	0x00030000U
 #define PORT0_NET_TYPE_MGD_LINKED	2U
 #define PORT0_AID_MASK		0x000007ffU
+
+/*
+ * Notify the RTL8822B firmware that station MACID 0 has joined or left the
+ * managed BSS. Upstream RTW88 sends H2C_CMD_MEDIA_STATUS_RPT through the
+ * HMEBOX mailbox (fw.c:rtw_fw_media_status_report); programming the MAC
+ * BSSID/AID registers alone does not perform this firmware state transition.
+ */
+static int
+rtw88_native_mac_media_status_report(struct rtw88_native_softc *sc,
+    int connected)
+{
+	uint32_t message;
+	uint8_t box, box_state;
+	int error, retry;
+
+	box = sc->fw_h2c_mailbox % H2C_MAILBOX_COUNT;
+	for (retry = 0; retry < H2C_MAILBOX_POLL_COUNT; retry++) {
+		if (rtw88_native_reg_read8(sc, REG_HMETFR, &box_state) !=
+		    USB_ERR_NORMAL_COMPLETION) {
+			error = EIO;
+			goto fail;
+		}
+		if ((box_state & (1U << box)) == 0)
+			break;
+		DELAY(100);
+	}
+	if (retry == H2C_MAILBOX_POLL_COUNT) {
+		error = ETIMEDOUT;
+		goto fail;
+	}
+
+	/*
+	 * H2C command word layout follows fw.h:
+	 * [7:0] command ID, [8] operation mode (1=connected),
+	 * [23:16] station MACID. The extended mailbox word is zero.
+	 */
+	message = H2C_CMD_MEDIA_STATUS_RPT |
+	    (connected ? (1U << 8) : 0) |
+	    (RTW88_NATIVE_STA_MACID << 16);
+	if (rtw88_native_reg_write32(sc,
+	    REG_HMEBOX0_EX + (box * sizeof(uint32_t)), 0) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc,
+	    REG_HMEBOX0 + (box * sizeof(uint32_t)), message) !=
+	    USB_ERR_NORMAL_COMPLETION) {
+		error = EIO;
+		goto fail;
+	}
+
+	sc->fw_h2c_mailbox = (box + 1) % H2C_MAILBOX_COUNT;
+	sc->fw_h2c_media_status_count++;
+	sc->fw_h2c_media_status_error = 0;
+	return (0);
+
+fail:
+	sc->fw_h2c_media_status_error_count++;
+	sc->fw_h2c_media_status_error = error;
+	device_printf(sc->dev,
+	    "firmware media-status H2C %s failed (MACID %u mailbox %u): %d\\n",
+	    connected ? "connect" : "disconnect",
+	    RTW88_NATIVE_STA_MACID, box, error);
+	return (error);
+}
 
 int
 rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
@@ -1228,11 +1299,14 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 		return (EIO);
 
 	if (!linked) {
-		/* Disable managed-link mode before clearing the peer identity. */
+		int media_error;
+
+		/* Disable the managed link, then tell firmware the station left. */
 		cr &= ~PORT0_NET_TYPE_MASK;
 		if (rtw88_native_reg_write32(sc, RTW88_NATIVE_REG_CR, cr) !=
 		    USB_ERR_NORMAL_COMPLETION)
 			return (EIO);
+		media_error = rtw88_native_mac_media_status_report(sc, 0);
 		aid_reg &= ~PORT0_AID_MASK;
 		if (rtw88_native_reg_write32(sc, REG_PORT0_AID, aid_reg) !=
 		    USB_ERR_NORMAL_COMPLETION ||
@@ -1251,7 +1325,7 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 		    rtw88_native_reg_read16(sc, REG_PORT0_BSSID + 4, &check16) !=
 		    USB_ERR_NORMAL_COMPLETION || check16 != 0)
 			return (EIO);
-		return (0);
+		return (media_error);
 	}
 
 	/* RTL8822B register payloads are little-endian. */
@@ -1286,5 +1360,7 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 	    (check32 & PORT0_NET_TYPE_MASK) !=
 	    (PORT0_NET_TYPE_MGD_LINKED << 16))
 		return (EIO);
-	return (0);
+
+	/* Report the connected STA role to firmware after BSSID/AID are valid. */
+	return (rtw88_native_mac_media_status_report(sc, 1));
 }
