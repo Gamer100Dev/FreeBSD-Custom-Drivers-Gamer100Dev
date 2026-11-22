@@ -443,10 +443,9 @@ rtw88_native_phy_load_table(struct rtw88_native_softc *sc,
 
 
 /*
- * RTL8822B 2.4-GHz/20-MHz channel setup for the IFEM-ext RFE option 3 board.
- * The active RF mask follows SYS_CFG1 and may be reduced to RF-A/1T1R when
- * RF-B fails its post-write readback. The channel is not committed to
- * net80211 until this function completes successfully.
+ * RTL8822B 20-MHz channel setup for the IFEM-ext RFE option 3 board.
+ * 2.4-GHz and 5-GHz use separate baseband, RF synthesizer, antenna and CCA
+ * profiles. The active RF mask follows SYS_CFG1 and can fall back to RF-A.
  */
 #define REG_CH_DATA_SC			0x0483
 #define REG_CH_WMAC_TRXPTCL_CTL		0x0668
@@ -770,18 +769,325 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	return (0);
 }
 
+/*
+ * Port of the RTL8822B 5-GHz/20-MHz channel path for the adapter's IFEM-ext
+ * RFE option 3. This intentionally leaves HT/VHT bandwidth programming out.
+ */
+static int
+rtw88_native_phy_set_channel_5g20(struct rtw88_native_softc *sc,
+    uint8_t channel)
+{
+	static const uint8_t low_band[15] = {
+		0x7, 0x6, 0x6, 0x5, 0x0, 0x0, 0x7, 0xff,
+		0x6, 0x5, 0x0, 0x0, 0x7, 0x6, 0x6
+	};
+	static const uint8_t middle_band[23] = {
+		0x6, 0x5, 0x0, 0x0, 0x7, 0x6, 0x6, 0xff,
+		0x0, 0x0, 0x7, 0x6, 0x6, 0x5, 0x0, 0xff,
+		0x7, 0x6, 0x6, 0x5, 0x0, 0x0, 0x7
+	};
+	static const uint8_t high_band[15] = {
+		0x5, 0x5, 0x0, 0x7, 0x7, 0x6, 0x5, 0xff,
+		0x0, 0x7, 0x7, 0x6, 0x5, 0x5, 0x0
+	};
+	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg, rf18_check;
+	uint32_t igi_a, igi_b, value32, sipi_b, rf_ctrl, wlrf1;
+	uint32_t rf_be, ccamask, pdmfth, cca2nd;
+	uint8_t active_paths;
+	int error, path, rf_write_error;
+
+	if (sc->efuse.rfe_option != 3 || sc->rf_path_num == 0 ||
+	    sc->rf_path_num > 2 ||
+	    (sc->antenna_tx != BB_PATH_A && sc->antenna_tx != BB_PATH_AB) ||
+	    (sc->antenna_rx != BB_PATH_A && sc->antenna_rx != BB_PATH_AB) ||
+	    (((sc->antenna_tx | sc->antenna_rx) & BB_PATH_B) != 0 &&
+	    sc->rf_path_num < 2))
+		return (ENOTSUP);
+	active_paths = sc->antenna_tx | sc->antenna_rx;
+
+	if (channel >= 36 && channel <= 64 && (channel & 3) == 0)
+		rf_be = low_band[(channel - 36) >> 1];
+	else if (channel >= 100 && channel <= 140 && (channel & 3) == 0)
+		rf_be = middle_band[(channel - 100) >> 1];
+	else if (channel >= 149 && channel <= 161 &&
+	    ((channel - 149) & 3) == 0)
+		rf_be = high_band[(channel - 149) >> 1];
+	else
+		return (EINVAL);
+
+	/* 5-GHz baseband profile: disable CCK and select the proper AGC band. */
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_ENTXCCK,
+	    1U << 18, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_CCK_CHECK,
+		    CH_BIT_CHECK_CCK_EN, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    1U << 28, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXCCAMSK,
+		    0x0000fc00U, 34);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACGG2TBL,
+		    0x1f, channel <= 64 ? 1 : (channel <= 140 ? 2 : 3));
+	if (channel >= 36 && channel <= 48)
+		ccamask = 0x494;
+	else if (channel >= 52 && channel <= 64)
+		ccamask = 0x453;
+	else if (channel >= 100 && channel <= 116)
+		ccamask = 0x452;
+	else
+		ccamask = 0x412;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_CLKTRK,
+		    0x1ffe0000U, ccamask);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV,
+		    0x00000300U, 1);
+	if (error != 0)
+		return (error);
+
+	/* 20-MHz ADC and receive DFIR profile. */
+	if (rtw88_native_reg_read32(sc, REG_CH_ADCCLK, &value32) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	value32 &= 0xffcffc00U;
+	if (rtw88_native_reg_write32(sc, REG_CH_ADCCLK, value32) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_ADC160,
+	    1U << 30, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBB0,
+		    (3U << 28), 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_ACBBRXFIR,
+		    (3U << 28), 2);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TXDFIR,
+		    1U << 31, 1);
+	if (error != 0)
+		return (error);
+
+	/* MAC remains at 20 MHz; channel index zero encodes 20-MHz width. */
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_WMAC_TRXPTCL_CTL,
+	    CH_MAC_RFMOD_MASK, 0);
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_CH_DATA_SC, 0) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_AFE_CTRL1,
+		    CH_BIT_MAC_CLK_SEL, 0);
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_CH_USTIME_TSF, 80) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error == 0)
+		error = rtw88_native_reg_write8(sc, REG_CH_USTIME_EDCA, 80) ==
+		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	if (error != 0)
+		return (error);
+
+	/* RF18: 5-GHz band, channel, RFSI sub-band and 20-MHz bandwidth. */
+	if (rtw88_native_phy_rf_read(sc, 0, 0x18, &rf18) != 0 ||
+	    rtw88_native_phy_rf_read(sc, 0, 0xbe, &rf_malsel) != 0 ||
+	    rtw88_native_phy_rf_read(sc, 0, 0xdf, &rf_lutdbg) != 0 ||
+	    rtw88_native_phy_rf_read(sc, 0, 0xb8, &rf_xtalx2) != 0)
+		return (EIO);
+	rf18 &= ~(CH_RF18_BAND_MASK | CH_RF18_CHANNEL_MASK |
+	    CH_RF18_RFSI_MASK | CH_RF18_BW_MASK);
+	rf18 |= (1U << 16) | (1U << 8) | channel | CH_RF18_BW_20M;
+	if (channel >= 80 && channel <= 144)
+		rf18 |= (1U << 17);
+	else if (channel > 144)
+		rf18 |= (1U << 18);
+	rf_malsel &= ~CH_RF_MALSEL_MASK;
+	rf_malsel |= (rf_be << 15) & CH_RF_MALSEL_MASK;
+	if (channel == 144)
+		rf_lutdbg |= CH_RF_LUTDBG_MASK;
+	else
+		rf_lutdbg &= ~CH_RF_LUTDBG_MASK;
+	if (rtw88_native_phy_rf_write(sc, 0, 0xbe, rf_malsel) != 0 ||
+	    rtw88_native_phy_rf_write(sc, 0, 0xdf, rf_lutdbg) != 0)
+		return (EIO);
+
+	/* Verify the per-path RF18 writes after the SIPI transaction completes. */
+	for (path = 0; path < sc->rf_path_num; path++) {
+		if ((active_paths & (1U << path)) == 0)
+			continue;
+		rf18_check = 0;
+		rf_write_error = rtw88_native_phy_rf_write(sc, path, 0x18,
+		    rf18);
+		if (rf_write_error == 0)
+			rf_write_error = rtw88_native_phy_rf_read(sc, path, 0x18,
+			    &rf18_check);
+		if (rf_write_error == 0 && rf18_check == rf18)
+			continue;
+
+		device_printf(sc->dev,
+		    "5-GHz RF path %d channel mismatch: write_error=%d wrote=0x%05x read=0x%05x\n",
+		    path, rf_write_error, rf18, rf18_check);
+		if (path != 1 || sc->antenna_tx != BB_PATH_AB ||
+		    sc->antenna_rx != BB_PATH_AB)
+			return (EIO);
+		error = rtw88_native_phy_config_trx_mode(sc, BB_PATH_A,
+		    BB_PATH_A);
+		if (error != 0)
+			return (error);
+		sc->rf_path_num = 1;
+		sc->antenna_tx = BB_PATH_A;
+		sc->antenna_rx = BB_PATH_A;
+		active_paths = BB_PATH_A;
+		if (rtw88_native_reg_read32(sc, RTW88_NATIVE_RF_SIPI_B,
+		    &sipi_b) == USB_ERR_NORMAL_COMPLETION &&
+		    rtw88_native_reg_read32(sc, REG_RF_CTRL, &rf_ctrl) ==
+		    USB_ERR_NORMAL_COMPLETION &&
+		    rtw88_native_reg_read32(sc, REG_WLRF1, &wlrf1) ==
+		    USB_ERR_NORMAL_COMPLETION) {
+			device_printf(sc->dev,
+			    "5-GHz RF-B fallback: SIPI_B=0x%08x RF_CTRL=0x%08x WLRF1=0x%08x\n",
+			    sipi_b, rf_ctrl, wlrf1);
+		}
+		device_printf(sc->dev,
+		    "5-GHz RF path B did not track channel %u; using RF-A only (1T1R)\n",
+		    channel);
+		rf18_check = 0;
+		if (rtw88_native_phy_rf_write(sc, 0, 0x18, rf18) != 0 ||
+		    rtw88_native_phy_rf_read(sc, 0, 0x18,
+		    &rf18_check) != 0 || rf18_check != rf18) {
+			device_printf(sc->dev,
+			    "5-GHz RF-A verification failed: wrote 0x%05x, read 0x%05x\n",
+			    rf18, rf18_check);
+			return (EIO);
+		}
+		break;
+	}
+	rf_xtalx2 &= ~CH_RF_XTALX2_MASK;
+	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
+		return (EIO);
+	rf_xtalx2 |= CH_RF_XTALX2_MASK;
+	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
+		return (EIO);
+
+	/* IFEM-ext RFE option 3: use the 5-GHz RF front-end routes. */
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0,
+	    0x00ffffffU, 0x00477547U);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0 + 0x200,
+		    0x00ffffffU, 0x00477547U);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL8,
+		    0x0000ff00U, 0x75);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL8 + 0x200,
+		    0x0000ff00U, 0x75);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV,
+		    (1U << 11) | (1U << 10) | 0x3fU, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV + 0x200,
+		    (1U << 11) | (1U << 10) | 0x3fU, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW,
+		    0x0000ffffU, 0xa5a5);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW + 0x200,
+		    0x0000ffffU, 0xa5a5);
+	if (error != 0)
+		return (error);
+
+	/* IFEM-ext 5-GHz 1R/2R CCA tables from the 8822B RFE configuration. */
+	ccamask = 0x75da8010U;
+	if (sc->antenna_rx == BB_PATH_AB) {
+		pdmfth = 0x79a0eaaaU;
+		cca2nd = 0x86666361U;
+	} else {
+		pdmfth = 0x79a0eaaaU;
+		cca2nd = 0x87765561U;
+	}
+	if (rtw88_native_reg_write32(sc, REG_CH_CCASEL, ccamask) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_CH_PDMFTH, pdmfth) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_CH_CCA2ND, cca2nd) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	if ((channel >= 52 && channel <= 64) ||
+	    (channel >= 100 && channel <= 140)) {
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_CCA2ND,
+		    0x000000f0U, 4);
+		if (error != 0)
+			return (error);
+	}
+
+	/* Toggle receive gain and pulse the selected antenna path, as upstream. */
+	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	igi_a &= CH_BIT_MAC_RXIGI;
+	if (igi_a < 2)
+		return (EIO);
+	error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+	    CH_BIT_MAC_RXIGI, igi_a - 2);
+	if (error == 0 && (sc->antenna_rx & BB_PATH_B) != 0) {
+		if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_B, &igi_b) !=
+		    USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		igi_b &= CH_BIT_MAC_RXIGI;
+		if (igi_b < 2)
+			return (EIO);
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+		    CH_BIT_MAC_RXIGI, igi_b - 2);
+	}
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
+		    CH_BIT_MAC_RXIGI, igi_a);
+	if (error == 0 && (sc->antenna_rx & BB_PATH_B) != 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
+		    CH_BIT_MAC_RXIGI, igi_b);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    0x000000ffU, 0);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
+		    0x000000ffU,
+		    sc->antenna_rx | (sc->antenna_rx << 4));
+	if (error != 0)
+		return (error);
+
+	device_printf(sc->dev,
+	    "RTL8822B tuned to 5-GHz channel %u at 20 MHz (RFE option 3, %s)\n",
+	    channel, sc->antenna_rx == BB_PATH_AB ? "2T2R" : "1T1R");
+	return (0);
+}
+
+static bool
+rtw88_native_phy_valid_5g_channel(uint8_t channel)
+{
+	switch (channel) {
+	case 36: case 40: case 44: case 48:
+	case 52: case 56: case 60: case 64:
+	case 100: case 104: case 108: case 112: case 116:
+	case 120: case 124: case 128: case 132: case 136: case 140:
+	case 149: case 153: case 157: case 161:
+		return (true);
+	default:
+		return (false);
+	}
+}
+
 int
 rtw88_native_phy_set_channel(struct rtw88_native_softc *sc, uint8_t channel)
 {
 	if (sc == NULL || !sc->powered || !sc->firmware_running ||
 	    !sc->mac_initialized || !sc->phy_initialized || sc->dying)
 		return (EINVAL);
-	/* Keep the first hardware receive test inside 2.4-GHz channels 1-13. */
-	if (channel < 1 || channel > 13)
-		return (EINVAL);
 	if (sc->efuse.rfe_option != 3)
 		return (ENOTSUP);
-	return (rtw88_native_phy_set_channel_2g20(sc, channel));
+	if (channel >= 1 && channel <= 13)
+		return (rtw88_native_phy_set_channel_2g20(sc, channel));
+	if (rtw88_native_phy_valid_5g_channel(channel))
+		return (rtw88_native_phy_set_channel_5g20(sc, channel));
+	return (EINVAL);
 }
 
 /*

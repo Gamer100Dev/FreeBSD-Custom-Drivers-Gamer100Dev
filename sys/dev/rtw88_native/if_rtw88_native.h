@@ -280,6 +280,14 @@ struct rtw88_native_softc {
 	uint64_t		rx_ht_count;
 	uint64_t		rx_vht_count;
 	uint64_t		rx_decrypted_count;
+	uint64_t		rx_assoc_resp_to_self_count;
+	uint64_t		rx_disassoc_to_self_count;
+	uint64_t		rx_disassoc_from_bss_count;
+	int			rx_last_assoc_status;
+	int			rx_last_disassoc_reason;
+	int			station_linked;
+	uint16_t		station_aid;
+	uint8_t		station_bssid[IEEE80211_ADDR_LEN];
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
@@ -393,6 +401,8 @@ int		rtw88_native_efuse_read(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
+int		rtw88_native_mac_set_link(struct rtw88_native_softc *,
+		    const uint8_t *, uint16_t, int);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_set_channel(struct rtw88_native_softc *,
 		    uint8_t);

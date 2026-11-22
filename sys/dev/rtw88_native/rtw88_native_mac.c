@@ -1157,3 +1157,89 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	sc->current_channel = 0;
 	rtw88_native_firmware_put(sc);
 }
+
+#define REG_PORT0_BSSID		0x0618
+#define REG_PORT0_AID		0x06a8
+#define PORT0_NET_TYPE_MASK	0x00030000U
+#define PORT0_NET_TYPE_MGD_LINKED	2U
+#define PORT0_AID_MASK		0x000007ffU
+
+int
+rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
+    const uint8_t *bssid, uint16_t aid, int linked)
+{
+	uint32_t cr, aid_reg, bssid_lo, check32;
+	uint16_t bssid_hi, check16;
+
+	if (sc == NULL || !sc->mac_initialized || !sc->firmware_running)
+		return (ENETDOWN);
+	if (linked && (bssid == NULL || (bssid[0] & 0x01) != 0 ||
+	    aid == 0 || aid > PORT0_AID_MASK))
+		return (EINVAL);
+	if (rtw88_native_reg_read32(sc, RTW88_NATIVE_REG_CR, &cr) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, REG_PORT0_AID, &aid_reg) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	if (!linked) {
+		/* Disable managed-link mode before clearing the peer identity. */
+		cr &= ~PORT0_NET_TYPE_MASK;
+		if (rtw88_native_reg_write32(sc, RTW88_NATIVE_REG_CR, cr) !=
+		    USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		aid_reg &= ~PORT0_AID_MASK;
+		if (rtw88_native_reg_write32(sc, REG_PORT0_AID, aid_reg) !=
+		    USB_ERR_NORMAL_COMPLETION ||
+		    rtw88_native_reg_write32(sc, REG_PORT0_BSSID, 0) !=
+		    USB_ERR_NORMAL_COMPLETION ||
+		    rtw88_native_reg_write16(sc, REG_PORT0_BSSID + 4, 0) !=
+		    USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		if (rtw88_native_reg_read32(sc, RTW88_NATIVE_REG_CR, &check32) !=
+		    USB_ERR_NORMAL_COMPLETION ||
+		    (check32 & PORT0_NET_TYPE_MASK) != 0 ||
+		    rtw88_native_reg_read32(sc, REG_PORT0_AID, &check32) !=
+		    USB_ERR_NORMAL_COMPLETION || (check32 & PORT0_AID_MASK) != 0 ||
+		    rtw88_native_reg_read32(sc, REG_PORT0_BSSID, &check32) !=
+		    USB_ERR_NORMAL_COMPLETION || check32 != 0 ||
+		    rtw88_native_reg_read16(sc, REG_PORT0_BSSID + 4, &check16) !=
+		    USB_ERR_NORMAL_COMPLETION || check16 != 0)
+			return (EIO);
+		return (0);
+	}
+
+	/* RTL8822B register payloads are little-endian. */
+	bssid_lo = (uint32_t)bssid[0] | ((uint32_t)bssid[1] << 8) |
+	    ((uint32_t)bssid[2] << 16) | ((uint32_t)bssid[3] << 24);
+	bssid_hi = (uint16_t)bssid[4] | ((uint16_t)bssid[5] << 8);
+	if (rtw88_native_reg_write32(sc, REG_PORT0_BSSID, bssid_lo) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write16(sc, REG_PORT0_BSSID + 4, bssid_hi) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	aid_reg = (aid_reg & ~PORT0_AID_MASK) | aid;
+	if (rtw88_native_reg_write32(sc, REG_PORT0_AID, aid_reg) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	/* Commit managed-link mode last, after BSSID and AID are valid. */
+	cr = (cr & ~PORT0_NET_TYPE_MASK) |
+	    (PORT0_NET_TYPE_MGD_LINKED << 16);
+	if (rtw88_native_reg_write32(sc, RTW88_NATIVE_REG_CR, cr) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+
+	if (rtw88_native_reg_read32(sc, REG_PORT0_BSSID, &check32) !=
+	    USB_ERR_NORMAL_COMPLETION || check32 != bssid_lo ||
+	    rtw88_native_reg_read16(sc, REG_PORT0_BSSID + 4, &check16) !=
+	    USB_ERR_NORMAL_COMPLETION || check16 != bssid_hi ||
+	    rtw88_native_reg_read32(sc, REG_PORT0_AID, &check32) !=
+	    USB_ERR_NORMAL_COMPLETION || (check32 & PORT0_AID_MASK) != aid ||
+	    rtw88_native_reg_read32(sc, RTW88_NATIVE_REG_CR, &check32) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (check32 & PORT0_NET_TYPE_MASK) !=
+	    (PORT0_NET_TYPE_MGD_LINKED << 16))
+		return (EIO);
+	return (0);
+}

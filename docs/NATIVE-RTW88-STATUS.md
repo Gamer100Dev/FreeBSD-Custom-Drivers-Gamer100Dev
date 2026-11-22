@@ -1,6 +1,6 @@
 # Native RTW88 implementation status
 
-Development branch: `work/native-rtw88-net80211`
+Development branch: `main`
 
 Target: FreeBSD 15.1-RELEASE-p2 amd64, Techkey AC1200 / RTL8822BU,
 USB ID `0bda:b812`.
@@ -23,16 +23,12 @@ USB ID `0bda:b812`.
   initialisation, selecting RF-A/1T1R when firmware reports one antenna.
   If the report cannot be obtained, the driver conservatively initialises
   only RF-A rather than assuming both silicon RF paths are populated.
-- Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
-  exposed as `dev.rtw88_native.N.channel` for channels 1-13. RF writes use
-  the RTL8822B-specific HSSI/SIPI serial-interface ports, and RF18 is read
-  back through each selected path's direct RF window. If RF-B still fails
-  its readback while RF-A is verified, the driver reconfigures TRX selection
-  to RF-A only (1T1R), applies the matching 1R CCA thresholds / antenna
-  switch, verifies RF-A again, and continues channel tuning. The fallback
-  logs the B-path SIPI command, RF control and WLRF1 state for later diagnosis.
-- Native net80211 radio registration after successful hardware start, with
-  station/monitor VAP creation and 2.4-GHz channel advertisement.
+- Manual RTL8822B 2.4/5-GHz, 20-MHz channel programming for eFuse RFE option 3.
+  The 5-GHz path uses separate baseband, RF synthesiser, antenna-routing and
+  1R/2R CCA profiles; RF18 writes are verified and RF-B may fall back to
+  RF-A/1T1R. Native net80211 advertises 2.4-GHz 11b/g and 5-GHz 11a/20-MHz
+  channels. The 5-GHz channel set is passive-only pending regulatory, DFS and
+  calibrated TX-power support.
 - Active and passive software scan callbacks: active scans use the
   FreeBSD net80211 probe-request generator and route those frames through
   the driver's management-frame transmit callback.
@@ -164,9 +160,11 @@ adapter.
 ## Not yet implemented
 
 - Full RFE board selection, IQK/DPK, thermal tracking, antenna diversity and
-  TX-power calibration; 5-GHz and non-20-MHz channel programming are not
-  implemented. Runtime C2H event decoding remains incomplete; only the
-  startup hardware-feature report is decoded.
+  per-channel TX-power calibration remain incomplete. The initial 5-GHz path
+  is limited to RFE option 3 at 20 MHz; HT/VHT, regulatory-domain integration,
+  DFS CAC/radar handling and active 5-GHz scanning are not implemented.
+  Runtime C2H event decoding remains incomplete; only the startup feature
+  report is decoded.
 - Per-chain RSSI/SNR/EVM reporting, C2H command-specific event
   decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
   Basic RX rate/width decoding and RTL8822B PHY-status page 0/1 handling are
@@ -348,8 +346,20 @@ Frames without valid PHY status no longer claim that RSSI/noise measurements
 are present. Hardware-decrypted frames are marked with
 IEEE80211_RX_F_DECRYPTED, the net80211 RX-status flag.
 
-This is RX metadata parity only. It does not enable 5-GHz operation, HT/VHT
-association capabilities, hardware key-cache offload, firmware C2H event
-dispatch or AMPDU reordering. The PHY/RF tuning code and radiocaps remain
-limited to 2.4-GHz 20-MHz channels until those paths are implemented and
-validated independently.
+This is RX metadata parity only. HT/VHT association capabilities, hardware key-cache offload, firmware C2H event dispatch and AMPDU reordering remain unimplemented. The 5-GHz PHY path is passive 20-MHz only and has not yet been validated on the physical adapter.
+
+
+## Association-state hardware programming
+
+The STA VAP now wraps `iv_newstate`: before net80211 publishes
+`IEEE80211_S_RUN`, the driver programs and verifies port-0 BSSID (0x0618),
+AID (0x06a8), and managed-linked network type (CR[17:16]=2), following the
+upstream RTW88 register map. On leaving RUN it clears link mode before
+clearing AID/BSSID. A failed link-programming readback prevents the STA VAP
+from publishing RUN.
+
+The RX diagnostics add `rx_assoc_resp_to_self_count`,
+`rx_last_assoc_status`, `rx_disassoc_to_self_count`,
+`rx_disassoc_from_bss_count`, and `rx_last_disassoc_reason`, to distinguish
+frames addressed to this station and disassociations sourced by its programmed
+BSSID from the older all-BSS subtype totals.

@@ -45,8 +45,9 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	int phy_valid;
 
 	mtx_assert(&sc->mtx, MA_OWNED);
-	if (!sc->net80211_attached || sc->current_channel < 1 ||
-	    sc->current_channel > 13) {
+	if (!sc->net80211_attached ||
+	    !((sc->current_channel >= 1 && sc->current_channel <= 13) ||
+	    (sc->current_channel >= 36 && sc->current_channel <= 161))) {
 		sc->rx_input_drop_count++;
 		return;
 	}
@@ -103,12 +104,26 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 		case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
 		case IEEE80211_FC0_SUBTYPE_REASSOC_RESP:
 			sc->rx_assoc_resp_count++;
+			if (IEEE80211_ADDR_EQ(wh->i_addr1, sc->ic.ic_macaddr)) {
+				sc->rx_assoc_resp_to_self_count++;
+				if (packet_length >= sizeof(*wh) + 4)
+					sc->rx_last_assoc_status =
+					    le16dec((const uint8_t *)wh + sizeof(*wh) + 2);
+			}
 			break;
 		case IEEE80211_FC0_SUBTYPE_DEAUTH:
 			sc->rx_deauth_count++;
 			break;
 		case IEEE80211_FC0_SUBTYPE_DISASSOC:
 			sc->rx_disassoc_count++;
+			if (IEEE80211_ADDR_EQ(wh->i_addr1, sc->ic.ic_macaddr))
+				sc->rx_disassoc_to_self_count++;
+			if (sc->station_linked &&
+			    IEEE80211_ADDR_EQ(wh->i_addr2, sc->station_bssid))
+				sc->rx_disassoc_from_bss_count++;
+			if (packet_length >= sizeof(*wh) + 2)
+				sc->rx_last_disassoc_reason =
+				    le16dec((const uint8_t *)wh + sizeof(*wh));
 			break;
 		case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
 			sc->rx_probe_resp_count++;
@@ -187,8 +202,13 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	rxs.r_flags = IEEE80211_R_IEEE | IEEE80211_R_FREQ |
 	    IEEE80211_R_BAND | IEEE80211_R_TSF32;
 	rxs.c_ieee = channel;
-	rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_2GHZ);
-	rxs.c_band = IEEE80211_CHAN_2GHZ;
+	if (channel >= 36) {
+		rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_5GHZ);
+		rxs.c_band = IEEE80211_CHAN_5GHZ;
+	} else {
+		rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_2GHZ);
+		rxs.c_band = IEEE80211_CHAN_2GHZ;
+	}
 	rxs.c_rx_tsf = le32toh(w5);
 
 	/*
