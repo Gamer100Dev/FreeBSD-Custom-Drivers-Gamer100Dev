@@ -93,6 +93,7 @@
 #define RTW88_NATIVE_RX_MAX_FRAME		11454U
 #define RTW88_NATIVE_RX_PHY_STATUS_SIZE	32U
 #define RTW88_NATIVE_RX_RATE_MAX		0x54U
+#define RTW88_NATIVE_TXPWR_IDX_SIZE		38U
 
 
 #define RTW88_NATIVE_REG_CR			0x0100
@@ -231,6 +232,8 @@ struct rtw88_native_efuse {
 	uint8_t	lna_type_5g;
 	uint8_t	bt_setting;
 	uint8_t	rf_antenna_option;
+	/* Packed struct rtw_txpwr_idx records for RF paths A and B. */
+	uint8_t	txpwr_idx[2][RTW88_NATIVE_TXPWR_IDX_SIZE];
 	bool	macaddr_valid;
 };
 

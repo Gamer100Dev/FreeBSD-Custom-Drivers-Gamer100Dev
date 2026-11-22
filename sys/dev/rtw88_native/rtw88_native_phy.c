@@ -67,6 +67,8 @@
 #define RF_LUTWE			0xef
 #define RF_PATH_A_BASE			0x2800
 #define RF_PATH_B_BASE			0x2c00
+#define REG_TXAGC_PATH_A		0x1d00
+#define REG_TXAGC_PATH_B		0x1d80
 #define RTW88_NATIVE_RF_SIPI_A		0x0c90
 #define RTW88_NATIVE_RF_SIPI_B		0x0e90
 
@@ -1075,19 +1077,286 @@ rtw88_native_phy_valid_5g_channel(uint8_t channel)
 	}
 }
 
+
+/*
+ * RTL8822B rate-power programming for the supported RFE option 3 profile.
+ *
+ * eFuse records are struct rtw_txpwr_idx from RTW88 main.h:
+ * 2G (15 bytes): CCK base[6], BW40 base[5], HT1S diff, HT2S/3S/4S diffs.
+ * 5G (23 bytes): BW40 base[14], HT1S/2S/3S/4S, OFDM and VHT diffs.
+ *
+ * The RFE-3 BB-PG table stores BCD rate values. RTW88 normalises each
+ * rate section to its final rate, yielding CCK {6,4,2,0} and legacy OFDM
+ * {14,12,10,8,6,4,2,0}. The corresponding base values (32 CCK,
+ * 28 2G OFDM, 26 5G OFDM) are subtracted from the upstream type-0 power
+ * limits before those limits are applied.
+ *
+ * Native TX currently selects CCK 1 Mbps on 2.4 GHz and OFDM 6 Mbps on
+ * 5 GHz. Populate every legacy rate in those sections for consistent
+ * operation if net80211 chooses another basic legacy rate.
+ */
+static const int8_t rtw88_native_cck_rate_offset[4] = { 6, 4, 2, 0 };
+static const int8_t rtw88_native_ofdm_rate_offset[8] =
+    { 14, 12, 10, 8, 6, 4, 2, 0 };
+
+static int
+rtw88_native_phy_txpwr_group(uint8_t channel)
+{
+	/* RTW88 rtw_get_channel_group() boundaries for 20-MHz channels. */
+	if (channel >= 1 && channel <= 2)
+		return (0);
+	if (channel >= 3 && channel <= 5)
+		return (1);
+	if (channel >= 6 && channel <= 8)
+		return (2);
+	if (channel >= 9 && channel <= 11)
+		return (3);
+	if (channel >= 12 && channel <= 13)
+		return (4);
+	if (channel >= 36 && channel <= 42)
+		return (0);
+	if (channel >= 44 && channel <= 50)
+		return (1);
+	if (channel >= 52 && channel <= 58)
+		return (2);
+	if (channel >= 60 && channel <= 64)
+		return (3);
+	if (channel >= 100 && channel <= 106)
+		return (4);
+	if (channel >= 108 && channel <= 114)
+		return (5);
+	if (channel >= 116 && channel <= 122)
+		return (6);
+	if (channel >= 124 && channel <= 130)
+		return (7);
+	if (channel >= 132 && channel <= 138)
+		return (8);
+	if (channel >= 140 && channel <= 144)
+		return (9);
+	if (channel >= 149 && channel <= 155)
+		return (10);
+	if (channel >= 157 && channel <= 161)
+		return (11);
+	if (channel >= 165 && channel <= 171)
+		return (12);
+	if (channel >= 173 && channel <= 177)
+		return (13);
+	return (-1);
+}
+
+/*
+ * Minimum of the three regional entries for RFE-3 TX-power-limit type 0
+ * (the upstream WORLDWIDE fallback). These are absolute rate-section
+ * limits; the matching BB-PG base is subtracted below as RTW88 does.
+ */
+static int
+rtw88_native_phy_txpwr_limit(uint8_t channel, bool cck)
+{
+	if (channel >= 1 && channel <= 13) {
+		if (cck) {
+			if (channel <= 11)
+				return (28);
+			return (channel == 12 ? 26 : 20);
+		}
+		if (channel == 1)
+			return (26);
+		if (channel <= 10)
+			return (30);
+		if (channel == 11)
+			return (28);
+		return (channel == 12 ? 22 : 14);
+	}
+	if (cck)
+		return (-1);
+	switch (channel) {
+	case 36: case 40: case 44: case 48:
+		return (30);
+	case 52: case 56: case 60: case 64:
+		return (28);
+	case 100:
+		return (26);
+	case 104: case 108: case 112: case 116: case 120:
+	case 124: case 128: case 132: case 136:
+	case 149: case 153: case 157: case 161:
+		return (32);
+	case 140: case 144:
+		return (28);
+	case 165: case 167: case 169: case 171:
+	case 173: case 175: case 177:
+		return (32);
+	default:
+		return (-1);
+	}
+}
+
+static int
+rtw88_native_phy_signed_nibble(uint8_t value)
+{
+	int result;
+
+	result = value & 0x0f;
+	if ((result & 0x08) != 0)
+		result -= 16;
+	return (result);
+}
+
+static uint8_t
+rtw88_native_phy_txpwr_clamp(int value)
+{
+	if (value < 0)
+		return (0);
+	if (value > 0x3f)
+		return (0x3f);
+	return ((uint8_t)value);
+}
+
+static int
+rtw88_native_phy_write_txagc(struct rtw88_native_softc *sc,
+    uint16_t reg, uint32_t value)
+{
+	uint32_t check;
+
+	if (rtw88_native_reg_write32(sc, reg, value) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_read32(sc, reg, &check) !=
+	    USB_ERR_NORMAL_COMPLETION)
+		return (EIO);
+	if (check != value) {
+		device_printf(sc->dev,
+		    "TXAGC readback mismatch at 0x%04x: wrote 0x%08x read 0x%08x\n",
+		    reg, value, check);
+		return (EIO);
+	}
+	return (0);
+}
+
+static int
+rtw88_native_phy_set_tx_power(struct rtw88_native_softc *sc,
+    uint8_t channel)
+{
+	const uint8_t *idx;
+	uint16_t reg;
+	uint32_t word;
+	uint8_t pathmask;
+	int group, path, i, base, base_offset, raw_limit, limit;
+	int offset, value, error;
+	bool band_2g;
+
+	if (!sc->efuse_initialized || sc->efuse.rfe_option != 3)
+		return (ENXIO);
+	group = rtw88_native_phy_txpwr_group(channel);
+	if (group < 0)
+		return (EINVAL);
+	band_2g = channel <= 13;
+	pathmask = sc->antenna_tx;
+	if ((pathmask & 0x03) == 0)
+		return (ENXIO);
+
+	for (path = 0; path < 2; path++) {
+		if ((pathmask & (1U << path)) == 0)
+			continue;
+		idx = sc->efuse.txpwr_idx[path];
+		reg = path == 0 ? REG_TXAGC_PATH_A : REG_TXAGC_PATH_B;
+
+		if (band_2g) {
+			/* CCK base index is the first 2G calibration array. */
+			base = idx[group];
+			if (base > 0x3f)
+				return (ENXIO);
+			raw_limit = rtw88_native_phy_txpwr_limit(channel, true);
+			if (raw_limit < 0)
+				return (EINVAL);
+			limit = raw_limit - 32; /* RTW88 CCK BB-PG base rate. */
+			word = 0;
+			for (i = 0; i < 4; i++) {
+				offset = MIN((int)rtw88_native_cck_rate_offset[i],
+				    limit);
+				value = base + offset;
+				word |= (uint32_t)rtw88_native_phy_txpwr_clamp(value)
+				    << (i * 8);
+			}
+			error = rtw88_native_phy_write_txagc(sc, reg, word);
+			if (error != 0)
+				return (error);
+		}
+
+		/*
+		 * Byte 11 is the 2G OFDM adjustment after CCK[6]/BW40[5].
+		 * Byte 29 is its 5G counterpart after the 14-entry BW40 array.
+		 * The 4-bit signed value is valid even when its byte is 0xff.
+		 */
+		if (band_2g) {
+			base = idx[6 + group];
+			if (base > 0x3f)
+				return (ENXIO);
+			base += rtw88_native_phy_signed_nibble(idx[11]);
+			base_offset = 28;
+		} else {
+			base = idx[15 + group];
+			if (base > 0x3f)
+				return (ENXIO);
+			base += rtw88_native_phy_signed_nibble(idx[29]);
+			base_offset = 26;
+		}
+		raw_limit = rtw88_native_phy_txpwr_limit(channel, false);
+		if (raw_limit < 0)
+			return (EINVAL);
+		limit = raw_limit - base_offset;
+
+		/* Rates 6/9/12/18 Mbps occupy TXAGC bytes at +4. */
+		word = 0;
+		for (i = 0; i < 4; i++) {
+			offset = MIN((int)rtw88_native_ofdm_rate_offset[i],
+			    limit);
+			value = base + offset;
+			word |= (uint32_t)rtw88_native_phy_txpwr_clamp(value)
+			    << (i * 8);
+		}
+		error = rtw88_native_phy_write_txagc(sc, reg + 4, word);
+		if (error != 0)
+			return (error);
+
+		/* Rates 24/36/48/54 Mbps occupy TXAGC bytes at +8. */
+		word = 0;
+		for (i = 0; i < 4; i++) {
+			offset = MIN((int)rtw88_native_ofdm_rate_offset[i + 4],
+			    limit);
+			value = base + offset;
+			word |= (uint32_t)rtw88_native_phy_txpwr_clamp(value)
+			    << (i * 8);
+		}
+		error = rtw88_native_phy_write_txagc(sc, reg + 8, word);
+		if (error != 0)
+			return (error);
+	}
+	return (0);
+}
+
+
 int
 rtw88_native_phy_set_channel(struct rtw88_native_softc *sc, uint8_t channel)
 {
+	int error;
+
 	if (sc == NULL || !sc->powered || !sc->firmware_running ||
 	    !sc->mac_initialized || !sc->phy_initialized || sc->dying)
 		return (EINVAL);
 	if (sc->efuse.rfe_option != 3)
 		return (ENOTSUP);
 	if (channel >= 1 && channel <= 13)
-		return (rtw88_native_phy_set_channel_2g20(sc, channel));
-	if (rtw88_native_phy_valid_5g_channel(channel))
-		return (rtw88_native_phy_set_channel_5g20(sc, channel));
-	return (EINVAL);
+		error = rtw88_native_phy_set_channel_2g20(sc, channel);
+	else if (rtw88_native_phy_valid_5g_channel(channel))
+		error = rtw88_native_phy_set_channel_5g20(sc, channel);
+	else
+		return (EINVAL);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Linux RTW88 calls rtw_phy_set_tx_power_level() after RF channel
+	 * setup. Apply per-chain TXAGC only after the requested channel locks.
+	 */
+	return (rtw88_native_phy_set_tx_power(sc, channel));
 }
 
 /*

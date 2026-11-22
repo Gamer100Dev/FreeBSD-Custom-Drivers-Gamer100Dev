@@ -108,6 +108,11 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
   map, respecting the 96-byte protected tail.
 - Extract the RTL8822BU MAC address, channel plan, country code, crystal cap,
   thermal meter, PA/LNA, board and RFE fields.
+- Capture the first two packed 38-byte `rtw_txpwr_idx` records (RF A/B) from
+  logical eFuse offset `0x10`.
+- Program RFE-option-3 legacy TXAGC values on every channel change: 2.4-GHz
+  CCK/OFDM and 5-GHz OFDM use upstream BB-PG rate deltas, eFuse bases and
+  worldwide fallback limits. Each TXAGC word is read back and verified.
 - Route VO/VI to the NORMAL DMA map, BE/BK to LOW and MG/HI to HIGH for the
   three bulk-OUT endpoint layout.
 - Configure the 8822B TX FIFO page table, reserved pages, beacon boundary,
@@ -160,9 +165,12 @@ adapter.
 ## Not yet implemented
 
 - Full RFE board selection, IQK/DPK, thermal tracking, antenna diversity and
-  per-channel TX-power calibration remain incomplete. The initial 5-GHz path
-  is limited to RFE option 3 at 20 MHz; HT/VHT, regulatory-domain integration,
-  DFS CAC/radar handling and active 5-GHz scanning are not implemented.
+  per-channel dynamic power tracking remain incomplete. The initial 5-GHz path
+  is limited to RFE option 3 at 20 MHz; HT/VHT per-rate TXAGC, SAR and
+  regulatory-domain-specific power integration, DFS CAC/radar handling and
+  active 5-GHz scanning are not implemented. The legacy power path uses the
+  upstream worldwide fallback table only and still requires physical RF
+  validation.
   Runtime C2H event decoding remains incomplete; only the startup feature
   report is decoded.
 - Per-chain RSSI/SNR/EVM reporting, C2H command-specific event

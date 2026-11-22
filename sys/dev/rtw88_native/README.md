@@ -11,7 +11,8 @@ LinuxKPI and the Linuxulator. Work is focused on FreeBSD 15.1 amd64.
   three bulk-OUT, one interrupt-IN.
 - Checked USB register access, RTL8822B power/MAC setup, firmware acquisition
   and validation, DDMA segment download and checksum/READY checks.
-- eFuse map decoding and board/MAC extraction.
+- eFuse map decoding, board/MAC extraction and packed per-chain RTL8822B TX-power indices.
+- RFE-option-3 legacy CCK/OFDM TXAGC programming for 2.4/5 GHz on every channel change, using upstream BB-PG offsets and worldwide power-limit fallback with register readback.
 - PHY/BB/RF table setup, channel tuning and diagnostic register readback.
 - Native net80211 station/monitor VAP, 2.4-GHz channels and restricted
   5-GHz channels, scanning callbacks and deferred RX input.
@@ -22,7 +23,11 @@ LinuxKPI and the Linuxulator. Work is focused on FreeBSD 15.1 amd64.
 This is still experimental. USB transfer completion is not an over-the-air
 acknowledgement. End-to-end WPA association, key handling, DHCP/IP, regulatory
 compliance, calibration and suspend/resume are not yet fully validated.
-Hardware key-cache offload, negotiated rate control, aggregation, full C2H
+Full HT/VHT per-rate TX power programming, thermal/SAR power tracking and
+regulatory-domain-specific power integration are not yet implemented. The
+legacy TX power path currently uses the RFE-3 worldwide fallback limits and
+has not been verified on the physical adapter. Hardware key-cache offload,
+negotiated rate control, aggregation, full C2H
 dispatch and TX ACK status are not complete. Do not infer functionality from
 successful module load alone.
 
@@ -49,7 +54,7 @@ resolve the file before starting the hardware.
 ## Load and start
 
 ```sh
-sudo kldload ./build/if_rtw88_native.ko
+sudo kldload /usr/src/sys/modules/rtw88_native/if_rtw88_native.ko
 dmesg | tail -50
 ```
 
