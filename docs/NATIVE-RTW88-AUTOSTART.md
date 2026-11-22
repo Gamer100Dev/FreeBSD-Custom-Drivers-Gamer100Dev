@@ -23,7 +23,7 @@ Run from a clean checkout on the FreeBSD machine:
 
 ```sh
 tools/build-native-module.sh
-tools/install-native-autostart.sh
+sh tools/install-native-autostart.sh
 ```
 
 The installer copies the resulting module into `/boot/modules`, installs the
