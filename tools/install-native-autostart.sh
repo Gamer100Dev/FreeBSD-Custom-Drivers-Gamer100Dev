@@ -30,5 +30,8 @@ if [ -z "$(sysrc -n ifconfig_wlan0 2>/dev/null || true)" ]; then
 fi
 
 /etc/rc.d/devd restart
+/usr/local/etc/rc.d/rtw88_native start
+/etc/rc.d/netif quietstart wlan0 || true
+
 echo "Installed if_rtw88_native and boot/USB-hotplug autostart."
-echo "Reboot to load the newly installed module binary."
+echo "The next boot will load the newly installed module before netif."
