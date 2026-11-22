@@ -15,6 +15,7 @@ name="rtw88_native"
 rcvar="rtw88_native_enable"
 start_cmd="rtw88_native_start"
 stop_cmd="rtw88_native_stop"
+status_cmd="rtw88_native_status"
 
 load_rc_config "$name"
 : ${rtw88_native_enable:="YES"}
@@ -33,6 +34,33 @@ rtw88_native_start_oid()
 	/sbin/sysctl "${_oid}=1"
 }
 
+rtw88_native_create_vap()
+{
+	_unit="$1"
+	case "$_unit" in
+	    ''|*[!0-9]*) return 1 ;;
+	esac
+	_parent="rtw88_native${_unit}"
+
+	# The stock wlans_* rc.conf parser does not accept underscores in
+	# parent interface names. Create the VAP explicitly, then let netif
+	# apply ifconfig_wlan0 (WPA/DHCP) in the normal way.
+	if _ifconfig=$(/sbin/ifconfig wlan0 2>/dev/null); then
+		case "$_ifconfig" in
+		    *"parent interface: ${_parent}"*) return 0 ;;
+		    *)
+			/usr/bin/logger -t rtw88_native "wlan0 already belongs to another parent; leaving it unchanged"
+			return 1
+			;;
+		esac
+	fi
+
+	/sbin/ifconfig wlan0 create wlandev "$_parent" || {
+		/usr/bin/logger -t rtw88_native "could not create wlan0 on $_parent"
+		return 1
+	}
+}
+
 rtw88_native_start_unit()
 {
 	_unit="$1"
@@ -45,7 +73,7 @@ rtw88_native_start_unit()
 
 	_oid="dev.rtw88_native.${_unit}.hw_start"
 	_n=0
-	while [ "$_n" -lt 20 ]; do
+	while [ "$_n" -lt 10 ]; do
 		if /sbin/sysctl -n "$_oid" >/dev/null 2>&1; then
 			rtw88_native_start_oid "$_oid"
 			return $?
@@ -63,14 +91,14 @@ rtw88_native_start()
 	# Load after FILESYSTEMS so firmware_get() can safely access firmware.
 	if ! /sbin/kldstat -q -m if_rtw88_native &&
 	    ! /sbin/kldstat -q -m rtw88_native; then
-		/sbin/kldload if_rtw88_native
+		/sbin/kldload if_rtw88_native || return 1
 	fi
 
-	# The USB device may already be present at boot. Start every attached
-	# instance; an empty list is normal when the adapter is unplugged.
+	# USB probing is synchronous with kldload. A short retry handles sysctl
+	# registration; no adapter is a normal case on machines without it plugged.
 	_n=0
 	_oids=""
-	while [ "$_n" -lt 20 ]; do
+	while [ "$_n" -lt 5 ]; do
 		_oids="$(rtw88_native_oids)"
 		[ -n "$_oids" ] && break
 		sleep 1
@@ -84,6 +112,9 @@ rtw88_native_start()
 
 	for _oid in $_oids; do
 		rtw88_native_start_oid "$_oid" || return 1
+		_unit="${_oid#dev.rtw88_native.}"
+		_unit="${_unit%.hw_start}"
+		rtw88_native_create_vap "$_unit" || return 1
 	done
 	return 0
 }
@@ -94,6 +125,20 @@ rtw88_native_stop()
 		/sbin/sysctl "${_oid}=0" >/dev/null || return 1
 	done
 	return 0
+}
+
+rtw88_native_status()
+{
+	_found=0
+	for _oid in $(rtw88_native_oids); do
+		_value=$(/sbin/sysctl -n "$_oid" 2>/dev/null) || continue
+		echo "${_oid}: ${_value}"
+		_found=1
+	done
+	if [ "$_found" -eq 0 ]; then
+		echo "No RTL8822BU adapter currently attached."
+		return 1
+	fi
 }
 
 rtw88_native_hotplug()
@@ -109,9 +154,9 @@ rtw88_native_hotplug()
 
 	_unit="${_devname#rtw88_native}"
 	rtw88_native_start_unit "$_unit" || return 1
+	rtw88_native_create_vap "$_unit" || return 1
 
-	# Create/configure the VAP from wlans_rtw88_nativeN and
-	# ifconfig_wlan0 in rc.conf, without restarting unrelated interfaces.
+	# Configure only the wireless VAP; do not restart unrelated interfaces.
 	/etc/rc.d/netif quietstart wlan0 || \
 	    /usr/bin/logger -t rtw88_native "radio started; netif quietstart wlan0 did not complete"
 	return 0
