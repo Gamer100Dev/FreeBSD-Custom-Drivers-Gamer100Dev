@@ -62,13 +62,12 @@ and devd rule are installed.
 
 ## Performance changes and remaining work
 
-Ordinary data frames now leave the RTW88 descriptor's explicit-rate bit clear
-and allow firmware rate adaptation, instead of forcing every 2.4-GHz data
-frame to 1 Mbps with fallback disabled. Management and EAPOL frames retain
-robust fixed legacy rates.
+Ordinary data frames now leave the RTW88 descriptor's explicit-rate bit clear.
+On STA association, the driver also sends the AP's negotiated legacy CCK/OFDM
+rate mask to firmware using RTW88's RA_INFO H2C command. Management and EAPOL
+frames retain robust fixed legacy rates.
 
-This is a first performance correction, not a complete Linux RTW88 port.
-USB TX aggregation, peer-negotiated HT/VHT rate masks, AMPDU/aggregation,
-hardware crypto offload, and full TX-rate/status feedback are still missing.
-Those need separate implementation and on-device validation; do not assume
-this change alone guarantees a particular throughput.
+This is not a complete Linux RTW88 port. USB TX aggregation, HT/VHT MCS masks
+and negotiation, AMPDU, hardware crypto offload, and full TX-rate/status
+feedback remain missing. These need separate implementation and on-device
+validation; no throughput improvement is guaranteed by source changes alone.
