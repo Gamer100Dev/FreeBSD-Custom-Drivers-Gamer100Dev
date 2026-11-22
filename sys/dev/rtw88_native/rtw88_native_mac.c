@@ -1094,7 +1094,17 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 		    "Wi-Fi-only RFE route not applicable to this eFuse/RF topology; leaving board route unchanged\n");
 		error = 0;
 	} else if (error != 0) {
-		goto fail;
+		/*
+		 * Linux RTW88 exposes this coexistence initialisation as a void,
+		 * best-effort callback. Keep a partially unavailable LTE/BT
+		 * coexistence block from taking down an otherwise initialised WLAN
+		 * MAC; the WLAN antenna route is programmed before these optional
+		 * coexistence accesses.
+		 */
+		device_printf(sc->dev,
+		    "warning: Wi-Fi-only coexistence setup incomplete (%d); continuing with WLAN radio startup\n",
+		    error);
+		error = 0;
 	}
 
 	/*

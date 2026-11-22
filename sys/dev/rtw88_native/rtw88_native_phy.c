@@ -1640,6 +1640,37 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 		return (error);
 
 	/*
+	 * Establish the board's WLAN-owned antenna path before touching the
+	 * optional LTE/BT coexistence registers.  The upstream Linux callback is
+	 * best-effort; an unavailable LTE indirect window must not leave the
+	 * external RF switch pointed away from WLAN or prevent radio attach.
+	 */
+	/* COEX_SET_ANT_WONLY: grant path control to WLAN. 8822B has no btg_reg. */
+	if (rtw88_native_phy_write_mask8(sc, REG_SYS_SDIO_CTRL + 3,
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24),
+	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) != 0)
+		return (EIO);
+
+	/*
+	 * rtw8822b_coex_cfg_ant_switch(BBSW, WLG): LED_CFG[23]=0,
+	 * LED_CFG[24]=1, RFE_CTRL8[7:0]=0x77, RFE_INV8[1:0]=2.
+	 */
+	error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 2,
+	    0x80, 0x00);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 3,
+		    0x01, 0x01);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_CTRL8,
+		    0xff, 0x77);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV8,
+		    0x03, 0x02);
+	if (error != 0)
+		return (error);
+
+
+	/*
 	 * Linux disables LTE coexistence, then sets both WLAN/BT-vs-LTE
 	 * direction masks to all ones. Keep these indirect writes checked.
 	 */
@@ -1723,29 +1754,6 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	if (error != 0)
 		return (error);
 
-	/* COEX_SET_ANT_WONLY: grant path control to WLAN. 8822B has no btg_reg. */
-	if (rtw88_native_phy_write_mask8(sc, REG_SYS_SDIO_CTRL + 3,
-	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24),
-	    (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) != 0)
-		return (EIO);
-
-	/*
-	 * rtw8822b_coex_cfg_ant_switch(BBSW, WLG): LED_CFG[23]=0,
-	 * LED_CFG[24]=1, RFE_CTRL8[7:0]=0x77, RFE_INV8[1:0]=2.
-	 */
-	error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 2,
-	    0x80, 0x00);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask8(sc, REG_LED_CFG + 3,
-		    0x01, 0x01);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask8(sc, REG_RFE_CTRL8,
-		    0xff, 0x77);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask8(sc, REG_RFE_INV8,
-		    0x03, 0x02);
-	if (error != 0)
-		return (error);
 
 	/*
 	 * COEX_SCBD_ACTIVE | COEX_SCBD_ONOFF: tell firmware that WLAN is

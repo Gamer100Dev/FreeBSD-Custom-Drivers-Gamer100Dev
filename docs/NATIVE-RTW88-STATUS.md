@@ -125,6 +125,10 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
   is parsed and any decoded frames are queued to the net80211 input task.
 - Add an explicit `rtw88_native_hw_start()` / `rtw88_native_hw_stop()`
   sequence, exposed by a serialized `dev.rtw88_native.N.hw_start` sysctl.
+- Program the WLAN-owned RFE antenna-switch route before optional LTE/BT
+  coexistence accesses. A failed optional coexistence operation is reported as
+  a warning and no longer prevents net80211 registration or RX startup,
+  matching Linux RTW88's best-effort coexistence callback semantics.
 - Start the native interrupt-IN transfer after firmware/base MAC setup,
   capture raw reports in a bounded buffer, and expose count/last-length
   diagnostics through read-only sysctls.
