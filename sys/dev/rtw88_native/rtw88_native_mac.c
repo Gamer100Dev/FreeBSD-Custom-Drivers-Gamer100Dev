@@ -994,6 +994,25 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
+
+	/*
+	 * Linux main.c sends General Info and PHYDM Info immediately after
+	 * HCI start. The firmware uses these to configure its reserved TX
+	 * boundary and the 8822B RFE/RF/antenna topology.
+	 */
+	error = rtw88_native_firmware_send_initial_h2c(sc);
+	if (error != 0)
+		goto fail;
+
+	/*
+	 * This eFuse board is Wi-Fi-only (rf_board_option=0x01). Linux
+	 * nevertheless applies the 8822B WONLY coexistence grants and WLG
+	 * antenna-switch route before publishing the radio to net80211.
+	 */
+	error = rtw88_native_coex_wifi_only_init(sc);
+	if (error != 0)
+		goto fail;
+
 	error = rtw88_native_net80211_attach(sc);
 	if (error != 0)
 		goto fail;
@@ -1005,6 +1024,7 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 fail:
 	rtw88_native_usb_rx_stop(sc);
 	rtw88_native_usb_intr_stop(sc);
+	sc->wifi_only_coex_initialized = 0;
 	rtw88_native_mac_stop(sc);
 	(void)rtw88_native_chip_power_off(sc);
 	rtw88_native_firmware_put(sc);
@@ -1037,6 +1057,7 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	(void)rtw88_native_chip_power_off(sc);
 	sc->firmware_running = 0;
 	sc->current_channel = 0;
+	sc->wifi_only_coex_initialized = 0;
 	mtx_lock(&sc->mtx);
 	sc->scan_igi_valid = 0;
 	sc->scan_igi_saved = 0;

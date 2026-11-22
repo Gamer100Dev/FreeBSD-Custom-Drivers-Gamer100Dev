@@ -260,10 +260,16 @@ struct rtw88_native_softc {
 	uint16_t		rsvd_h2c_sta_info_addr;
 	uint16_t		rsvd_h2cq_addr;
 	uint16_t		rsvd_fw_txbuf_addr;
+	uint16_t		fw_h2c_seq;
+	uint64_t		fw_h2c_general_count;
+	uint64_t		fw_h2c_phydm_count;
+	uint64_t		fw_h2c_error_count;
+	int			fw_h2c_error;
 	int			powered;
 	int			firmware_running;
 	int			mac_initialized;
 	int			phy_initialized;
+	int			wifi_only_coex_initialized;
 	int			efuse_initialized;
 	int			current_channel;
 	uint8_t			scan_igi_saved;
@@ -328,12 +334,14 @@ usb_error_t	rtw88_native_reg_write32(struct rtw88_native_softc *,
 int		rtw88_native_firmware_get(struct rtw88_native_softc *);
 void		rtw88_native_firmware_put(struct rtw88_native_softc *);
 int		rtw88_native_firmware_download(struct rtw88_native_softc *);
+int		rtw88_native_firmware_send_initial_h2c(struct rtw88_native_softc *);
 int		rtw88_native_efuse_read(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
 int		rtw88_native_usb_rx_dma_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
+int		rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *);
 int		rtw88_native_phy_set_channel(struct rtw88_native_softc *,
 		    uint8_t);
 int		rtw88_native_phy_scan_gain(struct rtw88_native_softc *,

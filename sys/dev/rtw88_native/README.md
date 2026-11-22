@@ -205,6 +205,32 @@ This branch's EDCCA and scan-gain changes still require physical validation
 on the RTL8822BU; a successful compile does not establish that networks will
 be discovered in every RF environment.
 
+Linux RTW88 also sends two mandatory 3081 firmware-offload H2C packets after
+USB HCI startup. The native driver now sends the matching General Info
+(`0x0d`) packet with the reserved firmware TX-buffer boundary and PHYDM Info
+(`0x11`) packet with the RFE, 2T2R RF type, silicon cut and antenna paths.
+Both are transferred as 32-byte H2C payloads with the 48-byte RTL8822B TX
+descriptor on the H2C queue. The new `fw_h2c_general_count`,
+`fw_h2c_phydm_count`, `fw_h2c_error_count` and `fw_h2c_error` sysctls
+report whether each command completed on USB. Firmware H2C delivery and
+actual network discovery still require physical validation.
+
+The eFuse board option `0x01` selects Linux's Wi-Fi-only coexistence path
+(`btcoex=false`). The native startup now applies the matching RTL8822B
+WONLY route for RFE option 3: checked LTE indirect-register access, BT
+grant fixed low, WLAN grant fixed high, WLAN ownership of the coexistence
+mux, and the BBSW/WLG DPDT antenna selection. It also applies the upstream
+RFE buffer and pin-mux setup. This is deliberately the Wi-Fi-only path; it
+does not enable Bluetooth PTA scheduling or Bluetooth firmware commands.
+The new `wifi_only_coex_initialized` sysctl and `rx_hw_status` fields
+(`SYS_SDIO_CTRL`, `LED_CFG`, `RFE_CTRL_E`, `RFESEL_CTRL_HI`,
+`RFE_INV16`) expose the direct hardware readback. The LTE indirect control
+register is logged at startup after the grant sequence.
+The same Wi-Fi-only initialisation also enables the upstream 8822B
+PTA GPIO mux, sample/statistics controls, WLAN TX grant signal, ACK/beacon
+priority masks and firmware scoreboard `ACTIVE|ONOFF` bits. Bluetooth
+grant remains forced low; this does not turn on BT TDMA.
+
 The channel setup also uses only the shared base RFE control registers for
 RFE option 3, matching upstream `rtw8822b_set_channel_rfe_ifem()`.
 It does not write speculative `+0x200` copies of those controls.
