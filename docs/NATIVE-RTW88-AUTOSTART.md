@@ -10,8 +10,8 @@ and the RTL8822BU USB adapter matched by USB ID `0bda:b812`.
 - Starts every already-attached adapter through its
   `dev.rtw88_native.N.hw_start` sysctl before the `netif` service runs.
 - Uses `devd` to start hardware when an `rtw88_nativeN` device appears later.
-- On hotplug, asks the normal FreeBSD `netif` scripts to create/configure
-  `wlan0` from the wireless settings in `/etc/rc.conf`.
+- Creates `wlan0` explicitly on the `rtw88_nativeN` parent, then asks the
+  normal FreeBSD `netif` scripts to apply its WPA/DHCP settings.
 
 The kernel USB driver already binds on insertion through
 `USB_PNP_HOST_INFO`; the rc/devd integration handles the deferred firmware
@@ -27,20 +27,20 @@ tools/install-native-autostart.sh
 ```
 
 The installer copies the resulting module into `/boot/modules`, installs the
-rc and devd files, enables `rtw88_native_enable`, sets the VAP parent
-`wlans_rtw88_native0="wlan0"`, and preserves an existing
+rc and devd files, enables `rtw88_native_enable`, and preserves an existing
 `ifconfig_wlan0` setting. It restarts devd and starts the service immediately.
+The service creates the VAP explicitly because the stock FreeBSD `wlans_*`
+rc.conf parser does not recognize the underscore in `rtw88_nativeN`.
 
-The default wireless interface configuration is:
+Keep this wireless setting in `/etc/rc.conf`:
 
 ```sh
-wlans_rtw88_native0="wlan0"
 ifconfig_wlan0="WPA DHCP"
 ```
 
 Keep the matching network credentials in `/etc/wpa_supplicant.conf`. The
-parent interface name is `rtw88_native0`; an old or mistyped setting such as
-`wlans_rtw881` does not create a VAP on this driver.
+service creates `wlan0` on the real parent interface `rtw88_nativeN` and
+then uses the normal FreeBSD WPA/DHCP network setup.
 
 Reboot once after installing a new `.ko`, so the kernel loads the newly
 installed binary. After that, the service starts the radio automatically
