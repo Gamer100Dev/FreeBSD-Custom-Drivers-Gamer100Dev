@@ -41,15 +41,16 @@ required.
 
 ## Performance and scope
 
-Ordinary data frames now use the firmware rate-adaptation path instead of
-being forced to a fixed 1-Mbps rate. Management and EAPOL frames keep their
-robust fixed rates.
+Ordinary data frames now use firmware rate adaptation instead of being
+forced to a fixed 1-Mbps rate. On association, the driver sends the AP's
+negotiated legacy CCK/OFDM rate mask to the RTL8822B firmware using RTW88's
+RA_INFO H2C command. Management and EAPOL frames keep their robust fixed rates.
 
-This is not yet feature-equivalent to Linux RTW88. USB TX aggregation,
-peer-negotiated HT/VHT rate masks, AMPDU, hardware crypto offload, and complete
-TX rate/status feedback remain follow-up work. Build and runtime validation
-must be performed on the target FreeBSD kernel and adapter; source changes
-alone are not evidence of a successful build or measured performance gain.
+This is still not feature-equivalent to Linux RTW88. USB TX aggregation,
+HT/VHT MCS rate masks and negotiation, AMPDU, hardware crypto offload, and
+complete TX-rate/status feedback remain follow-up work. Build and runtime
+validation must be performed on the target FreeBSD kernel and adapter; source
+changes alone are not evidence of a successful build or measured speed gain.
 
 ## Upstream references
 
