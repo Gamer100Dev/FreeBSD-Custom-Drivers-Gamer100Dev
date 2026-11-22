@@ -1722,6 +1722,14 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "net80211_attached", CTLFLAG_RD, &sc->net80211_attached, 0,
 	    "Whether the net80211 radio has been attached");
+	SYSCTL_ADD_U32(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "station_ra_mask", CTLFLAG_RD, &sc->station_ra_mask, 0,
+	    "Legacy CCK/OFDM rate mask sent to firmware for the associated AP");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "station_rate_id", CTLFLAG_RD, &sc->station_rate_id, 0,
+	    "RTW88 firmware rate profile for the associated AP");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_submit_count", CTLFLAG_RD, &sc->rx_submit_count, 0,
