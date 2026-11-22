@@ -319,7 +319,7 @@ struct rtw88_native_softc {
 	uint16_t		station_aid;
 	uint8_t		station_bssid[IEEE80211_ADDR_LEN];
 	uint32_t		station_ra_mask;
-	uint8_t		station_rate_id;
+	int			station_rate_id;
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
