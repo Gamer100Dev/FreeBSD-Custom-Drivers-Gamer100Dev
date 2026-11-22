@@ -29,10 +29,10 @@ tools/install-native-autostart.sh
 ```
 
 The installer places `if_rtw88_native.ko` in `/boot/modules`, installs the
-rc service and devd hotplug rule, and configures the default VAP parent
-`wlans_rtw88_native0="wlan0"`. Set `ifconfig_wlan0="WPA DHCP"` and keep the
-network credentials in `/etc/wpa_supplicant.conf`. Reboot after installing
-a replacement module.
+rc service and devd hotplug rule, and preserves `ifconfig_wlan0="WPA DHCP"`.
+The service creates `wlan0` explicitly on the native `rtw88_nativeN` parent,
+then applies the normal WPA/DHCP configuration. Keep network credentials in
+`/etc/wpa_supplicant.conf`. Reboot after installing a replacement module.
 
 The rc service loads the module after filesystems are mounted and starts
 attached adapters before `netif`; devd handles USB insertion after boot. Once
