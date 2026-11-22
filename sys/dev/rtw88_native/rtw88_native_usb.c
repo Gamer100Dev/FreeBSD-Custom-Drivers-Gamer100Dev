@@ -94,6 +94,33 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	wh = mtod(m, struct ieee80211_frame *);
 	fc0 = wh->i_fc[0];
 	fc1 = wh->i_fc[1];
+	enc_type = (w0 & RTW88_NATIVE_RX_DESC_W0_ENC_TYPE) >> 20;
+
+	/*
+	 * Keep IEEE 802.11 frame-type and crypto descriptor diagnostics
+	 * separate from the legacy rx_data_count, which counts every
+	 * non-C2H record (management and control included).
+	 */
+	switch (fc0 & IEEE80211_FC0_TYPE_MASK) {
+	case IEEE80211_FC0_TYPE_MGT:
+		sc->rx_mgmt_frame_count++;
+		break;
+	case IEEE80211_FC0_TYPE_CTL:
+		sc->rx_ctl_frame_count++;
+		break;
+	case IEEE80211_FC0_TYPE_DATA:
+		sc->rx_data_frame_count++;
+		break;
+	default:
+		sc->rx_ext_frame_count++;
+		break;
+	}
+	if (IEEE80211_IS_PROTECTED(wh))
+		sc->rx_protected_frame_count++;
+	if ((w0 & RTW88_NATIVE_RX_DESC_W0_SWDEC) != 0)
+		sc->rx_descriptor_swdec_count++;
+	if (enc_type != 0)
+		sc->rx_descriptor_encrypted_count++;
 
 	/*
 	 * Classify the 802.11 receiver address (addr1), not the Ethernet
@@ -236,7 +263,6 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	 * is clear. net80211 consumes this flag to bypass software decryption;
 	 * M_WEP alone is not an equivalent RX-status indication.
 	 */
-	enc_type = (w0 & RTW88_NATIVE_RX_DESC_W0_ENC_TYPE) >> 20;
 	if (enc_type != 0 && (w0 & RTW88_NATIVE_RX_DESC_W0_SWDEC) == 0) {
 		rxs.c_pktflags |= IEEE80211_RX_F_DECRYPTED;
 		sc->rx_decrypted_count++;
