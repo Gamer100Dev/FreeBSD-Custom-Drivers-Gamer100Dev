@@ -337,6 +337,10 @@ struct rtw88_native_softc {
 	uint16_t		rsvd_h2cq_addr;
 	uint16_t		rsvd_fw_txbuf_addr;
 	uint16_t		fw_h2c_seq;
+	uint8_t			fw_h2c_mailbox;
+	uint64_t		fw_h2c_media_status_count;
+	uint64_t		fw_h2c_media_status_error_count;
+	int			fw_h2c_media_status_error;
 	uint64_t		fw_h2c_general_count;
 	uint64_t		fw_h2c_phydm_count;
 	uint64_t		fw_h2c_iqk_count;
