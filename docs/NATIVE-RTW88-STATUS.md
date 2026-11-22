@@ -23,16 +23,19 @@ USB ID `0bda:b812`.
   initialisation, selecting RF-A/1T1R when firmware reports one antenna.
   If the report cannot be obtained, the driver conservatively initialises
   only RF-A rather than assuming both silicon RF paths are populated.
-- Manual RTL8822B 2.4-GHz/20-MHz channel programming for eFuse RFE option 3,
-  exposed as `dev.rtw88_native.N.channel` for channels 1-13. RF writes use
-  the RTL8822B-specific HSSI/SIPI serial-interface ports, and RF18 is read
-  back through each selected path's direct RF window. If RF-B still fails
-  its readback while RF-A is verified, the driver reconfigures TRX selection
-  to RF-A only (1T1R), applies the matching 1R CCA thresholds / antenna
-  switch, verifies RF-A again, and continues channel tuning. The fallback
-  logs the B-path SIPI command, RF control and WLRF1 state for later diagnosis.
+- Manual RTL8822B 2.4/5-GHz, 20-MHz channel programming for eFuse RFE option 3.
+  The 5-GHz path ports the upstream RF synthesiser band bits and RFBE lookup,
+  channel-specific clock tracking, IFEM-ext antenna routing and 1R/2R CCA
+  values. RF writes use the RTL8822B-specific HSSI/SIPI serial-interface ports;
+  RF18 is verified through each selected path's direct RF window. If RF-B
+  fails readback while RF-A is verified, the driver reconfigures TRX selection
+  to RF-A only (1T1R), applies the matching 1R CCA/antenna settings and
+  verifies RF-A again. The manual channel sysctl accepts the supported
+  2.4-GHz and 5-GHz channel numbers.
 - Native net80211 radio registration after successful hardware start, with
-  station/monitor VAP creation and 2.4-GHz channel advertisement.
+  station/monitor VAP creation, 2.4-GHz 11b/g channels and 5-GHz 11a
+  20-MHz channels. The 5-GHz channel set is marked passive-only pending
+  regulatory-domain and calibrated transmit-power support.
 - Active and passive software scan callbacks: active scans use the
   FreeBSD net80211 probe-request generator and route those frames through
   the driver's management-frame transmit callback.
@@ -44,13 +47,15 @@ USB ID `0bda:b812`.
   management rate, retry count, power and group-frame NOACK). Unsupported
   radiotap/BPF features and hardware-crypto requests remain rejected.
 - Management/control frames use QSEL 18 on the management/high-priority OUT
-  endpoint (0x05), with a conservative 1-Mbps rate. Group-addressed data uses
+  endpoint (0x05), with a band-appropriate legacy basic rate: 1 Mbps CCK on
+  2.4 GHz and 6 Mbps OFDM on 5 GHz. Group-addressed data uses
   QSEL_HIGH (17) on the high-priority endpoint. Unicast BE/BK map to their
   corresponding TIDs (0/1); unicast VI/VO map to QSEL_BEACON (16), matching
   Linux RTW88's three-pipe USB queue policy. Non-QoS unicast PAE/EAPOL frames
   are explicitly routed to BE/TID0: FreeBSD marks them M_EAPOL and promotes
   their WME category to VO, but the 802.11 frame itself is non-QoS. EAPOL
-  retains the conservative 1-Mbps B rate profile.
+  retains the conservative 1-Mbps B rate profile on 2.4 GHz; 5-GHz frames
+  use the 6-Mbps OFDM 11a/G rate profile.
 - USB transmit completion is returned to net80211 through
   `ieee80211_tx_complete()`; separate queue, completion and error counters
   are exposed. Completion currently means USB bulk-OUT completion, not a
@@ -164,9 +169,12 @@ adapter.
 ## Not yet implemented
 
 - Full RFE board selection, IQK/DPK, thermal tracking, antenna diversity and
-  TX-power calibration; 5-GHz and non-20-MHz channel programming are not
-  implemented. Runtime C2H event decoding remains incomplete; only the
-  startup hardware-feature report is decoded.
+  per-channel TX-power calibration remain incomplete. The initial 5-GHz
+  support is limited to eFuse RFE option 3 at 20 MHz; HT/VHT and 40/80/160-MHz
+  channel widths are not advertised. Country/regulatory integration and
+  DFS radar/CAC handling are not implemented, so 5-GHz scans are passive-only.
+  Runtime C2H event decoding remains incomplete; only the startup
+  hardware-feature report is decoded.
 - Full RX PHY-status/rate/chain interpretation, C2H command-specific event
   decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
 - Negotiated rate control, TX aggregation, firmware TX-ACK report dispatch
@@ -240,7 +248,9 @@ ifconfig wlan0 list scan
 
 The net80211 software scanner now retains the requested active/passive flag.
 Active scans generate probe requests via `ic_raw_xmit`; passive scans only
-listen. The channel callback programs 2.4-GHz channels 1-13 and the advertised\n5-GHz 20-MHz channel centers as the scanner visits them. All 5-GHz channels\nare marked passive-only pending country/regulatory and TX-power support.
+listen. The channel callback programs 2.4-GHz channels 1-13 and the advertised
+5-GHz 20-MHz channel centers as the scanner visits them. All 5-GHz channels
+are marked passive-only pending country/regulatory and TX-power support.
 
 The default net80211 station state machine also sends authentication and
 association management frames through `ic_raw_xmit`. Ordinary 802.11 data
@@ -265,9 +275,9 @@ entering the worker; `tx_last_qsel`, `tx_last_endpoint`,
 descriptor decision. RX subtype counters distinguish authentication responses,
 association responses, deauthentication/disassociation, probe responses,
 beacons and EAPOL frames; `rx_auth_to_self_count` confirms an authentication
-frame addressed to this station actually reached the parser. A successful
-USB completion is not a radio ACK. The initial rate is fixed at 1 Mbps;
-negotiated rate control and TX-status C2H reports are not implemented.
+frame addressed to this station actually reached the parser. A successful USB completion is not a radio ACK. The initial rate is fixed
+at 1 Mbps CCK on 2.4 GHz and 6 Mbps OFDM on 5 GHz; negotiated rate control
+and TX-status C2H reports are not implemented.
 
 The RX callback copies valid non-C2H frames to mbufs, removes the configured
 appended FCS, adds basic channel/RSSI/TSF metadata and defers
