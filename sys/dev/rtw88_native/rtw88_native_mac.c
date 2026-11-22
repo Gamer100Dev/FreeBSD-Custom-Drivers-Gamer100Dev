@@ -461,6 +461,7 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define REG_DRVERLYINT				0x0558
 #define REG_BCNDMATIM				0x0559
 #define REG_RXFLTMAP0				0x06a0
+#define REG_RXFLTMAP1				0x06a2
 #define REG_RXFLTMAP2				0x06a4
 #define REG_RCR				0x0608
 #define REG_RX_PKT_LIMIT			0x060c
@@ -475,6 +476,7 @@ rtw88_native_chip_power_on(struct rtw88_native_softc *sc)
 #define BIT_EN_EOF_V1				(1U << 2)
 #define BIT_TSFT_SEL_TIMER0			0x70
 #define BIT_APP_PHYSTS				(1U << 28)
+#define BIT_CBSSID_BCN			(1U << 7)
 
 #define RTW88_NATIVE_DMA_EXTRA		0
 #define RTW88_NATIVE_DMA_LOW		1
@@ -844,12 +846,20 @@ rtw88_native_8822b_mac_init(struct rtw88_native_softc *sc)
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
+	/*
+	 * Match Linux rtw8822b_mac_init(): initialize all three RX filter
+	 * maps. RXFLTMAP1 is the control-frame subtype map (0x0fff).
+	 * Normal STA operation also checks the BSSID on beacons; software
+	 * scanning temporarily disables this bit to hear other BSSes.
+	 */
 	if (rtw88_native_reg_write32(sc, REG_RXFLTMAP0, 0x0fffffff) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write16(sc, REG_RXFLTMAP1, 0x0fff) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_write16(sc, REG_RXFLTMAP2, 0xffff) !=
 	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_write32(sc, REG_RCR, 0xe400220e) !=
-	    USB_ERR_NORMAL_COMPLETION ||
+	    rtw88_native_reg_write32(sc, REG_RCR,
+	    0xe400220e | BIT_CBSSID_BCN) != USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_write8(sc, REG_RX_PKT_LIMIT, 24) !=
 	    USB_ERR_NORMAL_COMPLETION ||
 	    rtw88_native_reg_write8(sc, REG_TCR + 2, 0x30) !=
@@ -908,6 +918,49 @@ rtw88_native_mac_init(struct rtw88_native_softc *sc)
 
 	sc->mac_initialized = 1;
 	return (0);
+}
+
+/*
+ * Match RTW88's FIF_BCN_PRBRESP_PROMISC filter transition:
+ * filter beacons by the programmed BSSID during normal operation, but
+ * accept all BSSIDs while the net80211 software scanner is collecting
+ * scan results. USB register access sleeps, so serialize it with hw_busy
+ * without holding the driver mutex across the transfer.
+ */
+int
+rtw88_native_mac_set_scan_filter(struct rtw88_native_softc *sc, int scanning)
+{
+	int error;
+
+	if (sc == NULL || (scanning != 0 && scanning != 1))
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->hw_started ||
+	    !sc->mac_initialized) {
+		mtx_unlock(&sc->mtx);
+		return (ENETDOWN);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	sc->hw_busy = 1;
+	mtx_unlock(&sc->mtx);
+
+	error = rtw88_native_write_mask8(sc, REG_RCR, BIT_CBSSID_BCN,
+	    scanning ? 0 : BIT_CBSSID_BCN);
+
+	mtx_lock(&sc->mtx);
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	if (error != 0)
+		device_printf(sc->dev,
+		    "could not %s beacon BSSID RX filtering: %d\n",
+		    scanning ? "disable" : "enable", error);
+	return (error);
 }
 
 void
