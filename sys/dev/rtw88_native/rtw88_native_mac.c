@@ -1518,6 +1518,9 @@ rtw88_native_mac_send_legacy_ra(struct rtw88_native_softc *sc,
 	int error, channel;
 
 	channel = sc->current_channel;
+	if (!((channel >= 1 && channel <= 13) ||
+	    (channel >= 36 && channel <= 161)))
+		return (ENXIO);
 	error = rtw88_native_mac_build_legacy_ra(rates, channel, &ra_mask,
 	    &rate_id);
 	if (error != 0)
