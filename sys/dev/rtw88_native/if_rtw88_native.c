@@ -807,9 +807,17 @@ rtw88_native_net80211_detach(struct rtw88_native_softc *sc)
 	if (sc == NULL || !sc->net80211_attached)
 		return;
 
+	/*
+	 * Stop new RX work from entering net80211, then drain any task that
+	 * already observed net80211_attached before detaching VAPs and nodes.
+	 * This is the FreeBSD taskqueue equivalent of synchronizing Linux's
+	 * queued RX work before mac80211 teardown.
+	 */
 	mtx_lock(&sc->mtx);
 	sc->net80211_attached = 0;
 	mtx_unlock(&sc->mtx);
+	taskqueue_drain(taskqueue_thread, &sc->rx_task);
+
 	ieee80211_ifdetach(&sc->ic);
 	bzero(&sc->ic, sizeof(sc->ic));
 }
@@ -823,28 +831,64 @@ void
 rtw88_native_rx_task(void *arg, int pending __unused)
 {
 	struct rtw88_native_softc *sc;
+	struct ieee80211vap *vap;
+	struct ifnet *ifp;
 	struct mbuf *m;
-	int attached;
+	uint64_t ipackets_before, ipackets_after, ipackets_delta;
+	int attached, hw_started, input_result;
 
 	sc = arg;
 	for (;;) {
 		mtx_lock(&sc->mtx);
 		m = mbufq_dequeue(&sc->rx_queue);
-		attached = sc->net80211_attached && !sc->dying;
+		hw_started = sc->hw_started;
+		attached = sc->net80211_attached && hw_started && !sc->dying;
 		mtx_unlock(&sc->mtx);
 		if (m == NULL)
 			break;
-		if (attached) {
-			(void)ieee80211_input_mimo_all(&sc->ic, m);
-			mtx_lock(&sc->mtx);
-			sc->rx_input_count++;
-			mtx_unlock(&sc->mtx);
-		} else {
+
+		if (!attached) {
 			m_freem(m);
 			mtx_lock(&sc->mtx);
 			sc->rx_input_drop_count++;
+			if (!hw_started)
+				sc->rx_prestart_drop_count++;
 			mtx_unlock(&sc->mtx);
+			continue;
 		}
+
+		/*
+		 * net80211's input helper consumes the mbuf and returns a status,
+		 * but that status is not an Ethernet-delivery counter. Snapshot
+		 * the VAP's IPACKETS counter around input as well: FreeBSD's
+		 * ieee80211_deliver_data() increments it only when an 802.11 data
+		 * frame has been decapsulated and is about to enter if_input().
+		 *
+		 * This driver supports one VAP, matching rtw88's single station
+		 * interface in the current native port.
+		 */
+		vap = TAILQ_FIRST(&sc->ic.ic_vaps);
+		ifp = (vap != NULL) ? vap->iv_ifp : NULL;
+		ipackets_before = (ifp != NULL) ?
+		    if_get_counter_default(ifp, IFCOUNTER_IPACKETS) : 0;
+
+		input_result = ieee80211_input_mimo_all(&sc->ic, m);
+
+		ipackets_after = (ifp != NULL) ?
+		    if_get_counter_default(ifp, IFCOUNTER_IPACKETS) : 0;
+		ipackets_delta = (ipackets_after >= ipackets_before) ?
+		    ipackets_after - ipackets_before : 0;
+
+		mtx_lock(&sc->mtx);
+		sc->rx_input_count++;
+		sc->rx_net80211_last_result = input_result;
+		if (input_result < 0)
+			sc->rx_net80211_negative_result_count++;
+		else
+			sc->rx_net80211_nonnegative_result_count++;
+		sc->rx_vap_ipackets_last_delta = ipackets_delta;
+		sc->rx_vap_ipackets_count += ipackets_delta;
+		mtx_unlock(&sc->mtx);
 	}
 }
 
@@ -1256,11 +1300,40 @@ rtw88_native_attach(device_t dev)
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_input_count", CTLFLAG_RD, &sc->rx_input_count, 0,
-	    "Number of RX frames passed to net80211");
+	    "RX MPDUs submitted to ieee80211_input_mimo_all (not an IP delivery count)");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_input_drop_count", CTLFLAG_RD, &sc->rx_input_drop_count, 0,
-	    "Number of RX frames discarded before net80211 input");
+	    "RX MPDUs discarded before net80211 input");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_prestart_drop_count", CTLFLAG_RD, &sc->rx_prestart_drop_count, 0,
+	    "RX MPDUs dropped before hardware was marked running");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_negative_result_count", CTLFLAG_RD,
+	    &sc->rx_net80211_negative_result_count, 0,
+	    "net80211 input calls that returned a negative result");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_nonnegative_result_count", CTLFLAG_RD,
+	    &sc->rx_net80211_nonnegative_result_count, 0,
+	    "net80211 input calls that returned a nonnegative result (not necessarily data delivery)");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_last_result", CTLFLAG_RD,
+	    &sc->rx_net80211_last_result, 0,
+	    "Return value from the most recent ieee80211_input_mimo_all call");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_vap_ipackets_count", CTLFLAG_RD,
+	    &sc->rx_vap_ipackets_count, 0,
+	    "Cumulative VAP IPACKETS increments observed during net80211 RX input");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_vap_ipackets_last_delta", CTLFLAG_RD,
+	    &sc->rx_vap_ipackets_last_delta, 0,
+	    "VAP IPACKETS increment observed while processing the most recent RX MPDU");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_auth_count", CTLFLAG_RD, &sc->rx_auth_count, 0,
