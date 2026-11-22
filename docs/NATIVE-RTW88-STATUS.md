@@ -400,3 +400,23 @@ explicitly skipped; register I/O failures abort startup. PHY bring-up also
 initializes EDCCA thresholds, and scan start temporarily applies RTW88's
 maximum receive-coverage IGI before restoring the previous gain on scan end.
 Physical connection and EAPOL operation still require hardware validation.
+
+
+
+## TX legacy-rate adaptation parity with Linux RTW88
+
+Normal data descriptors now leave the explicit fixed-rate bit clear, allowing
+firmware rate adaptation rather than pinning all data to 1 Mbps. On STA
+association, the native driver builds the 32-bit legacy rate mask from
+net80211's negotiated `ni_rates` set and sends the RTL8822B `RA_INFO` H2C
+command (ID 0x40) through HMEBOX0/HMEBOX0_EX. The rate-ID profile is selected
+for the active band and negotiated CCK/OFDM set, and the selected rate ID is
+reused in ordinary data descriptors. Management and EAPOL frames retain their
+robust fixed rates.
+
+This is limited to the legacy 11a/b/g modes that the native driver currently
+advertises. HT/VHT MCS masks, 40/80-MHz negotiation, SGI/LDPC, AMPDU setup and
+C2H transmit-rate feedback are not implemented; this is not yet full Linux
+RTW88 rate-control parity. The change needs a target build, association
+verification and repeatable throughput tests before any speed improvement
+can be claimed.
