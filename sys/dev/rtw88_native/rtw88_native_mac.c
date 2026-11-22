@@ -1315,6 +1315,7 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 	uint32_t cr, aid_reg, bssid_lo, check32;
 	uint16_t bssid_hi, check16;
 	int media_error;
+
 	if (sc == NULL || !sc->mac_initialized || !sc->firmware_running)
 		return (ENETDOWN);
 	if (linked && (bssid == NULL || (bssid[0] & 0x01) != 0 ||
@@ -1327,7 +1328,6 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 		return (EIO);
 
 	if (!linked) {
-
 		/* Disable the managed link, then tell firmware the station left. */
 		cr &= ~PORT0_NET_TYPE_MASK;
 		if (rtw88_native_reg_write32(sc, RTW88_NATIVE_REG_CR, cr) !=
