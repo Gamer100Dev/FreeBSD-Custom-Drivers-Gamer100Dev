@@ -313,6 +313,8 @@ struct rtw88_native_softc {
 	uint64_t		rx_disassoc_from_bss_count;
 	int			rx_last_assoc_status;
 	int			rx_last_disassoc_reason;
+	int			station_mac_programmed;
+	uint8_t		station_macaddr[IEEE80211_ADDR_LEN];
 	int			station_linked;
 	uint16_t		station_aid;
 	uint8_t		station_bssid[IEEE80211_ADDR_LEN];
@@ -453,6 +455,8 @@ int		rtw88_native_chip_power_on(struct rtw88_native_softc *);
 int		rtw88_native_chip_power_off(struct rtw88_native_softc *);
 int		rtw88_native_mac_init(struct rtw88_native_softc *);
 int		rtw88_native_mac_set_scan_filter(struct rtw88_native_softc *, int);
+int		rtw88_native_mac_set_address(struct rtw88_native_softc *,
+		    const uint8_t [IEEE80211_ADDR_LEN]);
 int		rtw88_native_mac_set_link(struct rtw88_native_softc *,
 		    const uint8_t *, uint16_t, int);
 int		rtw88_native_phy_init(struct rtw88_native_softc *);
