@@ -1068,29 +1068,30 @@ rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
 	struct {
 		const char *name;
 		uint16_t reg;
+		uint8_t width;
 		uint32_t value;
 		usb_error_t error;
 	} regs[] = {
-		{ "CR", 0x0100, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "TXDMA_PQ_MAP", 0x010c, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXDMA_AGG_PG_TH", 0x0280, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXDMA_MODE", 0x0290, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "MACID0_LO", 0x0610, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "MACID0_HI", 0x0614, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RCR", 0x0608, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXFLTMAP0", 0x06a0, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXFLTMAP1", 0x06a2, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXFLTMAP2", 0x06a4, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "SYS_FUNC_EN", 0x0002, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RF_CTRL", 0x001f, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "WLRF1", 0x00ec, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RF_SIPI_A", 0x0c90, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RF_SIPI_B", 0x0e90, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXPSEL", 0x0808, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXIGI_A", 0x0c50, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RXIGI_B", 0x0e50, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RF_A_CH18", 0x2860, 0, USB_ERR_NORMAL_COMPLETION },
-		{ "RF_B_CH18", 0x2c60, 0, USB_ERR_NORMAL_COMPLETION }
+		{ "CR", 0x0100, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "TXDMA_PQ_MAP", 0x010c, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXDMA_AGG_PG_TH", 0x0280, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXDMA_MODE", 0x0290, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "MACID0_LO", 0x0610, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "MACID0_HI", 0x0614, 2, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RCR", 0x0608, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP0", 0x06a0, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP1", 0x06a2, 2, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP2", 0x06a4, 2, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "SYS_FUNC_EN", 0x0002, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_CTRL", 0x001f, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "WLRF1", 0x00ec, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_SIPI_A", 0x0c90, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_SIPI_B", 0x0e90, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXPSEL", 0x0808, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXIGI_A", 0x0c50, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXIGI_B", 0x0e50, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_A_CH18", 0x2860, 4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_B_CH18", 0x2c60, 4, 0, USB_ERR_NORMAL_COMPLETION }
 	};
 	int value, error, i, channel;
 	uint64_t rx_count, rx_submits, rx_errors;
@@ -1116,9 +1117,18 @@ rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
 	sc->hw_busy = 1;
 	mtx_unlock(&sc->mtx);
 
-	for (i = 0; i < nitems(regs); i++)
-		regs[i].error = rtw88_native_reg_read32(sc, regs[i].reg,
-		    &regs[i].value);
+	for (i = 0; i < nitems(regs); i++) {
+		if (regs[i].width == 2) {
+			uint16_t value16;
+
+			regs[i].error = rtw88_native_reg_read16(sc, regs[i].reg,
+			    &value16);
+			regs[i].value = value16;
+		} else {
+			regs[i].error = rtw88_native_reg_read32(sc, regs[i].reg,
+			    &regs[i].value);
+		}
+	}
 
 	mtx_lock(&sc->mtx);
 	channel = sc->current_channel;
