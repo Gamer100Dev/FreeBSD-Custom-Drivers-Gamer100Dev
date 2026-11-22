@@ -1,0 +1,26 @@
+--- contrib/wpa/src/drivers/driver_bsd.c.orig
++++ contrib/wpa/src/drivers/driver_bsd.c
+@@ -267,6 +267,18 @@ bsd_del_key(void *priv, const u8 *addr, int key_idx)
+ {
+ 	struct ieee80211req_del_key wk;
+ 
++#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
++	/*
++	 * FreeBSD net80211 has IEEE80211_WEP_NKID global key slots (0..3).
++	 * wpa_supplicant may also request cleanup of higher, unused key IDs.
++	 * ieee80211_ioctl_delkey() rejects those IDs with EINVAL before any
++	 * driver key-delete callback can run. There cannot be a global key in
++	 * those slots, so treat this cleanup-only request as an already-deleted
++	 * key. Keep IEEE80211_KEYIX_NONE and pairwise-address deletion intact.
++	 */
++	if (addr == NULL && key_idx != IEEE80211_KEYIX_NONE &&
++	    key_idx >= IEEE80211_WEP_NKID) {
++		wpa_printf(MSG_DEBUG, "%s: ignore unsupported global key index %d",
++		    __func__, key_idx);
++		return 0;
++	}
++#endif
++
+ 	os_memset(&wk, 0, sizeof(wk));
+ 	if (addr == NULL) {
+ 		wpa_printf(MSG_DEBUG, "%s: key_idx=%d", __func__, key_idx);
