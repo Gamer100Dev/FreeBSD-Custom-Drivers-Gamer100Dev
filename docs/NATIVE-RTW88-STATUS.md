@@ -112,7 +112,10 @@ upstream LTE-coexistence save/restore operation is also not yet ported.
   logical eFuse offset `0x10`.
 - Program RFE-option-3 legacy TXAGC values on every channel change: 2.4-GHz
   CCK/OFDM and 5-GHz OFDM use upstream BB-PG rate deltas, eFuse bases and
-  worldwide fallback limits. Each TXAGC word is read back and verified.
+  worldwide fallback limits. TXAGC words use checked USB register writes,
+  matching Linux RTW88's 8822B write-only programming path; readback is not
+  treated as authoritative because the tested adapter returns zero for these
+  reads. USB completion is not proof of over-the-air transmit power.
 - Route VO/VI to the NORMAL DMA map, BE/BK to LOW and MG/HI to HIGH for the
   three bulk-OUT endpoint layout.
 - Configure the 8822B TX FIFO page table, reserved pages, beacon boundary,

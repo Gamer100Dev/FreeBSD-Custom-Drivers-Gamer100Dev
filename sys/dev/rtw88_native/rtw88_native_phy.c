@@ -1214,20 +1214,17 @@ static int
 rtw88_native_phy_write_txagc(struct rtw88_native_softc *sc,
     uint16_t reg, uint32_t value)
 {
-	uint32_t check;
-
-	if (rtw88_native_reg_write32(sc, reg, value) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_read32(sc, reg, &check) !=
-	    USB_ERR_NORMAL_COMPLETION)
-		return (EIO);
-	if (check != value) {
-		device_printf(sc->dev,
-		    "TXAGC readback mismatch at 0x%04x: wrote 0x%08x read 0x%08x\n",
-		    reg, value, check);
-		return (EIO);
-	}
-	return (0);
+	/*
+	 * Match Linux RTW88's rtw8822b_set_tx_power_index_by_rate(): TXAGC
+	 * words are programmed with a 32-bit register write and are not read
+	 * back. On the tested RTL8822BU, reads from these TXAGC addresses
+	 * return zero even after a completed write, so treating that value as
+	 * a failed verification rejects every channel change and leaves
+	 * current_channel unset (which in turn causes RX frames to be dropped).
+	 * A failed USB control write remains a real error.
+	 */
+	return (rtw88_native_reg_write32(sc, reg, value) ==
+	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO);
 }
 
 static int
