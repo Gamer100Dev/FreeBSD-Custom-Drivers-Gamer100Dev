@@ -4,6 +4,7 @@ set -eu
 
 SRCROOT="${SRCROOT:-/usr/src}"
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+OUTDIR="${OUTDIR:-$REPO_ROOT/build-native}"
 
 if [ "$(uname -s)" != "FreeBSD" ]; then
     echo "This script must run on FreeBSD, not $(uname -s)." >&2
@@ -35,7 +36,19 @@ printf '%s\n' \
 echo "Synced native RTW88 source revision $BUILD_ID into $SRCROOT"
 
 cd "$SRCROOT/sys/modules/rtw88_native"
+
+# FreeBSD can place module outputs in MAKEOBJDIRPREFIX (commonly /usr/obj),
+# not beside the source Makefile. Resolve that directory before building.
+OBJDIR="$(make -V .OBJDIR)"
 make clean
 make
-test -f if_rtw88_native.ko
-echo "Build succeeded: $SRCROOT/sys/modules/rtw88_native/if_rtw88_native.ko"
+
+MODULE="$OBJDIR/if_rtw88_native.ko"
+if [ ! -s "$MODULE" ]; then
+    echo "Build did not produce $MODULE" >&2
+    exit 1
+fi
+
+install -d "$OUTDIR"
+cp "$MODULE" "$OUTDIR/if_rtw88_native.ko"
+echo "Build succeeded: $OUTDIR/if_rtw88_native.ko"
