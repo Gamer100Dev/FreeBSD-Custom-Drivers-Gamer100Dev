@@ -999,6 +999,42 @@ rtw88_native_attach(device_t dev)
 	    "Number of non-C2H RX frames identified");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_bad_rate_count", CTLFLAG_RD, &sc->rx_bad_rate_count, 0,
+	    "RX descriptors rejected for an out-of-range rate code");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_bad_drvinfo_count", CTLFLAG_RD, &sc->rx_bad_drvinfo_count, 0,
+	    "RX descriptors rejected for an invalid PHY-info length");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_phy_page0_count", CTLFLAG_RD, &sc->rx_phy_page0_count, 0,
+	    "RTL8822B CCK PHY-status page records decoded");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_phy_page1_count", CTLFLAG_RD, &sc->rx_phy_page1_count, 0,
+	    "RTL8822B OFDM/HT/VHT PHY-status page records decoded");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_phy_unknown_count", CTLFLAG_RD, &sc->rx_phy_unknown_count, 0,
+	    "RX PHY-status records with an unsupported page identifier");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_no_phy_count", CTLFLAG_RD, &sc->rx_no_phy_count, 0,
+	    "RX frames received without PHY-status metadata");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ht_count", CTLFLAG_RD, &sc->rx_ht_count, 0,
+	    "RX frames using HT MCS rate descriptors");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_vht_count", CTLFLAG_RD, &sc->rx_vht_count, 0,
+	    "RX frames using VHT MCS/NSS rate descriptors");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_decrypted_count", CTLFLAG_RD, &sc->rx_decrypted_count, 0,
+	    "RX frames marked as hardware-decrypted for net80211");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_c2h_count", CTLFLAG_RD, &sc->rx_c2h_count, 0,
 	    "Number of firmware C2H RX records identified");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),

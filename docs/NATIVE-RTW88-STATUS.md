@@ -167,8 +167,10 @@ adapter.
   TX-power calibration; 5-GHz and non-20-MHz channel programming are not
   implemented. Runtime C2H event decoding remains incomplete; only the
   startup hardware-feature report is decoded.
-- Full RX PHY-status/rate/chain interpretation, C2H command-specific event
+- Per-chain RSSI/SNR/EVM reporting, C2H command-specific event
   decoding/dispatch, AMPDU reorder and full monitor/radiotap metadata.
+  Basic RX rate/width decoding and RTL8822B PHY-status page 0/1 handling are
+  implemented; the radio still advertises only 2.4-GHz 20-MHz operation.
 - Negotiated rate control, TX aggregation, firmware TX-ACK report dispatch
   and verified over-the-air TX status. The current queue mapping selects the
   basic AC/TID and group queue, but does not implement aggregation.
@@ -333,3 +335,21 @@ the corrected revision builds and both TX and RX are verified on the adapter.
 - In-tree native USB wireless patterns under `sys/dev/rtwn/usb/`.
 - Vendored upstream RTW88 8822B source under `sys/contrib/dev/rtw88/`
   for chip-specific register values and hardware sequencing.
+
+
+## RX status parity with Linux RTW88
+
+The native RX path now validates the descriptor rate against the RTW88
+DESC_RATE_MAX range and enforces the 32-byte PHY driver-info size used by
+RTL8822B. It maps legacy, HT and VHT rate codes into FreeBSD net80211 RX
+metadata, decodes the RTL8822B CCK (page 0) and OFDM/HT/VHT (page 1) receive
+power fields, and uses the page-1 receive subchannel to refine bandwidth.
+Frames without valid PHY status no longer claim that RSSI/noise measurements
+are present. Hardware-decrypted frames are marked with
+IEEE80211_RX_F_DECRYPTED, the net80211 RX-status flag.
+
+This is RX metadata parity only. It does not enable 5-GHz operation, HT/VHT
+association capabilities, hardware key-cache offload, firmware C2H event
+dispatch or AMPDU reordering. The PHY/RF tuning code and radiocaps remain
+limited to 2.4-GHz 20-MHz channels until those paths are implemented and
+validated independently.
