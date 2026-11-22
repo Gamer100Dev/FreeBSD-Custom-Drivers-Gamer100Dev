@@ -1342,6 +1342,8 @@ int
 rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 {
 	uint32_t value;
+	uint8_t value8;
+	uint16_t value16;
 	int error;
 
 	if (sc == NULL || !sc->powered || !sc->firmware_running ||
@@ -1400,26 +1402,46 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	}
 
 	/*
-	 * rtw8822b_coex_cfg_init(): initialise the shared grant/antenna GPIO,
-	 * WLAN-to-PTA indication and BT statistics sampling registers. These
-	 * are common 8822B setup writes and are also performed in wifi_only mode.
+	 * rtw8822b_coex_cfg_init(): enable beacon/TBTT processing, initialise
+	 * the shared grant/antenna GPIO, WLAN-to-PTA indication and BT
+	 * statistics sampling registers. Upstream sets BCN_CTRL bit 3 first.
 	 */
-	error = rtw88_native_phy_write_mask8(sc, REG_BT_TDMA_TIME,
-	    0x3f, 0x05);
+	error = rtw88_native_phy_write_mask8(sc, RTW88_NATIVE_REG_BCN_CTRL,
+	    RTW88_NATIVE_BIT_EN_BCN_FUNCTION,
+	    RTW88_NATIVE_BIT_EN_BCN_FUNCTION);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask8(sc, REG_BT_TDMA_TIME,
+		    0x3f, 0x05);
 	if (error == 0)
 		error = rtw88_native_reg_write8(sc, REG_BT_STAT_CTRL, 0x01) ==
 		    USB_ERR_NORMAL_COMPLETION ? 0 : EIO;
+	/*
+	 * The 32-bit masked-write helper takes an unshifted field value.
+	 * Program non-adjacent GPIO bits separately; a positioned mask used
+	 * as the value would be shifted twice and clear both pins.
+	 */
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_GPIO_MUXCFG,
-		    BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS,
-		    BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS);
+		    BIT_BT_PTA_EN, 1);
+	if (error == 0)
+		error = rtw88_native_phy_write_mask32(sc, REG_GPIO_MUXCFG,
+		    BIT_PO_BT_PTA_PINS, 1);
 	if (error == 0)
 		error = rtw88_native_phy_write_mask8(sc, REG_QUEUE_CTRL,
 		    BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN,
 		    BIT_PTA_WL_TX_EN);
-	if (error == 0)
-		error = rtw88_native_phy_write_mask32(sc, REG_BT_COEX_V2,
-		    BIT_GNT_BT_POLARITY, BIT_GNT_BT_POLARITY);
+	/*
+	 * Upstream uses a 16-bit access for BT_COEX_V2 (0x0762). Avoid a
+	 * 32-bit read/modify/write at this unaligned register address.
+	 */
+	if (error == 0) {
+		if (rtw88_native_reg_read16(sc, REG_BT_COEX_V2, &value16) !=
+		    USB_ERR_NORMAL_COMPLETION ||
+		    rtw88_native_reg_write16(sc, REG_BT_COEX_V2,
+		    value16 | BIT_GNT_BT_POLARITY) !=
+		    USB_ERR_NORMAL_COMPLETION)
+			error = EIO;
+	}
 	/* Linux gives ACK/BA/CTS, beacon and beacon-queue traffic high priority. */
 	if (error == 0)
 		error = rtw88_native_phy_write_mask8(sc,
@@ -1464,10 +1486,59 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 	    BIT_BT_INT_EN | 0x0003) != USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
-	/* Read the LTE control register once more to ensure the path is ready. */
+	/*
+	 * Read back the complete route. USB completion only confirms the
+	 * host transaction, not that the MAC/BB/indirect fields latched.
+	 */
 	error = rtw88_native_ltecoex_read(sc, 0x0038, &value);
 	if (error != 0)
 		return (error);
+	if ((value & BIT_LTE_COEX_EN) != 0 ||
+	    (value & 0x0000c000U) != 0x00004000U ||
+	    (value & 0x00000c00U) != 0x00000400U ||
+	    (value & 0x00003000U) != 0x00003000U ||
+	    (value & 0x00000300U) != 0x00000300U) {
+		device_printf(sc->dev,
+		    "Wi-Fi-only LTE grants did not latch: 0x%08x\n", value);
+		return (EIO);
+	}
+	if (rtw88_native_reg_read8(sc, RTW88_NATIVE_REG_BCN_CTRL,
+	    &value8) != USB_ERR_NORMAL_COMPLETION ||
+	    (value8 & RTW88_NATIVE_BIT_EN_BCN_FUNCTION) == 0)
+		return (EIO);
+	if (rtw88_native_reg_read32(sc, REG_GPIO_MUXCFG, &value) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value & (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS)) !=
+	    (BIT_BT_PTA_EN | BIT_PO_BT_PTA_PINS))
+		return (EIO);
+	if (rtw88_native_reg_read8(sc, REG_QUEUE_CTRL, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value8 & (BIT_PTA_WL_TX_EN | BIT_PTA_EDCCA_EN)) !=
+	    BIT_PTA_WL_TX_EN)
+		return (EIO);
+	if (rtw88_native_reg_read16(sc, REG_BT_COEX_V2, &value16) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value16 & BIT_GNT_BT_POLARITY) == 0)
+		return (EIO);
+	if (rtw88_native_reg_read8(sc, REG_SYS_SDIO_CTRL + 3, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value8 & (uint8_t)(BIT_LTE_MUX_CTRL_PATH >> 24)) == 0)
+		return (EIO);
+	if (rtw88_native_reg_read8(sc, REG_LED_CFG + 2, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x80) != 0)
+		return (EIO);
+	if (rtw88_native_reg_read8(sc, REG_LED_CFG + 3, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x01) == 0)
+		return (EIO);
+	if (rtw88_native_reg_read8(sc, REG_RFE_CTRL8, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION || value8 != 0x77)
+		return (EIO);
+	if (rtw88_native_reg_read8(sc, REG_RFE_INV8, &value8) !=
+	    USB_ERR_NORMAL_COMPLETION || (value8 & 0x03) != 0x02)
+		return (EIO);
+	if (rtw88_native_reg_read16(sc, REG_WIFI_BT_INFO, &value16) !=
+	    USB_ERR_NORMAL_COMPLETION || (value16 & 0x0003) != 0x0003)
+		return (EIO);
 	sc->wifi_only_coex_initialized = 1;
 	device_printf(sc->dev,
 	    "RTL8822B Wi-Fi-only RFE route active: WLAN grants, WLG antenna path, LTE control=0x%08x\n",
@@ -1477,13 +1548,103 @@ rtw88_native_coex_wifi_only_init(struct rtw88_native_softc *sc)
 
 
 /*
+ * Request the same firmware-assisted IQK operation as upstream
+ * rtw8822b_do_iqk(). Linux defers this from scan-time channel changes and
+ * performs it at managed prepare-TX time, immediately before authentication.
+ * Keep USB register access outside net80211's lock and serialize it against
+ * scan/channel register programming.
+ */
+int
+rtw88_native_phy_iqk(struct rtw88_native_softc *sc)
+{
+	uint32_t rf_reg, iqk_status;
+	uint32_t fail_mask;
+	int error, clear_error, i, complete;
+
+	if (sc == NULL || !sc->powered || !sc->firmware_running ||
+	    !sc->phy_initialized || sc->dying)
+		return (ENETDOWN);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || sc->hw_stopping) {
+		mtx_unlock(&sc->mtx);
+		return (ENETDOWN);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	sc->hw_busy = 1;
+	sc->rfk_attempt_count++;
+	mtx_unlock(&sc->mtx);
+
+	error = rtw88_native_firmware_send_iqk(sc);
+	complete = 0;
+	i = 0;
+	if (error != 0)
+		goto out;
+
+	/* RF_DTXLOK becomes 0xabcde when firmware IQK has completed. */
+	for (i = 0; i < 300; i++) {
+		error = rtw88_native_phy_rf_read(sc, BB_PATH_A, 0x08,
+		    &rf_reg);
+		if (error != 0)
+			break;
+		if (rf_reg == 0xabcdeU) {
+			complete = 1;
+			i++;
+			break;
+		}
+		if (i != 299)
+			pause("rtwiqk", MAX(1, hz / 50));
+	}
+	if (error == 0 && !complete)
+		error = ETIMEDOUT;
+
+	/* Always clear the firmware completion marker, as Linux does. */
+	clear_error = rtw88_native_phy_rf_write(sc, BB_PATH_A, 0x08, 0);
+	if (error == 0 && clear_error != 0)
+		error = clear_error;
+
+	/* REG_IQKFAILMSK[16] is reload; [7:0] are per-path IQK failure flags. */
+	if (rtw88_native_reg_read32(sc, 0x1bf0, &iqk_status) ==
+	    USB_ERR_NORMAL_COMPLETION) {
+		sc->rfk_reload = (iqk_status & (1U << 16)) != 0;
+		fail_mask = iqk_status & 0xffU;
+		sc->rfk_fail_mask = fail_mask;
+	} else if (error == 0) {
+		error = EIO;
+	}
+out:
+	mtx_lock(&sc->mtx);
+	sc->rfk_poll_count = (uint32_t)i;
+	sc->rfk_error = error;
+	sc->rfk_done = complete;
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	if (complete) {
+		device_printf(sc->dev,
+		    "RTL8822B firmware IQK finished: polls=%d reload=%d fail-mask=0x%02x error=%d\n",
+		    i, sc->rfk_reload, sc->rfk_fail_mask, error);
+	} else {
+		device_printf(sc->dev,
+		    "RTL8822B firmware IQK did not complete: polls=%d error=%d; authentication TX will continue\n",
+		    i, error);
+	}
+	return (error);
+}
+
+/*
  * USB-specific RTL8822B PHY bring-up in the same order as upstream
  * rtw8822b_phy_set_param(): enable BB/RF domains, release RX path selection,
  * load MAC/BB/AGC and both RF path tables, apply eFuse crystal trim, then
  * restore RX path selection and configure the board top mux.
  *
- * Dynamic DIG, IQK/DPK, thermal tracking, TX power limits and antenna/TRX path
- * policy remain separate follow-on work; no 802.11 networking is advertised.
+ * Dynamic DIG/DPK, thermal tracking, calibrated TX-power limits and
+ * channel-aware TX-power tracking remain follow-on work. Firmware IQK is
+ * triggered immediately before the first managed authentication TX.
  */
 int
 rtw88_native_phy_init(struct rtw88_native_softc *sc)

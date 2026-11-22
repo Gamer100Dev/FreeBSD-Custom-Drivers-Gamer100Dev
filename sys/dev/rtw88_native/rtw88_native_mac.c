@@ -1071,6 +1071,15 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
+	mtx_lock(&sc->mtx);
+	sc->rfk_pending = 1;
+	sc->rfk_done = 0;
+	sc->rfk_error = 0;
+	sc->rfk_poll_count = 0;
+	sc->rfk_fail_mask = 0;
+	sc->rfk_reload = 0;
+	mtx_unlock(&sc->mtx);
+
 	/* Firmware requires the General Info and PHYDM Info H2C packets. */
 	sc->fw_h2c_seq = 0;
 	sc->fw_h2c_error = 0;
@@ -1113,8 +1122,9 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 
 fail:
 	sc->wifi_only_coex_initialized = 0;
-	sc->scan_igi_valid = 0;
 	mtx_lock(&sc->mtx);
+	sc->rfk_pending = 0;
+	sc->scan_igi_valid = 0;
 	sc->tx_enabled = 0;
 	mtx_unlock(&sc->mtx);
 	rtw88_native_usb_rx_stop(sc);
@@ -1176,6 +1186,7 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 	sc->current_channel = 0;
 	sc->wifi_only_coex_initialized = 0;
 	mtx_lock(&sc->mtx);
+	sc->rfk_pending = 0;
 	sc->scan_igi_valid = 0;
 	sc->scan_igi_saved = 0;
 	mtx_unlock(&sc->mtx);

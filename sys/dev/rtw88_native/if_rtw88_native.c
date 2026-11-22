@@ -329,8 +329,11 @@ rtw88_native_set_channel(struct ieee80211com *ic)
 	error = rtw88_native_phy_set_channel(sc, (uint8_t)channel);
 
 	mtx_lock(&sc->mtx);
-	if (error == 0)
+	if (error == 0) {
 		sc->current_channel = channel;
+		/* Linux RTW88 marks RFK pending after channel setup. */
+		sc->rfk_pending = 1;
+	}
 	sc->hw_busy = 0;
 	cv_broadcast(&sc->io_drain_cv);
 	mtx_unlock(&sc->mtx);
@@ -495,7 +498,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	int ac, channel;
 	uint16_t seqctl;
 	usb_error_t uerr;
-	int error;
+	int do_rfk, rfk_error, error;
 
 	if (m->m_pkthdr.len < sizeof(whbuf))
 		return (EINVAL);
@@ -506,6 +509,35 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	m_copydata(m, 0, sizeof(whbuf), (caddr_t)&whbuf);
 	wh = &whbuf;
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+
+	/*
+	 * Match Linux rtw_chip_prepare_tx(): run firmware IQK after scan/channel
+	 * selection and before the first authentication request. A calibration
+	 * timeout is diagnostic; it must not suppress the auth frame itself.
+	 */
+	do_rfk = 0;
+	if (type == IEEE80211_FC0_TYPE_MGT &&
+	    (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
+	    IEEE80211_FC0_SUBTYPE_AUTH) {
+		mtx_lock(&sc->mtx);
+		if (sc->rfk_pending) {
+			sc->rfk_pending = 0;
+			do_rfk = 1;
+		}
+		mtx_unlock(&sc->mtx);
+	}
+	if (do_rfk) {
+		rfk_error = rtw88_native_phy_iqk(sc);
+		if (rfk_error == EBUSY) {
+			/* Retry on the next auth attempt after channel I/O drains. */
+			mtx_lock(&sc->mtx);
+			sc->rfk_pending = 1;
+			mtx_unlock(&sc->mtx);
+		} else if (rfk_error == ENETDOWN) {
+			return (ENETDOWN);
+		}
+	}
+
 	if (type == IEEE80211_FC0_TYPE_MGT ||
 	    type == IEEE80211_FC0_TYPE_CTL) {
 		qsel = RTW88_NATIVE_TXQSEL_MGMT;
@@ -1252,6 +1284,10 @@ rtw88_native_attach(device_t dev)
 	    "Successfully transferred firmware PHYDM Info H2C packets");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "fw_h2c_iqk_count", CTLFLAG_RD, &sc->fw_h2c_iqk_count, 0,
+	    "Successfully transferred firmware IQK H2C commands");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "fw_h2c_error_count", CTLFLAG_RD, &sc->fw_h2c_error_count, 0,
 	    "Failed firmware H2C USB transfers");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
@@ -1263,6 +1299,34 @@ rtw88_native_attach(device_t dev)
 	    "wifi_only_coex_initialized", CTLFLAG_RD,
 	    &sc->wifi_only_coex_initialized, 0,
 	    "Whether the RTL8822B Wi-Fi-only WLAN antenna/grant route is active");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_pending", CTLFLAG_RD, &sc->rfk_pending, 0,
+	    "Whether firmware IQK is queued before the next authentication TX");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_done", CTLFLAG_RD, &sc->rfk_done, 0,
+	    "Whether the firmware IQK completion marker was observed");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_attempt_count", CTLFLAG_RD, &sc->rfk_attempt_count, 0,
+	    "Number of firmware IQK calibration attempts");
+	SYSCTL_ADD_U32(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_poll_count", CTLFLAG_RD, &sc->rfk_poll_count, 0,
+	    "Number of RF_DTXLOK polls in the most recent IQK attempt");
+	SYSCTL_ADD_U32(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_fail_mask", CTLFLAG_RD, &sc->rfk_fail_mask, 0,
+	    "RTL8822B IQK per-path failure mask");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_error", CTLFLAG_RD, &sc->rfk_error, 0,
+	    "Last firmware IQK error (0 means completion marker observed)");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rfk_reload", CTLFLAG_RD, &sc->rfk_reload, 0,
+	    "Whether RTL8822B IQK requested reload of saved calibration");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_probe_resp_count", CTLFLAG_RD, &sc->rx_probe_resp_count, 0,

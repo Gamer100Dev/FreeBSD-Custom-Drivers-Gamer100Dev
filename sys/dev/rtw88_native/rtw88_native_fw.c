@@ -691,7 +691,7 @@ rtw88_native_fw_start(struct rtw88_native_softc *sc)
 #define RTW88_NATIVE_H2C_COMMAND_ID		0xffU
 #define RTW88_NATIVE_H2C_GENERAL_INFO		0x0dU
 #define RTW88_NATIVE_H2C_PHYDM_INFO		0x11U
-#define RTW88_NATIVE_TXQSEL_H2C			19U
+#define RTW88_NATIVE_H2C_IQK			0x0eU
 #define RTW88_NATIVE_FW_RF_2T2R			2U
 
 static void
@@ -831,6 +831,38 @@ rtw88_native_firmware_send_initial_h2c(struct rtw88_native_softc *sc)
 	return (0);
 }
 
+
+/*
+ * Ask the 8822B firmware to perform IQK with clear=0 and segment_iqk=0.
+ * This is H2C_PKT_IQK (0x0e), an eight-byte header plus one payload byte,
+ * exactly as rtw_fw_do_iqk() in upstream RTW88.
+ */
+int
+rtw88_native_firmware_send_iqk(struct rtw88_native_softc *sc)
+{
+	uint8_t packet[RTW88_NATIVE_H2C_PACKET_SIZE];
+	uint32_t dword0, dword1;
+	int error;
+
+	if (sc == NULL || !sc->firmware_running || !sc->mac_initialized ||
+	    !sc->phy_initialized || !sc->xfers_initialized || sc->dying)
+		return (EINVAL);
+
+	bzero(packet, sizeof(packet));
+	dword0 = RTW88_NATIVE_H2C_CATEGORY |
+	    (RTW88_NATIVE_H2C_COMMAND_ID << 8) |
+	    (RTW88_NATIVE_H2C_IQK << 16);
+	dword1 = (RTW88_NATIVE_H2C_HEADER_SIZE + 1U) |
+	    ((uint32_t)sc->fw_h2c_seq << 16);
+	rtw88_native_fw_h2c_put32(packet, 0, dword0);
+	rtw88_native_fw_h2c_put32(packet, 1, dword1);
+	/* Payload byte remains zero: clear=0 and segment_iqk=0. */
+
+	error = rtw88_native_fw_send_h2c_packet(sc, packet);
+	if (error == 0)
+		sc->fw_h2c_iqk_count++;
+	return (error);
+}
 
 /*
  * Complete the RTL8822B (3081 MCU) DDMA firmware transfer and ready check.
