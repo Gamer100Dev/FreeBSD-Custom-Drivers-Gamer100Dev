@@ -152,6 +152,22 @@ rtw88_native_vap_newstate(struct ieee80211vap *vap,
 	sc = vap->iv_ic->ic_softc;
 	ic = vap->iv_ic;
 	ostate = vap->iv_state;
+	/*
+	 * Match Linux rtw_ops_add_interface()/rtw_vif_port_config():
+	 * program the actual VAP MAC into port-0 MACID registers before the
+	 * station starts scanning/authenticating. The RTL8822B RCR has APM
+	 * enabled, so a missing port address can filter unicast RX while
+	 * multicast/EAPOL still appears to work. USB register I/O sleeps;
+	 * release the net80211 lock around the operation.
+	 */
+	if (vap->iv_opmode == IEEE80211_M_STA &&
+	    nstate != IEEE80211_S_INIT) {
+		IEEE80211_UNLOCK(ic);
+		error = rtw88_native_mac_set_address(sc, vap->iv_myaddr);
+		IEEE80211_LOCK(ic);
+		if (error != 0)
+			return (error);
+	}
 	if (vap->iv_opmode == IEEE80211_M_STA &&
 	    ((nstate == IEEE80211_S_RUN && ostate != IEEE80211_S_RUN) ||
 	    (ostate == IEEE80211_S_RUN && nstate != IEEE80211_S_RUN))) {
@@ -1059,8 +1075,11 @@ rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
 		{ "TXDMA_PQ_MAP", 0x010c, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXDMA_AGG_PG_TH", 0x0280, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXDMA_MODE", 0x0290, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "MACID0_LO", 0x0610, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "MACID0_HI", 0x0614, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RCR", 0x0608, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXFLTMAP0", 0x06a0, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP1", 0x06a2, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RXFLTMAP2", 0x06a4, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "SYS_FUNC_EN", 0x0002, 0, USB_ERR_NORMAL_COMPLETION },
 		{ "RF_CTRL", 0x001f, 0, USB_ERR_NORMAL_COMPLETION },
