@@ -889,10 +889,25 @@ rtw88_native_rx_task(void *arg, int pending __unused)
 		mtx_lock(&sc->mtx);
 		sc->rx_input_count++;
 		sc->rx_net80211_last_result = input_result;
-		if (input_result < 0)
+		if (input_result < 0) {
 			sc->rx_net80211_negative_result_count++;
-		else
+		} else {
 			sc->rx_net80211_nonnegative_result_count++;
+			switch (input_result) {
+			case IEEE80211_FC0_TYPE_MGT:
+				sc->rx_net80211_mgmt_result_count++;
+				break;
+			case IEEE80211_FC0_TYPE_CTL:
+				sc->rx_net80211_ctl_result_count++;
+				break;
+			case IEEE80211_FC0_TYPE_DATA:
+				sc->rx_net80211_data_result_count++;
+				break;
+			default:
+				sc->rx_net80211_other_result_count++;
+				break;
+			}
+		}
 		sc->rx_vap_ipackets_last_delta = ipackets_delta;
 		sc->rx_vap_ipackets_count += ipackets_delta;
 		mtx_unlock(&sc->mtx);
@@ -1243,7 +1258,7 @@ rtw88_native_attach(device_t dev)
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_data_count", CTLFLAG_RD, &sc->rx_data_count, 0,
-	    "Number of non-C2H RX frames identified");
+	    "Legacy count of all non-C2H RX records, including management and control frames");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_bad_rate_count", CTLFLAG_RD, &sc->rx_bad_rate_count, 0,
@@ -1276,6 +1291,56 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_vht_count", CTLFLAG_RD, &sc->rx_vht_count, 0,
 	    "RX frames using VHT MCS/NSS rate descriptors");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_mgmt_frame_count", CTLFLAG_RD, &sc->rx_mgmt_frame_count, 0,
+	    "Parsed 802.11 management frames");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ctl_frame_count", CTLFLAG_RD, &sc->rx_ctl_frame_count, 0,
+	    "Parsed 802.11 control frames");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_data_frame_count", CTLFLAG_RD, &sc->rx_data_frame_count, 0,
+	    "Parsed 802.11 data frames");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ext_frame_count", CTLFLAG_RD, &sc->rx_ext_frame_count, 0,
+	    "Parsed 802.11 extension or unclassified frames");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_protected_frame_count", CTLFLAG_RD, &sc->rx_protected_frame_count, 0,
+	    "Parsed 802.11 frames with the Protected Frame bit set");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_descriptor_swdec_count", CTLFLAG_RD,
+	    &sc->rx_descriptor_swdec_count, 0,
+	    "RX descriptors indicating software decryption was required");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_descriptor_encrypted_count", CTLFLAG_RD,
+	    &sc->rx_descriptor_encrypted_count, 0,
+	    "RX descriptors reporting a non-none encryption type");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_mgmt_result_count", CTLFLAG_RD,
+	    &sc->rx_net80211_mgmt_result_count, 0,
+	    "net80211 input results identifying management frames (type 0)");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_ctl_result_count", CTLFLAG_RD,
+	    &sc->rx_net80211_ctl_result_count, 0,
+	    "net80211 input results identifying control frames (type 4)");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_data_result_count", CTLFLAG_RD,
+	    &sc->rx_net80211_data_result_count, 0,
+	    "net80211 input results identifying data frames (type 8)");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_net80211_other_result_count", CTLFLAG_RD,
+	    &sc->rx_net80211_other_result_count, 0,
+	    "net80211 input results with other nonnegative frame-type values");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_decrypted_count", CTLFLAG_RD, &sc->rx_decrypted_count, 0,
@@ -1320,17 +1385,17 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_net80211_negative_result_count", CTLFLAG_RD,
 	    &sc->rx_net80211_negative_result_count, 0,
-	    "net80211 input calls that returned a negative result");
+	    "RX input calls returning -1 (missing RX metadata); not a filter-drop count");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_net80211_nonnegative_result_count", CTLFLAG_RD,
 	    &sc->rx_net80211_nonnegative_result_count, 0,
-	    "net80211 input calls that returned a nonnegative result (not necessarily data delivery)");
+	    "RX input calls returning an 802.11 frame-type value; not an acceptance count");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_net80211_last_result", CTLFLAG_RD,
 	    &sc->rx_net80211_last_result, 0,
-	    "Return value from the most recent ieee80211_input_mimo_all call");
+	    "Last net80211 frame type: 0=management, 4=control, 8=data, -1=missing RX metadata");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_vap_ipackets_count", CTLFLAG_RD,
