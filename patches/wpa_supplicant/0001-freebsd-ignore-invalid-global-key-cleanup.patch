@@ -1,6 +1,6 @@
 --- contrib/wpa/src/drivers/driver_bsd.c.orig
 +++ contrib/wpa/src/drivers/driver_bsd.c
-@@ -267,6 +267,18 @@ bsd_del_key(void *priv, const u8 *addr, int key_idx)
+@@ -267,7 +267,21 @@ bsd_del_key(void *priv, const u8 *addr, int key_idx)
  {
  	struct ieee80211req_del_key wk;
  
