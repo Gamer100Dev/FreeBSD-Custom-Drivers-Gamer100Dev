@@ -279,6 +279,17 @@ rtw88_native_scan_start(struct ieee80211com *ic)
 	mode = (ic->ic_scan != NULL &&
 	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0) ?
 	    "active" : "passive";
+	/*
+	 * Linux RTW88 disables CBSSID_BCN while FIF_BCN_PRBRESP_PROMISC is
+	 * requested for scanning. Do the same for the FreeBSD software scan;
+	 * otherwise the RTL8822B hardware drops other-BSS beacons before
+	 * net80211 can populate the scan cache.
+	 */
+	error = rtw88_native_mac_set_scan_filter(sc, 1);
+	if (error != 0)
+		device_printf(sc->dev,
+		    "could not disable beacon BSSID filtering for scan: %d\n",
+		    error);
 	error = rtw88_native_phy_scan_gain(sc, 1);
 	if (error != 0)
 		device_printf(sc->dev,
@@ -298,6 +309,11 @@ rtw88_native_scan_end(struct ieee80211com *ic)
 	if (error != 0)
 		device_printf(sc->dev,
 		    "could not restore receive gain after scan: %d\n", error);
+	error = rtw88_native_mac_set_scan_filter(sc, 0);
+	if (error != 0)
+		device_printf(sc->dev,
+		    "could not restore beacon BSSID filtering after scan: %d\n",
+		    error);
 	device_printf(sc->dev, "net80211 scan finished\n");
 }
 
