@@ -25,7 +25,7 @@ On the FreeBSD machine, with a matching FreeBSD source tree:
 
 ```sh
 tools/build-native-module.sh
-tools/install-native-autostart.sh
+sh tools/install-native-autostart.sh
 ```
 
 The installer places `if_rtw88_native.ko` in `/boot/modules`, installs the
