@@ -921,10 +921,124 @@ rtw88_native_mac_stop(struct rtw88_native_softc *sc)
 	sc->mac_initialized = 0;
 }
 
+#define REG_C2HEVT			0x01a0
+#define C2H_HW_FEATURE_REPORT		0x19
+#define C2H_HW_FEATURE_DUMP		0xfd
+#define RTW88_NATIVE_HW_FEATURE_LEN	13U
+#define RTW88_NATIVE_HW_FEATURE_POLLS	1000
+
+/*
+ * Ask the RTL8822B firmware for its hardware capability report before
+ * downloading firmware, matching RTW88's efuse-info setup. The report
+ * describes the actual board antenna count; SYS_CFG1 only describes the
+ * silicon RF type and must not be used as a substitute for board capability.
+ */
+static int
+rtw88_native_hw_feature_request(struct rtw88_native_softc *sc)
+{
+	return (rtw88_native_reg_write8(sc, REG_C2HEVT,
+	    C2H_HW_FEATURE_DUMP) == USB_ERR_NORMAL_COMPLETION ? 0 : EIO);
+}
+
+static void
+rtw88_native_hw_feature_rf_a_fallback(struct rtw88_native_softc *sc,
+    uint8_t event_id, const char *reason)
+{
+	sc->hw_feature_valid = 0;
+	sc->hw_feature_hci = 0;
+	sc->hw_feature_bw = 0;
+	sc->hw_feature_nss = 1;
+	sc->hw_feature_ant_num = 1;
+	sc->hw_feature_protocol = 0;
+	if (sc->rf_path_num > 1) {
+		sc->rf_path_num = 1;
+		sc->antenna_tx = 0x01;
+		sc->antenna_rx = 0x01;
+	}
+	(void)rtw88_native_reg_write8(sc, REG_C2HEVT, 0);
+	device_printf(sc->dev,
+	    "hardware feature report %s (C2H id=0x%02x); conservatively selecting RF-A only (1T1R)\n",
+	    reason, event_id);
+}
+
+/*
+ * Decode the 13-byte RTW88 HW_FEATURE_REPORT. The capability word occupies
+ * bytes 4..7; antenna count is bits 21..23 and NSS is bits 19..20. Upstream
+ * RTW88 switches to RF-A/1T1R when ant_num is one.
+ */
+static int
+rtw88_native_hw_feature_read(struct rtw88_native_softc *sc)
+{
+	uint8_t report[RTW88_NATIVE_HW_FEATURE_LEN];
+	uint8_t event_id;
+	uint32_t caps;
+	int i, tries;
+
+	sc->hw_feature_valid = 0;
+	event_id = 0;
+	for (tries = 0; tries < RTW88_NATIVE_HW_FEATURE_POLLS; tries++) {
+		if (rtw88_native_reg_read8(sc, REG_C2HEVT, &event_id) !=
+		    USB_ERR_NORMAL_COMPLETION) {
+			rtw88_native_hw_feature_rf_a_fallback(sc, event_id,
+			    "register read failed");
+			return (0);
+		}
+		if (event_id == C2H_HW_FEATURE_REPORT)
+			break;
+		pause("rtw88hf", MAX(1, hz / 1000));
+	}
+	if (tries == RTW88_NATIVE_HW_FEATURE_POLLS) {
+		rtw88_native_hw_feature_rf_a_fallback(sc, event_id,
+		    "not received");
+		return (0);
+	}
+
+	for (i = 0; i < RTW88_NATIVE_HW_FEATURE_LEN; i++) {
+		if (rtw88_native_reg_read8(sc,
+		    REG_C2HEVT + 2 + i, &report[i]) !=
+		    USB_ERR_NORMAL_COMPLETION) {
+			rtw88_native_hw_feature_rf_a_fallback(sc, event_id,
+			    "payload read failed");
+			return (0);
+		}
+	}
+	if (rtw88_native_reg_write8(sc, REG_C2HEVT, 0) !=
+	    USB_ERR_NORMAL_COMPLETION) {
+		device_printf(sc->dev,
+		    "could not clear the consumed hardware feature report\n");
+	}
+
+	caps = (uint32_t)report[4] |
+	    ((uint32_t)report[5] << 8) |
+	    ((uint32_t)report[6] << 16) |
+	    ((uint32_t)report[7] << 24);
+	sc->hw_feature_hci = caps & 0x0fU;
+	sc->hw_feature_bw = (caps >> 16) & 0x07U;
+	sc->hw_feature_nss = (caps >> 19) & 0x03U;
+	sc->hw_feature_ant_num = (caps >> 21) & 0x07U;
+	sc->hw_feature_protocol = (caps >> 26) & 0x03U;
+	sc->hw_feature_valid = 1;
+
+	if (sc->hw_feature_ant_num == 1 && sc->rf_path_num > 1) {
+		sc->rf_path_num = 1;
+		sc->antenna_tx = 0x01;
+		sc->antenna_rx = 0x01;
+	}
+	if (sc->hw_feature_nss == 0 ||
+	    sc->hw_feature_nss > sc->rf_path_num)
+		sc->hw_feature_nss = sc->rf_path_num;
+	device_printf(sc->dev,
+	    "RTL8822B HW feature: HCI=%u BW=%u NSS=%u antennas=%u protocol=%u; RF paths=%u TX=0x%x RX=0x%x\n",
+	    sc->hw_feature_hci, sc->hw_feature_bw, sc->hw_feature_nss,
+	    sc->hw_feature_ant_num, sc->hw_feature_protocol, sc->rf_path_num,
+	    sc->antenna_tx, sc->antenna_rx);
+	return (0);
+}
+
 int
 rtw88_native_hw_start(struct rtw88_native_softc *sc)
 {
-	int error;
+	int error, hw_feature_requested;
 
 	if (sc == NULL || sc->dying || !sc->xfers_initialized)
 		return (EINVAL);
@@ -935,12 +1049,21 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	error = rtw88_native_firmware_get(sc);
 	if (error != 0)
 		goto fail;
+	hw_feature_requested = (rtw88_native_hw_feature_request(sc) == 0);
+	if (!hw_feature_requested)
+		device_printf(sc->dev,
+		    "could not request RTL8822B HW feature report; will use RF-A only\n");
 	error = rtw88_native_firmware_download(sc);
 	if (error != 0)
 		goto fail;
 	error = rtw88_native_efuse_read(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
+	if (hw_feature_requested)
+		(void)rtw88_native_hw_feature_read(sc);
+	else
+		rtw88_native_hw_feature_rf_a_fallback(sc, 0,
+		    "request write failed");
 	error = rtw88_native_mac_init(sc);
 	if (error != 0)
 		goto fail;
@@ -948,15 +1071,20 @@ rtw88_native_hw_start(struct rtw88_native_softc *sc)
 	if (error != 0)
 		goto fail;
 
-	/* Start the event endpoint and raw bulk receive after PHY table setup. */
+	/*
+	 * Register the net80211 radio before posting receive requests, matching
+	 * Linux RTW88's order (rtw_register_hw() before rtw_usb_setup_rx()).
+	 * This prevents a first RX completion from being consumed while the
+	 * native net80211 input path is still detached.
+	 */
+	error = rtw88_native_net80211_attach(sc);
+	if (error != 0)
+		goto fail;
 	error = rtw88_native_usb_intr_start(sc);
 	if (error != 0 && error != EALREADY)
 		goto fail;
 	error = rtw88_native_usb_rx_start(sc);
 	if (error != 0 && error != EALREADY)
-		goto fail;
-	error = rtw88_native_net80211_attach(sc);
-	if (error != 0)
 		goto fail;
 	mtx_lock(&sc->mtx);
 	sc->tx_enabled = 1;

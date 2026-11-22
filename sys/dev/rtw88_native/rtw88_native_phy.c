@@ -132,6 +132,12 @@ rtw88_native_phy_write_mask32(struct rtw88_native_softc *sc, uint16_t reg,
 	    USB_ERR_NORMAL_COMPLETION ? 0 : EIO);
 }
 
+/*
+ * RTL8822B's RTW88 chip operations use the HSSI/SIPI serial-interface
+ * write port for RF register writes, while the read operation uses the
+ * path-specific direct RF window. Keep the chipset-specific write behaviour
+ * rather than using the mixed direct-write path used by other RTW88 chips.
+ */
 static int
 rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
     uint32_t addr, uint32_t value)
@@ -149,8 +155,11 @@ rtw88_native_phy_rf_write(struct rtw88_native_softc *sc, uint8_t path,
 		DELAY(100);
 		return (0);
 	}
+	if (addr > 0xff)
+		return (EINVAL);
 
-	sipi_reg = path == 0 ? RTW88_NATIVE_RF_SIPI_A : RTW88_NATIVE_RF_SIPI_B;
+	sipi_reg = path == 0 ? RTW88_NATIVE_RF_SIPI_A :
+	    RTW88_NATIVE_RF_SIPI_B;
 	data_and_addr = (((addr & 0xffU) << 20) |
 	    (value & RTW88_NATIVE_RFREG_MASK)) & 0x0fffffffU;
 	if (rtw88_native_reg_write32(sc, sipi_reg, data_and_addr) !=
@@ -434,10 +443,10 @@ rtw88_native_phy_load_table(struct rtw88_native_softc *sc,
 
 
 /*
- * Limited, passive 2.4-GHz/20-MHz channel setup for the RTL8822BU board
- * identified by eFuse RFE option 3. This is a diagnostic tuning path: it
- * does not start a scan, transmit frames, or replace net80211 channel state.
- * The register sequence follows the corresponding 8822B RTW88 operations.
+ * RTL8822B 2.4-GHz/20-MHz channel setup for the IFEM-ext RFE option 3 board.
+ * The active RF mask follows SYS_CFG1 and may be reduced to RF-A/1T1R when
+ * RF-B fails its post-write readback. The channel is not committed to
+ * net80211 until this function completes successfully.
  */
 #define REG_CH_DATA_SC			0x0483
 #define REG_CH_WMAC_TRXPTCL_CTL		0x0668
@@ -483,14 +492,25 @@ static int
 rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
     uint8_t channel)
 {
-	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg;
-	uint32_t igi_a, igi_b, value32;
-	uint8_t value8;
-	int error, path;
+	uint32_t rf18, rf_malsel, rf_xtalx2, rf_lutdbg, rf18_check;
+	uint32_t igi_a, igi_b, value32, sipi_b, rf_ctrl, wlrf1;
+	uint8_t value8, active_paths;
+	uint16_t trx_switch;
+	int error, path, rf_write_error;
 
-	if (sc->efuse.rfe_option != 3 || sc->rf_path_num != 2 ||
-	    sc->antenna_rx != BB_PATH_AB || sc->antenna_tx != BB_PATH_AB)
+	/*
+	 * RFE option 3 is shared by 1T1R and 2T2R board configurations. The
+	 * active antenna masks come from SYS_CFG1; do not assume that a two-path
+	 * silicon part necessarily has both chains selected for this interface.
+	 */
+	if (sc->efuse.rfe_option != 3 || sc->rf_path_num == 0 ||
+	    sc->rf_path_num > 2 ||
+	    (sc->antenna_tx != BB_PATH_A && sc->antenna_tx != BB_PATH_AB) ||
+	    (sc->antenna_rx != BB_PATH_A && sc->antenna_rx != BB_PATH_AB) ||
+	    (((sc->antenna_tx | sc->antenna_rx) & BB_PATH_B) != 0 &&
+	    sc->rf_path_num < 2))
 		return (ENOTSUP);
+	active_paths = sc->antenna_tx | sc->antenna_rx;
 
 	/* Baseband 2.4-GHz channel profile. */
 	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
@@ -580,12 +600,73 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	rf_malsel &= ~CH_RF_MALSEL_MASK;
 	rf_lutdbg &= ~CH_RF_LUTDBG_MASK; /* channels 1-13 are below channel 144 */
 	if (rtw88_native_phy_rf_write(sc, 0, 0xbe, rf_malsel) != 0 ||
-	    rtw88_native_phy_rf_write(sc, 0, 0xdf, rf_lutdbg) != 0 ||
-	    rtw88_native_phy_rf_write(sc, 0, 0x18, rf18) != 0)
+	    rtw88_native_phy_rf_write(sc, 0, 0xdf, rf_lutdbg) != 0)
 		return (EIO);
-	for (path = 1; path < sc->rf_path_num; path++) {
-		if (rtw88_native_phy_rf_write(sc, path, 0x18, rf18) != 0)
+
+	/*
+	 * RTW88 programs RF18 identically on each active path. Verify the
+	 * direct RF window after each write; this catches a command-port write
+	 * that completed over USB but did not change the selected RF path.
+	 */
+	for (path = 0; path < sc->rf_path_num; path++) {
+		if ((active_paths & (1U << path)) == 0)
+			continue;
+		rf18_check = 0;
+		rf_write_error = rtw88_native_phy_rf_write(sc, path, 0x18,
+		    rf18);
+		if (rf_write_error == 0)
+			rf_write_error = rtw88_native_phy_rf_read(sc, path, 0x18,
+			    &rf18_check);
+		if (rf_write_error == 0 && rf18_check == rf18)
+			continue;
+
+		device_printf(sc->dev,
+		    "RF path %d channel register mismatch: write_error=%d wrote=0x%05x read=0x%05x\n",
+		    path, rf_write_error, rf18, rf18_check);
+		if (path != 1 || sc->antenna_tx != BB_PATH_AB ||
+		    sc->antenna_rx != BB_PATH_AB)
 			return (EIO);
+
+		/*
+		 * The RTL8822B exposes independent RF-A and RF-B SIPI ports. If
+		 * this board's B path does not accept a verified channel update,
+		 * continue safely in 1T1R mode rather than scanning with one chain
+		 * on the old channel. Re-run the upstream TRX-path setup to disable
+		 * B in both TX and RX, then keep the already verified A channel.
+		 */
+		error = rtw88_native_phy_config_trx_mode(sc, BB_PATH_A,
+		    BB_PATH_A);
+		if (error != 0)
+			return (error);
+		sc->rf_path_num = 1;
+		sc->antenna_tx = BB_PATH_A;
+		sc->antenna_rx = BB_PATH_A;
+		active_paths = BB_PATH_A;
+
+		if (rtw88_native_reg_read32(sc, RTW88_NATIVE_RF_SIPI_B,
+		    &sipi_b) == USB_ERR_NORMAL_COMPLETION &&
+		    rtw88_native_reg_read32(sc, REG_RF_CTRL, &rf_ctrl) ==
+		    USB_ERR_NORMAL_COMPLETION &&
+		    rtw88_native_reg_read32(sc, REG_WLRF1, &wlrf1) ==
+		    USB_ERR_NORMAL_COMPLETION) {
+			device_printf(sc->dev,
+			    "RF-B fallback diagnostics: SIPI_B=0x%08x RF_CTRL=0x%08x WLRF1=0x%08x\n",
+			    sipi_b, rf_ctrl, wlrf1);
+		}
+		device_printf(sc->dev,
+		    "RF path B did not track channel %u; continuing with verified RF path A only (1T1R)\n",
+		    channel);
+
+		rf18_check = 0;
+		if (rtw88_native_phy_rf_write(sc, 0, 0x18, rf18) != 0 ||
+		    rtw88_native_phy_rf_read(sc, 0, 0x18,
+		    &rf18_check) != 0 || rf18_check != rf18) {
+			device_printf(sc->dev,
+			    "RF-A channel verification failed after 1T1R fallback: wrote 0x%05x, read 0x%05x\n",
+			    rf18, rf18_check);
+			return (EIO);
+		}
+		break;
 	}
 	rf_xtalx2 &= ~CH_RF_XTALX2_MASK;
 	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
@@ -594,7 +675,7 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (rtw88_native_phy_rf_write(sc, 0, 0xb8, rf_xtalx2) != 0)
 		return (EIO);
 
-	/* IFEM-extended RFE option 3: route both RF paths to the antennas. */
+	/* IFEM-extended RFE option 3: route the enabled RF path(s) to antennas. */
 	error = rtw88_native_phy_write_mask32(sc, REG_CH_RFESEL0,
 	    0x00ffffffU, 0x00745774U);
 	if (error == 0)
@@ -612,46 +693,59 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RFEINV + 0x200,
 		    (1U << 11) | (1U << 10) | 0x3fU, 0);
+	trx_switch = (sc->antenna_rx == BB_PATH_AB ||
+	    sc->antenna_tx == BB_PATH_AB) ? 0xa501 :
+	    (sc->antenna_rx == sc->antenna_tx ? 0xa500 : 0xa005);
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW,
-		    0x0000ffffU, 0xa501);
+		    0x0000ffffU, trx_switch);
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_TRSW + 0x200,
-		    0x0000ffffU, 0xa501);
+		    0x0000ffffU, trx_switch);
 	if (error != 0)
 		return (error);
 
-	/* RFE-option-3 / IFEM-ext CCA thresholds, two receive paths. */
+	/*
+	 * Use the matching IFEM-ext CCA column: RTW88's 2R values are
+	 * 0x97a0eaac / 0x86666341; the 1R values are
+	 * 0x79a0eaaa / 0x87765541.
+	 */
 	if (rtw88_native_reg_write32(sc, REG_CH_CCASEL, 0x75da8010U) !=
 	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_write32(sc, REG_CH_PDMFTH, 0x97a0eaacU) !=
+	    rtw88_native_reg_write32(sc, REG_CH_PDMFTH,
+	    sc->antenna_rx == BB_PATH_AB ? 0x97a0eaacU : 0x79a0eaaaU) !=
 	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_write32(sc, REG_CH_CCA2ND, 0x86666341U) !=
+	    rtw88_native_reg_write32(sc, REG_CH_CCA2ND,
+	    sc->antenna_rx == BB_PATH_AB ? 0x86666341U : 0x87765541U) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 
 	/*
-	 * Match rtw8822b_toggle_igi(): toggle the gain index on both RF paths,
-	 * then pulse RX path selection with the configured dual-chain value.
+	 * Match rtw8822b_toggle_igi(): toggle the gain index for every active
+	 * receive chain, then pulse RX path selection with the selected mask.
 	 */
 	if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_A, &igi_a) !=
-	    USB_ERR_NORMAL_COMPLETION ||
-	    rtw88_native_reg_read32(sc, REG_CH_RXIGI_B, &igi_b) !=
 	    USB_ERR_NORMAL_COMPLETION)
 		return (EIO);
 	igi_a &= CH_BIT_MAC_RXIGI;
-	igi_b &= CH_BIT_MAC_RXIGI;
-	if (igi_a < 2 || igi_b < 2)
+	if (igi_a < 2)
 		return (EIO);
 	error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
 	    CH_BIT_MAC_RXIGI, igi_a - 2);
-	if (error == 0)
+	if (error == 0 && (sc->antenna_rx & BB_PATH_B) != 0) {
+		if (rtw88_native_reg_read32(sc, REG_CH_RXIGI_B, &igi_b) !=
+		    USB_ERR_NORMAL_COMPLETION)
+			return (EIO);
+		igi_b &= CH_BIT_MAC_RXIGI;
+		if (igi_b < 2)
+			return (EIO);
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
 		    CH_BIT_MAC_RXIGI, igi_b - 2);
+	}
 	if (error == 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_A,
 		    CH_BIT_MAC_RXIGI, igi_a);
-	if (error == 0)
+	if (error == 0 && (sc->antenna_rx & BB_PATH_B) != 0)
 		error = rtw88_native_phy_write_mask32(sc, REG_CH_RXIGI_B,
 		    CH_BIT_MAC_RXIGI, igi_b);
 	if (error == 0)
@@ -671,8 +765,8 @@ rtw88_native_phy_set_channel_2g20(struct rtw88_native_softc *sc,
 		return (EIO);
 
 	device_printf(sc->dev,
-	    "RTL8822B tuned to 2.4-GHz channel %u at 20 MHz (RFE option 3)\n",
-	    channel);
+	    "RTL8822B tuned to 2.4-GHz channel %u at 20 MHz (RFE option 3, %s)\n",
+	    channel, sc->antenna_rx == BB_PATH_AB ? "2T2R" : "1T1R");
 	return (0);
 }
 
@@ -705,7 +799,7 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	static const uint16_t rf_sipi_addr[2] = {
 		RTW88_NATIVE_RF_SIPI_A, RTW88_NATIVE_RF_SIPI_B
 	};
-	uint32_t xtal;
+	uint32_t xtal, value32;
 	int error;
 
 	if (sc == NULL || !sc->powered || !sc->firmware_running ||
@@ -727,10 +821,27 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	    BIT_RF_EN | BIT_RF_RSTB | BIT_RF_SDM_RSTB);
 	if (error != 0)
 		return (error);
+	/*
+	 * rtw88_native_phy_write_mask32() takes an unshifted field value.
+	 * WLRF1's enable field is bits 24..26, so pass 0x7, not the
+	 * already-positioned bit mask (which would be shifted a second time
+	 * and silently write zero).
+	 */
 	error = rtw88_native_phy_write_mask32(sc, REG_WLRF1,
-	    BIT_WLRF1_BBRF_EN, BIT_WLRF1_BBRF_EN);
+	    BIT_WLRF1_BBRF_EN, 0x7);
 	if (error != 0)
 		return (error);
+	value32 = 0;
+	if (rtw88_native_reg_read32(sc, REG_WLRF1, &value32) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value32 & BIT_WLRF1_BBRF_EN) != BIT_WLRF1_BBRF_EN) {
+		device_printf(sc->dev,
+		    "BB/RF domain enable did not latch: WLRF1=0x%08x\n",
+		    value32);
+		return (EIO);
+	}
+	device_printf(sc->dev, "BB/RF domain enabled: WLRF1=0x%08x\n",
+	    value32);
 
 	/* Disable RX path select while the baseband tables are being written. */
 	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
@@ -765,10 +876,23 @@ rtw88_native_phy_init(struct rtw88_native_softc *sc)
 	if (error != 0)
 		return (error);
 
+	/*
+	 * Release both RX path-select reset bits. The mask covers bits 28..29,
+	 * so its unshifted field value is 0x3 (not BIT_RX_PSEL_RST).
+	 */
 	error = rtw88_native_phy_write_mask32(sc, REG_RXPSEL,
-	    BIT_RX_PSEL_RST, BIT_RX_PSEL_RST);
+	    BIT_RX_PSEL_RST, 0x3);
 	if (error != 0)
 		return (error);
+	value32 = 0;
+	if (rtw88_native_reg_read32(sc, REG_RXPSEL, &value32) !=
+	    USB_ERR_NORMAL_COMPLETION ||
+	    (value32 & BIT_RX_PSEL_RST) != BIT_RX_PSEL_RST) {
+		device_printf(sc->dev,
+		    "RX path-select reset release did not latch: RXPSEL=0x%08x\n",
+		    value32);
+		return (EIO);
+	}
 
 	/* Common 8822B USB board mux setup from rtw8822b_phy_rfe_init(). */
 	error = rtw88_native_phy_write_mask32(sc, 0x0064,

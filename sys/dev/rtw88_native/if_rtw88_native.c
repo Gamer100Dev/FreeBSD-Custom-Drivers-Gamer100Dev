@@ -35,6 +35,7 @@
 #include <dev/usb/usbdi.h>
 
 #include "if_rtw88_native.h"
+#include "rtw88_native_build.h"
 
 /*
  * Keep the initial port deliberately narrow: bind only to the adapter that
@@ -230,6 +231,60 @@ rtw88_native_tx_enqueue(struct rtw88_native_softc *sc, struct mbuf *m)
 	return (error);
 }
 
+/*
+ * FreeBSD's normal scanner and STA management state machine populate the
+ * BPF parameter structure even for ordinary kernel-generated frames. For
+ * example, ProbeReq uses ibp_pri/rate0/try0/power and sets NOACK for its
+ * broadcast destination; authentication and association use VO, a
+ * management rate, retries and power. Those are not user radiotap overrides.
+ *
+ * Accept those stack-generated defaults, while rejecting descriptor features
+ * this first TX path cannot honour (crypto offload, RTS/CTS, short preamble,
+ * explicit retry series, data padding and FCS). The TX descriptor currently
+ * uses a conservative fixed 1-Mbps rate; retry/power/rate requests are
+ * validated but not yet applied.
+ */
+static int
+rtw88_native_raw_params_supported(const struct ieee80211_bpf_params *params,
+    struct mbuf *m)
+{
+	static const uint8_t legacy_rates[] = {
+		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
+	};
+	struct ieee80211_frame_min wh;
+	unsigned int i;
+
+	if (params == NULL)
+		return (1);
+	if (params->ibp_vers != 0 || params->ibp_len != 0 ||
+	    (params->ibp_flags & ~IEEE80211_BPF_NOACK) != 0 ||
+	    params->ibp_pri > WME_AC_VO ||
+	    params->ibp_try0 > 15 || params->ibp_ctsrate != 0 ||
+	    params->ibp_try1 != 0 || params->ibp_rate1 != 0 ||
+	    params->ibp_try2 != 0 || params->ibp_rate2 != 0 ||
+	    params->ibp_try3 != 0 || params->ibp_rate3 != 0)
+		return (0);
+
+	if (params->ibp_rate0 != 0) {
+		for (i = 0; i < nitems(legacy_rates); i++) {
+			if (params->ibp_rate0 == legacy_rates[i])
+				break;
+		}
+		if (i == nitems(legacy_rates))
+			return (0);
+	}
+
+	/* NOACK is only accepted for a group-addressed frame. */
+	if ((params->ibp_flags & IEEE80211_BPF_NOACK) != 0) {
+		if (m == NULL || m->m_pkthdr.len < sizeof(wh))
+			return (0);
+		m_copydata(m, 0, sizeof(wh), (caddr_t)&wh);
+		if (!IEEE80211_IS_MULTICAST(wh.i_addr1))
+			return (0);
+	}
+	return (1);
+}
+
 static int
 rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
     const struct ieee80211_bpf_params *params)
@@ -242,27 +297,26 @@ rtw88_native_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 			m_freem(m);
 		return (EINVAL);
 	}
-	/*
-	 * net80211 passes a zeroed params structure for ordinary auth/assoc
-	 * management frames. Reject non-default BPF/radiotap overrides until the
-	 * driver can honour rate, retry, crypto, RTS/CTS and padding controls.
-	 */
-	if (params != NULL &&
-	    (params->ibp_vers != 0 || params->ibp_len != 0 ||
-	    params->ibp_flags != 0 || params->ibp_pri != 0 ||
-	    params->ibp_try0 != 0 || params->ibp_rate0 != 0 ||
-	    params->ibp_power != 0 || params->ibp_ctsrate != 0 ||
-	    params->ibp_try1 != 0 || params->ibp_rate1 != 0 ||
-	    params->ibp_try2 != 0 || params->ibp_rate2 != 0 ||
-	    params->ibp_try3 != 0 || params->ibp_rate3 != 0)) {
+	sc = ni->ni_ic->ic_softc;
+	mtx_lock(&sc->mtx);
+	sc->tx_raw_count++;
+	mtx_unlock(&sc->mtx);
+
+	if (!rtw88_native_raw_params_supported(params, m)) {
+		mtx_lock(&sc->mtx);
+		sc->tx_raw_reject_count++;
+		mtx_unlock(&sc->mtx);
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
 		return (EOPNOTSUPP);
 	}
-	sc = ni->ni_ic->ic_softc;
+
 	error = rtw88_native_tx_enqueue(sc, m);
 	if (error != 0) {
+		mtx_lock(&sc->mtx);
+		sc->tx_raw_reject_count++;
+		mtx_unlock(&sc->mtx);
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
@@ -282,8 +336,9 @@ rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
 /*
  * Send one 802.11 MPDU through the RTW88 48-byte descriptor and the USB
  * endpoint selected by the RTL8822B queue map. Management/control frames use
- * QSEL_MGMT (18 -> high endpoint 0x05); data frames use TID0/BE (0 -> low
- * endpoint 0x08). TX is serialized by the sleepable TX task.
+ * QSEL_MGMT; group-addressed data uses QSEL_HIGH; unicast data maps the
+ * net80211 WME access category to its 802.11 TID. TX is serialized by the
+ * sleepable TX task.
  */
 static int
 rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
@@ -295,6 +350,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	uint16_t frame_len, transfer_len;
 	uint8_t qsel, endpoint;
 	uint8_t type;
+	int ac;
 	uint16_t seqctl;
 	usb_error_t uerr;
 	int error;
@@ -309,18 +365,80 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	wh = &whbuf;
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 	if (type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_CTL)
-		qsel = 18;		/* TX_DESC_QSEL_MGMT */
-	else if (type == IEEE80211_FC0_TYPE_DATA)
-		qsel = 0;		/* TX_DESC_QSEL_TID0 / best effort */
-	else
+	    type == IEEE80211_FC0_TYPE_CTL) {
+		qsel = RTW88_NATIVE_TXQSEL_MGMT;
+	} else if (type == IEEE80211_FC0_TYPE_DATA) {
+		/*
+		 * Match rtw_usb_tx_queue_mapping_to_qsel() in Linux RTW88:
+		 * group-addressed data uses QSEL_HIGH; unicast data uses the
+		 * TID corresponding to net80211's WME access category. FreeBSD
+		 * stores AC in M_WME_GETAC(), while the TX descriptor needs TID.
+		 */
+		if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
+			qsel = RTW88_NATIVE_TXQSEL_HIGH;
+		} else if ((m->m_flags & M_EAPOL) != 0) {
+			/*
+			 * FreeBSD tags PAE frames M_EAPOL and promotes their WME
+			 * category to VO, but transmits them as non-QoS data.
+			 * Match the FreeBSD LinuxKPI RTW88 path: put EAPOL on
+			 * BE/TID0, rather than mapping the promoted VO category to QSEL_BEACON.
+			 */
+			qsel = RTW88_NATIVE_TXQSEL_TID0;
+		} else {
+			ac = M_WME_GETAC(m);
+			if (ac < WME_AC_BE || ac > WME_AC_VO)
+				return (EINVAL);
+			/* Linux maps BE/BK to their TIDs and VI/VO to BEACON. */
+			qsel = ac <= WME_AC_BK ? WME_AC_TO_TID(ac) :
+			    RTW88_NATIVE_TXQSEL_BEACON;
+		}
+	} else {
 		return (EOPNOTSUPP);
+	}
 
 	endpoint = sc->qsel_to_ep[qsel];
 	if (endpoint >= RTW88_NATIVE_TX_QUEUES)
 		return (EOPNOTSUPP);
 	frame_len = (uint16_t)m->m_pkthdr.len;
 	transfer_len = frame_len + RTW88_NATIVE_TX_DESC_SIZE;
+
+	/* Snapshot frame classification before the sleepable USB transmit. */
+	mtx_lock(&sc->mtx);
+	sc->tx_last_qsel = qsel;
+	sc->tx_last_endpoint = endpoint;
+	sc->tx_last_frame_control = (int)wh->i_fc[0] |
+	    ((int)wh->i_fc[1] << 8);
+	sc->tx_last_frame_len = frame_len;
+	if (type == IEEE80211_FC0_TYPE_MGT ||
+	    type == IEEE80211_FC0_TYPE_CTL) {
+		sc->tx_mgmt_count++;
+		if (type == IEEE80211_FC0_TYPE_MGT) {
+			switch (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) {
+			case IEEE80211_FC0_SUBTYPE_PROBE_REQ:
+				sc->tx_probe_req_count++;
+				break;
+			case IEEE80211_FC0_SUBTYPE_AUTH:
+				sc->tx_auth_req_count++;
+				break;
+			case IEEE80211_FC0_SUBTYPE_ASSOC_REQ:
+			case IEEE80211_FC0_SUBTYPE_REASSOC_REQ:
+				sc->tx_assoc_req_count++;
+				break;
+			case IEEE80211_FC0_SUBTYPE_DEAUTH:
+				sc->tx_deauth_req_count++;
+				break;
+			default:
+				break;
+			}
+		}
+	} else {
+		sc->tx_data_count++;
+		if (qsel == RTW88_NATIVE_TXQSEL_HIGH)
+			sc->tx_group_count++;
+	}
+	if ((m->m_flags & M_EAPOL) != 0)
+		sc->tx_eapol_count++;
+	mtx_unlock(&sc->mtx);
 
 	buffer = malloc(transfer_len, M_DEVBUF, M_WAITOK);
 	if (buffer == NULL)
@@ -332,12 +450,13 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	params.mac_id = 0;
 	params.queue_select = qsel;
 	/*
-	 * Use the 2.4-GHz B rate table for management frames at 1 Mbps. Until
-	 * association-specific rate control is ported, data uses the BG legacy
-	 * table at the universally supported 1-Mbps basic rate.
+	 * Use the 2.4-GHz B rate table for management and EAPOL frames at 1 Mbps;
+	 * the FreeBSD net80211 M_EAPOL tag identifies PAE traffic that should use
+	 * the robust management rate. Ordinary data uses the BG legacy table.
 	 */
 	if (type == IEEE80211_FC0_TYPE_MGT ||
-	    type == IEEE80211_FC0_TYPE_CTL) {
+	    type == IEEE80211_FC0_TYPE_CTL ||
+	    (m->m_flags & M_EAPOL) != 0) {
 		params.rate_id = 8;	/* RTW_RATEID_B_20M */
 		params.data_rate = 0;	/* DESC_RATE1M */
 	} else {
@@ -643,6 +762,100 @@ rtw88_native_sysctl_channel(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+/*
+ * Read back the live MAC/USB RX configuration without disturbing the radio.
+ * This is a process-context diagnostic: hw_busy prevents the scanner's
+ * sleepable channel callback from interleaving its RF register writes.
+ */
+static int
+rtw88_native_sysctl_rx_diag(SYSCTL_HANDLER_ARGS)
+{
+	struct rtw88_native_softc *sc;
+	struct {
+		const char *name;
+		uint16_t reg;
+		uint32_t value;
+		usb_error_t error;
+	} regs[] = {
+		{ "CR", 0x0100, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "TXDMA_PQ_MAP", 0x010c, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXDMA_AGG_PG_TH", 0x0280, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXDMA_MODE", 0x0290, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RCR", 0x0608, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP0", 0x06a0, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXFLTMAP2", 0x06a4, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "SYS_FUNC_EN", 0x0002, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_CTRL", 0x001f, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "WLRF1", 0x00ec, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_SIPI_A", 0x0c90, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_SIPI_B", 0x0e90, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXPSEL", 0x0808, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXIGI_A", 0x0c50, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RXIGI_B", 0x0e50, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_A_CH18", 0x2860, 0, USB_ERR_NORMAL_COMPLETION },
+		{ "RF_B_CH18", 0x2c60, 0, USB_ERR_NORMAL_COMPLETION }
+	};
+	int value, error, i, channel;
+	uint64_t rx_count, rx_submits, rx_errors;
+	int rx_error_code, rx_started;
+
+	sc = arg1;
+	value = 0;
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value != 1)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->detaching || !sc->hw_started) {
+		mtx_unlock(&sc->mtx);
+		return (ENXIO);
+	}
+	if (sc->hw_busy) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	sc->hw_busy = 1;
+	mtx_unlock(&sc->mtx);
+
+	for (i = 0; i < nitems(regs); i++)
+		regs[i].error = rtw88_native_reg_read32(sc, regs[i].reg,
+		    &regs[i].value);
+
+	mtx_lock(&sc->mtx);
+	channel = sc->current_channel;
+	rx_started = sc->rx_started;
+	rx_count = sc->rx_count;
+	rx_submits = sc->rx_submit_count;
+	rx_errors = sc->rx_error_count;
+	rx_error_code = sc->rx_error_code;
+	sc->hw_busy = 0;
+	cv_broadcast(&sc->io_drain_cv);
+	mtx_unlock(&sc->mtx);
+
+	device_printf(sc->dev,
+	    "RX diag: channel=%d started=%d xfers=%u submits=%ju completions=%ju errors=%ju last_error=%d\n",
+	    channel, rx_started, RTW88_NATIVE_RX_XFERS,
+	    (uintmax_t)rx_submits, (uintmax_t)rx_count,
+	    (uintmax_t)rx_errors, rx_error_code);
+	error = 0;
+	for (i = 0; i < nitems(regs); i++) {
+		if (regs[i].error == USB_ERR_NORMAL_COMPLETION) {
+			device_printf(sc->dev, "RX diag: %-14s [0x%04x] = 0x%08x\n",
+			    regs[i].name, regs[i].reg, regs[i].value);
+		} else {
+			device_printf(sc->dev,
+			    "RX diag: %-14s [0x%04x] read failed: %s\n",
+			    regs[i].name, regs[i].reg,
+			    usbd_errstr(regs[i].error));
+			error = EIO;
+		}
+	}
+	return (error);
+}
+
+
 static int
 rtw88_native_attach(device_t dev)
 {
@@ -676,6 +889,8 @@ rtw88_native_attach(device_t dev)
 
 	device_printf(dev,
 	    "native FreeBSD USB transport attached (RTL8822BU, 0bda:b812)\n");
+	device_printf(dev, "native driver build ID: %s\n",
+	    RTW88_NATIVE_BUILD_ID);
 
 	/*
 	 * Allocate endpoint-backed resources through the native FreeBSD USB
@@ -695,7 +910,7 @@ rtw88_native_attach(device_t dev)
 		return (ENXIO);
 	}
 	device_printf(dev,
-	    "allocated native USB pipes: 1 bulk IN, 3 bulk OUT, 1 interrupt IN (idle)\n");
+	    "allocated native USB pipes: 4 bulk IN, 3 bulk OUT, 1 interrupt IN (idle)\n");
 
 	/*
 	 * REG_SYS_CFG1 (0x00f0) is the read-only system configuration register
@@ -722,6 +937,21 @@ rtw88_native_attach(device_t dev)
 	    "hw_start", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	    sc, 0, rtw88_native_sysctl_hw_start, "I",
 	    "Start (1) or stop (0) RTL8822BU hardware and interrupt capture") == NULL) {
+		rtw88_native_usb_unsetup(sc);
+		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
+			cv_destroy(&sc->tx_cv[i]);
+		sc->tx_cv_initialized = 0;
+		cv_destroy(&sc->io_drain_cv);
+		sc->io_cv_initialized = 0;
+		mtx_destroy(&sc->mtx);
+		sc->mtx_initialized = 0;
+		return (ENOMEM);
+	}
+	if (SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_diag", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+	    sc, 0, rtw88_native_sysctl_rx_diag, "I",
+	    "Read back live RTL8822B RX/MAC/RF configuration (write 1)") == NULL) {
 		rtw88_native_usb_unsetup(sc);
 		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 			cv_destroy(&sc->tx_cv[i]);
@@ -769,6 +999,42 @@ rtw88_native_attach(device_t dev)
 	    "Number of non-C2H RX frames identified");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_bad_rate_count", CTLFLAG_RD, &sc->rx_bad_rate_count, 0,
+	    "RX descriptors rejected for an out-of-range rate code");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_bad_drvinfo_count", CTLFLAG_RD, &sc->rx_bad_drvinfo_count, 0,
+	    "RX descriptors rejected for an invalid PHY-info length");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_phy_page0_count", CTLFLAG_RD, &sc->rx_phy_page0_count, 0,
+	    "RTL8822B CCK PHY-status page records decoded");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_phy_page1_count", CTLFLAG_RD, &sc->rx_phy_page1_count, 0,
+	    "RTL8822B OFDM/HT/VHT PHY-status page records decoded");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_phy_unknown_count", CTLFLAG_RD, &sc->rx_phy_unknown_count, 0,
+	    "RX PHY-status records with an unsupported page identifier");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_no_phy_count", CTLFLAG_RD, &sc->rx_no_phy_count, 0,
+	    "RX frames received without PHY-status metadata");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_ht_count", CTLFLAG_RD, &sc->rx_ht_count, 0,
+	    "RX frames using HT MCS rate descriptors");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_vht_count", CTLFLAG_RD, &sc->rx_vht_count, 0,
+	    "RX frames using VHT MCS/NSS rate descriptors");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_decrypted_count", CTLFLAG_RD, &sc->rx_decrypted_count, 0,
+	    "RX frames marked as hardware-decrypted for net80211");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "rx_c2h_count", CTLFLAG_RD, &sc->rx_c2h_count, 0,
 	    "Number of firmware C2H RX records identified");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
@@ -785,6 +1051,46 @@ rtw88_native_attach(device_t dev)
 	    "Number of RX frames discarded before net80211 input");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_auth_count", CTLFLAG_RD, &sc->rx_auth_count, 0,
+	    "Authentication management frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_auth_to_self_count", CTLFLAG_RD, &sc->rx_auth_to_self_count, 0,
+	    "Authentication frames addressed to this station MAC");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_assoc_resp_count", CTLFLAG_RD, &sc->rx_assoc_resp_count, 0,
+	    "Association/reassociation responses received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_deauth_count", CTLFLAG_RD, &sc->rx_deauth_count, 0,
+	    "Deauthentication management frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_disassoc_count", CTLFLAG_RD, &sc->rx_disassoc_count, 0,
+	    "Disassociation management frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_probe_resp_count", CTLFLAG_RD, &sc->rx_probe_resp_count, 0,
+	    "Probe responses received from access points");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_beacon_count", CTLFLAG_RD, &sc->rx_beacon_count, 0,
+	    "Beacon frames received from access points");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "rx_eapol_count", CTLFLAG_RD, &sc->rx_eapol_count, 0,
+	    "EAPOL LLC/SNAP data frames received from the air");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_raw_count", CTLFLAG_RD, &sc->tx_raw_count, 0,
+	    "Number of raw net80211 frames passed to the driver");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_raw_reject_count", CTLFLAG_RD, &sc->tx_raw_reject_count, 0,
+	    "Number of raw net80211 frames rejected before queueing");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_queued_count", CTLFLAG_RD, &sc->tx_queued_count, 0,
 	    "Number of 802.11 frames queued for USB transmission");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
@@ -795,6 +1101,54 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_error_count", CTLFLAG_RD, &sc->tx_error_count, 0,
 	    "Number of frames that failed before or during USB transmission");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_mgmt_count", CTLFLAG_RD, &sc->tx_mgmt_count, 0,
+	    "Management/control frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_data_count", CTLFLAG_RD, &sc->tx_data_count, 0,
+	    "Data frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_group_count", CTLFLAG_RD, &sc->tx_group_count, 0,
+	    "Group-addressed data frames routed to QSEL_HIGH");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_eapol_count", CTLFLAG_RD, &sc->tx_eapol_count, 0,
+	    "EAPOL frames passed to the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_probe_req_count", CTLFLAG_RD, &sc->tx_probe_req_count, 0,
+	    "Probe-request management frames submitted by the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_auth_req_count", CTLFLAG_RD, &sc->tx_auth_req_count, 0,
+	    "Authentication-request management frames submitted by the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_assoc_req_count", CTLFLAG_RD, &sc->tx_assoc_req_count, 0,
+	    "Association/reassociation request frames submitted by the TX worker");
+	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_deauth_req_count", CTLFLAG_RD, &sc->tx_deauth_req_count, 0,
+	    "Deauthentication request frames submitted by the TX worker");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_qsel", CTLFLAG_RD, &sc->tx_last_qsel, 0,
+	    "Queue-select value for the most recent TX frame");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_endpoint", CTLFLAG_RD, &sc->tx_last_endpoint, 0,
+	    "Bulk-OUT transfer index for the most recent TX frame");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_frame_control", CTLFLAG_RD, &sc->tx_last_frame_control, 0,
+	    "Frame-control field for the most recent TX frame");
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
+	    "tx_last_frame_len", CTLFLAG_RD, &sc->tx_last_frame_len, 0,
+	    "MPDU length for the most recent TX frame");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "tx_queue_depth", CTLFLAG_RD, &sc->tx_queue_depth, 0,

@@ -32,12 +32,17 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	static const uint8_t legacy_rates[] = {
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
+	static const uint8_t eapol_snap[8] = {
+		0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e
+	};
 	struct ieee80211_rx_stats rxs;
-	struct ieee80211_frame_min *wh;
+	struct ieee80211_frame *wh;
 	struct mbuf *m;
-	uint32_t w3, w5, phy0, enc_type;
-	uint8_t rate, raw_a, raw_b;
-	int rssi, channel;
+	uint32_t w3, w4, w5, phy0, phy1, phy3, enc_type;
+	uint8_t rate, page, raw_a, raw_b, rxsc, fc0, fc1;
+	size_t hdrlen;
+	int power_a, power_b, signal_dbm, channel;
+	int phy_valid;
 
 	mtx_assert(&sc->mtx, MA_OWNED);
 	if (!sc->net80211_attached || sc->current_channel < 1 ||
@@ -47,8 +52,28 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	}
 	if ((w0 & (RTW88_NATIVE_RX_DESC_W0_CRCERR |
 	    RTW88_NATIVE_RX_DESC_W0_ICVERR)) != 0 ||
-	    packet_length <= RTW88_NATIVE_RX_FCS_LEN ||
-	    packet_length > RTW88_NATIVE_RX_MAX_FRAME) {
+	    packet_length < RTW88_NATIVE_RX_FCS_LEN +
+	    sizeof(struct ieee80211_frame) ||
+	    packet_length > RTW88_NATIVE_RX_MAX_FRAME ||
+	    (driver_info != 0 &&
+	    driver_info != RTW88_NATIVE_RX_PHY_STATUS_SIZE)) {
+		sc->rx_input_drop_count++;
+		return;
+	}
+
+	memcpy(&w3, desc + 12, sizeof(w3));
+	memcpy(&w4, desc + 16, sizeof(w4));
+	memcpy(&w5, desc + 20, sizeof(w5));
+	rate = (uint8_t)(le32toh(w3) & 0x7f);
+	if (rate >= RTW88_NATIVE_RX_RATE_MAX) {
+		sc->rx_bad_rate_count++;
+		sc->rx_input_drop_count++;
+		return;
+	}
+
+	if ((w0 & RTW88_NATIVE_RX_DESC_W0_PHYST) != 0 &&
+	    driver_info != RTW88_NATIVE_RX_PHY_STATUS_SIZE) {
+		sc->rx_bad_drvinfo_count++;
 		sc->rx_input_drop_count++;
 		return;
 	}
@@ -63,55 +88,189 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	m->m_pkthdr.len = (int)packet_length;
 	memcpy(mtod(m, void *), frame, packet_length);
 
-	/*
-	 * The RCR requests appended FCS/MIC/ICV information. Tell net80211 when
-	 * the RTL8822B has already decrypted a protected MPDU; SWDEC means the
-	 * frame still needs the registered software cipher path.
-	 */
-	wh = mtod(m, struct ieee80211_frame_min *);
-	enc_type = (w0 & RTW88_NATIVE_RX_DESC_W0_ENC_TYPE) >> 20;
-	if ((wh->i_fc[1] & IEEE80211_FC1_PROTECTED) != 0 &&
-	    enc_type != 0 &&
-	    (w0 & RTW88_NATIVE_RX_DESC_W0_SWDEC) == 0)
-		m->m_flags |= M_WEP;
+	wh = mtod(m, struct ieee80211_frame *);
+	fc0 = wh->i_fc[0];
+	fc1 = wh->i_fc[1];
+
+	/* Classify received management responses before net80211 consumes them. */
+	if ((fc0 & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT) {
+		switch (fc0 & IEEE80211_FC0_SUBTYPE_MASK) {
+		case IEEE80211_FC0_SUBTYPE_AUTH:
+			sc->rx_auth_count++;
+			if (IEEE80211_ADDR_EQ(wh->i_addr1, sc->ic.ic_macaddr))
+				sc->rx_auth_to_self_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_ASSOC_RESP:
+		case IEEE80211_FC0_SUBTYPE_REASSOC_RESP:
+			sc->rx_assoc_resp_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_DEAUTH:
+			sc->rx_deauth_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_DISASSOC:
+			sc->rx_disassoc_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_PROBE_RESP:
+			sc->rx_probe_resp_count++;
+			break;
+		case IEEE80211_FC0_SUBTYPE_BEACON:
+			sc->rx_beacon_count++;
+			break;
+		default:
+			break;
+		}
+	} else if ((fc0 & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA) {
+		hdrlen = sizeof(struct ieee80211_frame);
+		if ((fc1 & IEEE80211_FC1_DIR_MASK) == IEEE80211_FC1_DIR_DSTODS)
+			hdrlen += IEEE80211_ADDR_LEN;
+		if ((fc0 & IEEE80211_FC0_SUBTYPE_QOS_MASK_ANY) != 0) {
+			hdrlen += 2;
+			if ((fc1 & IEEE80211_FC1_ORDER) != 0)
+				hdrlen += 4;
+		}
+		if (packet_length >= hdrlen + sizeof(eapol_snap) &&
+		    memcmp((const uint8_t *)wh + hdrlen, eapol_snap,
+		    sizeof(eapol_snap)) == 0)
+			sc->rx_eapol_count++;
+	}
 
 	bzero(&rxs, sizeof(rxs));
-	memcpy(&w3, desc + 12, sizeof(w3));
-	memcpy(&w5, desc + 20, sizeof(w5));
-	rate = (uint8_t)(le32toh(w3) & 0x7f);
-	if (rate < nitems(legacy_rates)) {
+	switch (rate) {
+	case 0x00 ... 0x03:
 		rxs.c_rate = legacy_rates[rate];
-		if (rate <= 3)
-			rxs.c_pktflags |= IEEE80211_RX_F_CCK;
-		else
-			rxs.c_pktflags |= IEEE80211_RX_F_OFDM;
+		rxs.c_pktflags |= IEEE80211_RX_F_CCK;
+		rxs.c_phytype = IEEE80211_RX_FP_11B;
+		break;
+	case 0x04 ... 0x0b:
+		rxs.c_rate = legacy_rates[rate];
+		rxs.c_pktflags |= IEEE80211_RX_F_OFDM;
+		rxs.c_phytype = IEEE80211_RX_FP_11G;
+		break;
+	case 0x0c ... 0x2b:
+		rxs.c_rate = IEEE80211_RATE_MCS | (rate - 0x0c);
+		rxs.c_pktflags |= IEEE80211_RX_F_HT;
+		rxs.c_phytype = IEEE80211_RX_FP_11NG;
+		sc->rx_ht_count++;
+		break;
+	case 0x2c ... 0x53:
+		rxs.c_vhtnss = (uint8_t)((rate - 0x2c) / 10) + 1;
+		rxs.c_rate = (uint8_t)((rate - 0x2c) % 10);
+		rxs.c_pktflags |= IEEE80211_RX_F_VHT;
+		rxs.c_phytype = IEEE80211_RX_FP_11NG;
+		sc->rx_vht_count++;
+		break;
+	default:
+		/* The descriptor rate was range-checked above. */
+		sc->rx_bad_rate_count++;
+		m_freem(m);
+		sc->rx_input_drop_count++;
+		return;
+	}
+
+	/*
+	 * W4 carries the hardware bandwidth code: 0=20, 1=40, 2=80 MHz.
+	 * The 8822B PHY-status page can refine this from its receive subchannel.
+	 */
+	switch ((le32toh(w4) >> 4) & 0x3) {
+	case 1:
+		rxs.c_width = IEEE80211_RX_FW_40MHZ;
+		break;
+	case 2:
+		rxs.c_width = IEEE80211_RX_FW_80MHZ;
+		break;
+	default:
+		rxs.c_width = IEEE80211_RX_FW_20MHZ;
+		break;
 	}
 
 	channel = sc->current_channel;
 	rxs.r_flags = IEEE80211_R_IEEE | IEEE80211_R_FREQ |
-	    IEEE80211_R_BAND | IEEE80211_R_NF | IEEE80211_R_RSSI |
-	    IEEE80211_R_TSF32;
+	    IEEE80211_R_BAND | IEEE80211_R_TSF32;
 	rxs.c_ieee = channel;
 	rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_2GHZ);
 	rxs.c_band = IEEE80211_CHAN_2GHZ;
 	rxs.c_rx_tsf = le32toh(w5);
-	rxs.c_nf = -95;
-	rssi = -95;
+
+	/*
+	 * RTW88 marks a frame decrypted when ENC_TYPE is non-zero and SWDEC
+	 * is clear. net80211 consumes this flag to bypass software decryption;
+	 * M_WEP alone is not an equivalent RX-status indication.
+	 */
+	enc_type = (w0 & RTW88_NATIVE_RX_DESC_W0_ENC_TYPE) >> 20;
+	if (enc_type != 0 && (w0 & RTW88_NATIVE_RX_DESC_W0_SWDEC) == 0) {
+		rxs.c_pktflags |= IEEE80211_RX_F_DECRYPTED;
+		sc->rx_decrypted_count++;
+	}
+
+	phy_valid = 0;
+	signal_dbm = -120;
 	if ((w0 & RTW88_NATIVE_RX_DESC_W0_PHYST) != 0 &&
-	    driver_info >= sizeof(phy0)) {
+	    driver_info == RTW88_NATIVE_RX_PHY_STATUS_SIZE) {
 		memcpy(&phy0, desc + RTW88_NATIVE_RX_DESC_SIZE + shift,
 		    sizeof(phy0));
 		phy0 = le32toh(phy0);
+		page = (uint8_t)(phy0 & 0x0f);
 		raw_a = (uint8_t)((phy0 >> 8) & 0xff);
 		raw_b = (uint8_t)((phy0 >> 16) & 0xff);
-		if ((rxs.c_pktflags & IEEE80211_RX_F_CCK) != 0)
-			rssi = (int)raw_a - 110;
-		else
-			rssi = MAX((int)raw_a, (int)raw_b) - 110;
-		if (rssi < -105 || rssi > -10)
-			rssi = -95;
+		power_a = (int)raw_a - 110;
+		power_b = (int)raw_b - 110;
+
+		if (page == 0) {
+			/* CCK PHY status contains only the RF-A receive power. */
+			signal_dbm = power_a;
+			rxs.c_width = IEEE80211_RX_FW_20MHZ;
+			sc->rx_phy_page0_count++;
+			phy_valid = 1;
+		} else if (page == 1) {
+			memcpy(&phy1, desc + RTW88_NATIVE_RX_DESC_SIZE + shift + 4,
+			    sizeof(phy1));
+			memcpy(&phy3, desc + RTW88_NATIVE_RX_DESC_SIZE + shift + 12,
+			    sizeof(phy3));
+			phy1 = le32toh(phy1);
+			phy3 = le32toh(phy3);
+			/* A one-path board must not use RF-B's unused PWDB byte. */
+			signal_dbm = sc->rf_path_num > 1 ?
+			    MAX(power_a, power_b) : power_a;
+
+			if (rate > 0x03 && rate < 0x0c)
+				rxsc = (uint8_t)((phy1 >> 8) & 0x0f);
+			else
+				rxsc = (uint8_t)((phy1 >> 12) & 0x0f);
+			if (rxsc >= 1 && rxsc <= 8)
+				rxs.c_width = IEEE80211_RX_FW_20MHZ;
+			else if (rxsc >= 9 && rxsc <= 12)
+				rxs.c_width = IEEE80211_RX_FW_40MHZ;
+			else if (rxsc >= 13)
+				rxs.c_width = IEEE80211_RX_FW_80MHZ;
+			else {
+				switch ((phy3 >> 28) & 0x3) {
+				case 1:
+					rxs.c_width = IEEE80211_RX_FW_40MHZ;
+					break;
+				case 2:
+					rxs.c_width = IEEE80211_RX_FW_80MHZ;
+					break;
+				default:
+					rxs.c_width = IEEE80211_RX_FW_20MHZ;
+					break;
+				}
+			}
+			sc->rx_phy_page1_count++;
+			phy_valid = 1;
+		} else {
+			sc->rx_phy_unknown_count++;
+		}
+	} else {
+		sc->rx_no_phy_count++;
 	}
-	rxs.c_rssi = rssi - rxs.c_nf;
+
+	/* Do not claim a signal measurement when PHY status is absent or invalid. */
+	if (phy_valid && signal_dbm >= -120 && signal_dbm <= 0) {
+		rxs.c_nf = -95;
+		rxs.c_rssi = signal_dbm - rxs.c_nf;
+		rxs.r_flags |= IEEE80211_R_NF | IEEE80211_R_RSSI;
+	}
+
 	if (ieee80211_add_rx_params(m, &rxs) == 0) {
 		m_freem(m);
 		sc->rx_input_drop_count++;
@@ -129,13 +288,14 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 /*
  * Safely walk an RTW88 USB RX aggregation, retain bounded C2H metadata, and
  * enqueue valid 802.11 frames for deferred net80211 input. C2H dispatch and
- * full per-rate/chain PHY-statistics decoding remain follow-on work.
+ * per-chain RSSI/SNR/EVM decoding remain follow-on work.
  */
 static void
 rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
     const uint8_t *buf, size_t length)
 {
-	uint32_t w0, w2;
+	uint32_t w0, w2, w3;
+	uint8_t rate;
 	size_t offset, remaining, driver_info, shift, packet_offset;
 	size_t packet_length, record_length, aligned_length, c2h_length;
 	const uint8_t *c2h;
@@ -153,8 +313,10 @@ rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
 		/* Avoid unaligned loads from the USB DMA buffer. */
 		memcpy(&w0, buf + offset, sizeof(w0));
 		memcpy(&w2, buf + offset + 8, sizeof(w2));
+		memcpy(&w3, buf + offset + 12, sizeof(w3));
 		w0 = le32toh(w0);
 		w2 = le32toh(w2);
+		w3 = le32toh(w3);
 		if (w0 == 0 && w2 == 0)
 			break;
 
@@ -164,6 +326,26 @@ rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
 		packet_offset = RTW88_NATIVE_RX_DESC_SIZE + driver_info + shift;
 		if (packet_length == 0 || packet_offset > remaining ||
 		    packet_length > remaining - packet_offset) {
+			sc->rx_malformed_count++;
+			break;
+		}
+
+		rate = (uint8_t)(w3 & 0x7f);
+		if (rate >= RTW88_NATIVE_RX_RATE_MAX) {
+			sc->rx_bad_rate_count++;
+			sc->rx_malformed_count++;
+			break;
+		}
+		if ((driver_info != 0 &&
+		    driver_info != RTW88_NATIVE_RX_PHY_STATUS_SIZE) ||
+		    ((w0 & RTW88_NATIVE_RX_DESC_W0_PHYST) != 0 &&
+		    driver_info != RTW88_NATIVE_RX_PHY_STATUS_SIZE)) {
+			sc->rx_bad_drvinfo_count++;
+			sc->rx_malformed_count++;
+			break;
+		}
+		if ((w2 & RTW88_NATIVE_RX_DESC_W2_C2H) == 0 &&
+		    packet_length <= RTW88_NATIVE_RX_FCS_LEN) {
 			sc->rx_malformed_count++;
 			break;
 		}
@@ -216,21 +398,26 @@ rtw88_native_rx_parse_batch(struct rtw88_native_softc *sc,
 }
 
 static void
-rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
+rtw88_native_rx_callback_common(struct usb_xfer *xfer, usb_error_t error,
+    uint8_t rx_index)
 {
 	struct rtw88_native_softc *sc;
+	uint8_t *rx_buf;
 	uint32_t actlen;
 
 	sc = usbd_xfer_softc(xfer);
 	mtx_assert(&sc->mtx, MA_OWNED);
+	KASSERT(rx_index < RTW88_NATIVE_RX_XFERS,
+	    ("invalid RTL8822BU RX transfer index %u", rx_index));
+	rx_buf = sc->rx_buf[rx_index];
 
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
 		usbd_xfer_status(xfer, &actlen, NULL, NULL, NULL);
 		actlen = MIN(actlen, sizeof(sc->rx_last));
 		if (actlen != 0) {
-			memcpy(sc->rx_last, sc->rx_buf, actlen);
-			rtw88_native_rx_parse_batch(sc, sc->rx_buf, actlen);
+			memcpy(sc->rx_last, rx_buf, actlen);
+			rtw88_native_rx_parse_batch(sc, rx_buf, actlen);
 		}
 		sc->rx_last_len = actlen;
 		sc->rx_count++;
@@ -240,8 +427,8 @@ rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	case USB_ST_SETUP:
 		if (!sc->rx_started || sc->dying)
 			break;
-		usbd_xfer_set_frame_data(xfer, 0, sc->rx_buf,
-		    sizeof(sc->rx_buf));
+		usbd_xfer_set_frame_data(xfer, 0, rx_buf,
+		    RTW88_NATIVE_RX_BUFSIZE);
 		sc->rx_submit_count++;
 		usbd_transfer_submit(xfer);
 		break;
@@ -262,11 +449,35 @@ rtw88_native_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 	return;
 tr_setup:
 	if (sc->rx_started && !sc->dying) {
-		usbd_xfer_set_frame_data(xfer, 0, sc->rx_buf,
-		    sizeof(sc->rx_buf));
+		usbd_xfer_set_frame_data(xfer, 0, rx_buf,
+		    RTW88_NATIVE_RX_BUFSIZE);
 		sc->rx_submit_count++;
 		usbd_transfer_submit(xfer);
 	}
+}
+
+static void
+rtw88_native_rx0_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_rx_callback_common(xfer, error, 0);
+}
+
+static void
+rtw88_native_rx1_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_rx_callback_common(xfer, error, 1);
+}
+
+static void
+rtw88_native_rx2_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_rx_callback_common(xfer, error, 2);
+}
+
+static void
+rtw88_native_rx3_callback(struct usb_xfer *xfer, usb_error_t error)
+{
+	rtw88_native_rx_callback_common(xfer, error, 3);
 }
 
 static void
@@ -367,18 +578,60 @@ rtw88_native_tx2_callback(struct usb_xfer *xfer, usb_error_t error)
 }
 
 static const struct usb_config rtw88_native_xfer_config[RTW88_NATIVE_N_XFERS] = {
-	[RTW88_NATIVE_BULK_RX] = {
+	[RTW88_NATIVE_BULK_RX0] = {
 		.type = UE_BULK,
 		.endpoint = RTW88_NATIVE_USB_EP_BULK_IN,
 		.ep_index = 0,
 		.direction = UE_DIR_IN,
-		.bufsize = 32 * 1024,
+		.bufsize = RTW88_NATIVE_RX_BUFSIZE,
 		.flags = {
 			.pipe_bof = 1,
 			.short_xfer_ok = 1,
 			.ext_buffer = 1
 		},
-		.callback = rtw88_native_rx_callback,
+		.callback = rtw88_native_rx0_callback,
+		.timeout = 0
+	},
+	[RTW88_NATIVE_BULK_RX1] = {
+		.type = UE_BULK,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_IN,
+		.ep_index = 0,
+		.direction = UE_DIR_IN,
+		.bufsize = RTW88_NATIVE_RX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.short_xfer_ok = 1,
+			.ext_buffer = 1
+		},
+		.callback = rtw88_native_rx1_callback,
+		.timeout = 0
+	},
+	[RTW88_NATIVE_BULK_RX2] = {
+		.type = UE_BULK,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_IN,
+		.ep_index = 0,
+		.direction = UE_DIR_IN,
+		.bufsize = RTW88_NATIVE_RX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.short_xfer_ok = 1,
+			.ext_buffer = 1
+		},
+		.callback = rtw88_native_rx2_callback,
+		.timeout = 0
+	},
+	[RTW88_NATIVE_BULK_RX3] = {
+		.type = UE_BULK,
+		.endpoint = RTW88_NATIVE_USB_EP_BULK_IN,
+		.ep_index = 0,
+		.direction = UE_DIR_IN,
+		.bufsize = RTW88_NATIVE_RX_BUFSIZE,
+		.flags = {
+			.pipe_bof = 1,
+			.short_xfer_ok = 1,
+			.ext_buffer = 1
+		},
+		.callback = rtw88_native_rx3_callback,
 		.timeout = 0
 	},
 	[RTW88_NATIVE_BULK_TX0] = {
@@ -647,15 +900,16 @@ rtw88_native_usb_intr_stop(struct rtw88_native_softc *sc)
 
 
 /*
- * Start continuous bulk-IN collection. The 32 KiB buffer stores USB
- * aggregation batches; this stage preserves the last completed raw batch
- * for inspection but does not yet parse RTW88 RX descriptors or pass frames
- * to net80211.
+ * Start the four concurrent 32 KiB bulk-IN requests used by Linux RTW88.
+ * Each request has an independent DMA buffer and is immediately resubmitted
+ * after completion so USB RX aggregation can progress without gaps. Raw
+ * batches are parsed and queued to the net80211 input task.
  */
 int
 rtw88_native_usb_rx_start(struct rtw88_native_softc *sc)
 {
 	struct usb_xfer *xfer;
+	unsigned int i;
 
 	if (sc == NULL || !sc->mtx_initialized || !sc->xfers_initialized)
 		return (EINVAL);
@@ -668,18 +922,24 @@ rtw88_native_usb_rx_start(struct rtw88_native_softc *sc)
 		mtx_unlock(&sc->mtx);
 		return (EALREADY);
 	}
-	xfer = sc->xfer[RTW88_NATIVE_BULK_RX];
-	if (xfer == NULL) {
-		mtx_unlock(&sc->mtx);
-		return (ENXIO);
+	for (i = 0; i < RTW88_NATIVE_RX_XFERS; i++) {
+		xfer = sc->xfer[RTW88_NATIVE_BULK_RX0 + i];
+		if (xfer == NULL) {
+			mtx_unlock(&sc->mtx);
+			return (ENXIO);
+		}
 	}
 	bzero(sc->rx_buf, sizeof(sc->rx_buf));
 	bzero(sc->rx_last, sizeof(sc->rx_last));
 	sc->rx_last_len = 0;
+	sc->rx_count = 0;
+	sc->rx_submit_count = 0;
+	sc->rx_error_count = 0;
 	sc->rx_error = USB_ERR_NORMAL_COMPLETION;
 	sc->rx_error_code = USB_ERR_NORMAL_COMPLETION;
 	sc->rx_started = 1;
-	usbd_transfer_start(xfer);
+	for (i = 0; i < RTW88_NATIVE_RX_XFERS; i++)
+		usbd_transfer_start(sc->xfer[RTW88_NATIVE_BULK_RX0 + i]);
 	mtx_unlock(&sc->mtx);
 	return (0);
 }
@@ -691,15 +951,20 @@ rtw88_native_usb_rx_start(struct rtw88_native_softc *sc)
 void
 rtw88_native_usb_rx_stop(struct rtw88_native_softc *sc)
 {
-	struct usb_xfer *xfer;
+	struct usb_xfer *xfer[RTW88_NATIVE_RX_XFERS];
+	unsigned int i;
 
 	if (sc == NULL || !sc->mtx_initialized)
 		return;
 	mtx_lock(&sc->mtx);
 	sc->rx_started = 0;
-	xfer = sc->xfers_initialized ? sc->xfer[RTW88_NATIVE_BULK_RX] : NULL;
+	for (i = 0; i < RTW88_NATIVE_RX_XFERS; i++)
+		xfer[i] = sc->xfers_initialized ?
+		    sc->xfer[RTW88_NATIVE_BULK_RX0 + i] : NULL;
 	mtx_unlock(&sc->mtx);
 
-	if (xfer != NULL)
-		usbd_transfer_drain(xfer);
+	for (i = 0; i < RTW88_NATIVE_RX_XFERS; i++) {
+		if (xfer[i] != NULL)
+			usbd_transfer_drain(xfer[i]);
+	}
 }

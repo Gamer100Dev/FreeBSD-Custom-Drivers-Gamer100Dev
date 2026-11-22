@@ -14,7 +14,28 @@
 #include <sys/firmware.h>
 #include <sys/mutex.h>
 #include <sys/mbuf.h>
+#include <sys/socket.h>
 #include <sys/taskqueue.h>
+
+/*
+ * ieee80211_var.h expects the base interface, ifmedia, routing and Ethernet
+ * declarations to have been included by its consumer. Keep these prerequisites
+ * here because the driver softc embeds struct ieee80211com and this header is
+ * shared by all of the driver translation units.
+ */
+#include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_arp.h>
+#include <net/ethernet.h>
+#include <net/if_dl.h>
+#include <net/if_media.h>
+#include <net/if_types.h>
+
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/in_var.h>
+#include <netinet/if_ether.h>
+#include <netinet/ip.h>
 
 #include <net80211/ieee80211_var.h>
 
@@ -50,7 +71,10 @@
 #define RTW88_NATIVE_TX_DESC_CHECKSUM_LEN	32
 #define RTW88_NATIVE_TXQ_HIGH			0
 #define RTW88_NATIVE_TX_QUEUES			3
+#define RTW88_NATIVE_TXQSEL_TID0		0U
 #define RTW88_NATIVE_TXQSEL_BEACON		16U
+#define RTW88_NATIVE_TXQSEL_HIGH		17U
+#define RTW88_NATIVE_TXQSEL_MGMT		18U
 #define RTW88_NATIVE_TXDMA_CHUNK		0x1000U
 #define RTW88_NATIVE_RX_DESC_SIZE		24U
 #define RTW88_NATIVE_RX_C2H_HEADER_SIZE	2U
@@ -66,6 +90,8 @@
 #define RTW88_NATIVE_RX_DESC_W2_C2H		(1U << 28)
 #define RTW88_NATIVE_RX_FCS_LEN		4U
 #define RTW88_NATIVE_RX_MAX_FRAME		11454U
+#define RTW88_NATIVE_RX_PHY_STATUS_SIZE	32U
+#define RTW88_NATIVE_RX_RATE_MAX		0x54U
 
 
 #define RTW88_NATIVE_REG_CR			0x0100
@@ -123,14 +149,23 @@
 #define RTW88_NATIVE_OCPBASE_TXBUF		0x18780000U
 #define RTW88_NATIVE_OCPBASE_DMEM		0x00200000U
 
+#define RTW88_NATIVE_RX_XFERS		4U
+#define RTW88_NATIVE_RX_BUFSIZE		(32U * 1024U)
+
 enum {
-	RTW88_NATIVE_BULK_RX,
+	RTW88_NATIVE_BULK_RX0,
+	RTW88_NATIVE_BULK_RX1,
+	RTW88_NATIVE_BULK_RX2,
+	RTW88_NATIVE_BULK_RX3,
 	RTW88_NATIVE_BULK_TX0,
 	RTW88_NATIVE_BULK_TX1,
 	RTW88_NATIVE_BULK_TX2,
 	RTW88_NATIVE_INTERRUPT_RX,
 	RTW88_NATIVE_N_XFERS
 };
+
+/* Compatibility name for code that needs the first RX transfer. */
+#define RTW88_NATIVE_BULK_RX		RTW88_NATIVE_BULK_RX0
 
 struct rtw88_native_txdesc_params {
 	uint16_t	packet_size;
@@ -208,12 +243,43 @@ struct rtw88_native_softc {
 	int			net80211_attached;
 	int			tx_enabled;
 	int			tx_queue_depth;
+	uint64_t		tx_raw_count;
+	uint64_t		tx_raw_reject_count;
 	uint64_t		tx_queued_count;
 	uint64_t		tx_complete_count;
 	uint64_t		tx_error_count;
+	uint64_t		tx_mgmt_count;
+	uint64_t		tx_data_count;
+	uint64_t		tx_group_count;
+	uint64_t		tx_eapol_count;
+	uint64_t		tx_probe_req_count;
+	uint64_t		tx_auth_req_count;
+	uint64_t		tx_assoc_req_count;
+	uint64_t		tx_deauth_req_count;
 	int			tx_last_error;
+	int			tx_last_qsel;
+	int			tx_last_endpoint;
+	int			tx_last_frame_control;
+	int			tx_last_frame_len;
 	uint64_t		rx_input_count;
 	uint64_t		rx_input_drop_count;
+	uint64_t		rx_auth_count;
+	uint64_t		rx_auth_to_self_count;
+	uint64_t		rx_assoc_resp_count;
+	uint64_t		rx_deauth_count;
+	uint64_t		rx_disassoc_count;
+	uint64_t		rx_probe_resp_count;
+	uint64_t		rx_beacon_count;
+	uint64_t		rx_eapol_count;
+	uint64_t		rx_bad_rate_count;
+	uint64_t		rx_bad_drvinfo_count;
+	uint64_t		rx_phy_page0_count;
+	uint64_t		rx_phy_page1_count;
+	uint64_t		rx_phy_unknown_count;
+	uint64_t		rx_no_phy_count;
+	uint64_t		rx_ht_count;
+	uint64_t		rx_vht_count;
+	uint64_t		rx_decrypted_count;
 	struct usb_device	*udev;
 	struct usb_xfer		*xfer[RTW88_NATIVE_N_XFERS];
 	struct mtx		mtx;
@@ -241,6 +307,12 @@ struct rtw88_native_softc {
 	uint8_t			rf_path_num;
 	uint8_t			antenna_tx;
 	uint8_t			antenna_rx;
+	int				hw_feature_valid;
+	uint8_t			hw_feature_hci;
+	uint8_t			hw_feature_bw;
+	uint8_t			hw_feature_nss;
+	uint8_t			hw_feature_ant_num;
+	uint8_t			hw_feature_protocol;
 	uint8_t			bulkout_num;
 	uint8_t			qsel_to_ep[20];
 	uint16_t		txff_pg_num;
@@ -264,7 +336,7 @@ struct rtw88_native_softc {
 	uint64_t		intr_count;
 	usb_error_t		intr_error;
 	int			rx_started;
-	uint8_t			rx_buf[32 * 1024];
+	uint8_t			rx_buf[RTW88_NATIVE_RX_XFERS][RTW88_NATIVE_RX_BUFSIZE];
 	uint8_t			rx_last[32 * 1024];
 	uint32_t		rx_last_len;
 	uint64_t		rx_count;
