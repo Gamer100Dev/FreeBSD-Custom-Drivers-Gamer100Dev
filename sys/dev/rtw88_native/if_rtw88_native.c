@@ -126,11 +126,11 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 
 	if (error == 0 && linked)
 		device_printf(sc->dev,
-		    "STA link programmed: BSSID %02x:%02x:%02x:%02x:%02x:%02x AID %u (managed-linked)\\n",
+		    "STA link programmed: BSSID %02x:%02x:%02x:%02x:%02x:%02x AID %u (managed-linked)\n",
 		    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], aid);
 	else if (error != 0 && linked)
 		device_printf(sc->dev,
-		    "STA link register programming failed for AID %u: %d\\n",
+		    "STA link register programming failed for AID %u: %d\n",
 		    aid, error);
 	return (error);
 }
@@ -176,7 +176,7 @@ rtw88_native_vap_newstate(struct ieee80211vap *vap,
 			return (error);
 		if (error != 0)
 			device_printf(sc->dev,
-			    "could not clear STA link during state %d: %d\\n",
+			    "could not clear STA link during state %d: %d\n",
 			    nstate, error);
 	}
 	if (nvp->newstate == NULL)
