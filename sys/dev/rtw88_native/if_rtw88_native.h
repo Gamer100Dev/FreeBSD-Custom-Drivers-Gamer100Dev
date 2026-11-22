@@ -270,6 +270,12 @@ struct rtw88_native_softc {
 	int			tx_last_frame_len;
 	uint64_t		rx_input_count;
 	uint64_t		rx_input_drop_count;
+	uint64_t		rx_prestart_drop_count;
+	uint64_t		rx_net80211_negative_result_count;
+	uint64_t		rx_net80211_nonnegative_result_count;
+	uint64_t		rx_vap_ipackets_count;
+	uint64_t		rx_vap_ipackets_last_delta;
+	int			rx_net80211_last_result;
 	uint64_t		rx_auth_count;
 	uint64_t		rx_auth_to_self_count;
 	uint64_t		rx_assoc_resp_count;
