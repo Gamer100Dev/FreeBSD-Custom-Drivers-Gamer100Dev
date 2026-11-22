@@ -24,7 +24,6 @@ install -m 0555 "$REPO_ROOT/etc/rc.d/rtw88_native" /usr/local/etc/rc.d/rtw88_nat
 install -m 0444 "$REPO_ROOT/etc/devd/rtw88_native.conf" /usr/local/etc/devd/rtw88_native.conf
 
 sysrc rtw88_native_enable="YES"
-sysrc wlans_rtw88_native0="wlan0"
 if [ -z "$(sysrc -n ifconfig_wlan0 2>/dev/null || true)" ]; then
 	sysrc ifconfig_wlan0="WPA DHCP"
 fi
