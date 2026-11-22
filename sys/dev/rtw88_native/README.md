@@ -47,9 +47,18 @@ and builds the module. Its output is under
 `$SRCROOT/sys/modules/rtw88_native/if_rtw88_native.ko`. It prints the
 checkout revision/build ID so the loaded module can be matched to the source.
 
-Ensure the firmware is installed in the FreeBSD firmware search path as
-`rtw88/rtw8822b_fw.bin`. The firmware loader's fallback file path should
-resolve the file before starting the hardware.
+FreeBSD 15's `firmware_get()` binary-file fallback is under
+`/boot/firmware/`. Obtain `rtw8822b_fw.bin` from the upstream
+[linux-firmware RTW88 directory](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/rtw88)
+and install it at the exact requested path:
+
+```sh
+sudo install -d /boot/firmware/rtw88
+sudo install -m 0644 /path/to/rtw8822b_fw.bin /boot/firmware/rtw88/rtw8822b_fw.bin
+```
+
+This is the binary fallback documented by
+[FIRMWARE(9)](https://man.freebsd.org/cgi/man.cgi?query=firmware&sektion=9&manpath=FreeBSD+15.1-RELEASE).
 
 ## Load and start
 
