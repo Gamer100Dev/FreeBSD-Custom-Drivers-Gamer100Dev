@@ -1282,19 +1282,19 @@ rtw88_native_attach(device_t dev)
 	    "Reason code in the most recent received disassociation frame");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
-	    "fw_h2c_media_status_count", CTLFLAG_RD,
-	    &sc->fw_h2c_media_status_count, 0,
-	    "Successful station media-status H2C mailbox commands");
+	    "fw_h2c_mailbox_count", CTLFLAG_RD,
+	    &sc->fw_h2c_mailbox_count, 0,
+	    "Successful H2C register-mailbox commands");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
-	    "fw_h2c_media_status_error_count", CTLFLAG_RD,
-	    &sc->fw_h2c_media_status_error_count, 0,
-	    "Failed station media-status H2C mailbox commands");
+	    "fw_h2c_mailbox_error_count", CTLFLAG_RD,
+	    &sc->fw_h2c_mailbox_error_count, 0,
+	    "Failed H2C register-mailbox commands");
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
-	    "fw_h2c_media_status_error", CTLFLAG_RD,
-	    &sc->fw_h2c_media_status_error, 0,
-	    "Last station media-status H2C error (0 means success)");
+	    "fw_h2c_mailbox_error", CTLFLAG_RD,
+	    &sc->fw_h2c_mailbox_error, 0,
+	    "Last H2C register-mailbox error (0 means success)");
 	SYSCTL_ADD_U64(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "fw_h2c_general_count", CTLFLAG_RD, &sc->fw_h2c_general_count, 0,
