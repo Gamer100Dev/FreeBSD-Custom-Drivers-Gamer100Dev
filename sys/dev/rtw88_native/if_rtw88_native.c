@@ -80,7 +80,7 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 	    aid == 0 || aid > 0x07ff))
 		return (EINVAL);
 	mtx_lock(&sc->mtx);
-	if (!linked && (sc->hw_busy || sc->dying || sc->detaching ||
+	if (!linked && (sc->hw_stopping || sc->dying || sc->detaching ||
 	    !sc->hw_started)) {
 		/* Do not block VAP shutdown on a concurrent stop/channel operation. */
 		sc->station_linked = 0;
@@ -89,10 +89,11 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 		mtx_unlock(&sc->mtx);
 		return (0);
 	}
-	while (sc->hw_busy && !sc->dying && !sc->detaching)
+	while (sc->hw_busy && !sc->dying && !sc->detaching &&
+	    !sc->hw_stopping)
 		cv_wait(&sc->io_drain_cv, &sc->mtx);
-	if (sc->dying || sc->detaching || !sc->hw_started ||
-	    !sc->mac_initialized) {
+	if (sc->dying || sc->detaching || sc->hw_stopping ||
+	    !sc->hw_started || !sc->mac_initialized) {
 		error = linked ? ENETDOWN : 0;
 		if (!linked) {
 			sc->station_linked = 0;
@@ -168,9 +169,9 @@ rtw88_native_vap_newstate(struct ieee80211vap *vap,
 		/* USB register accesses sleep; release/reacquire the net80211 lock. */
 		IEEE80211_UNLOCK(ic);
 		error = rtw88_native_station_link_update(sc, bssid, aid, linked);
-		IEEE80211_LOCK(ic);
 		if (ni != NULL)
 			ieee80211_free_node(ni);
+		IEEE80211_LOCK(ic);
 		if (error != 0 && linked)
 			return (error);
 		if (error != 0)
@@ -821,6 +822,7 @@ rtw88_native_sysctl_hw_start(SYSCTL_HANDLER_ARGS)
 		return (0);
 	}
 	sc->hw_busy = 1;
+	sc->hw_stopping = (value == 0);
 	mtx_unlock(&sc->mtx);
 
 	/*
@@ -839,6 +841,7 @@ rtw88_native_sysctl_hw_start(SYSCTL_HANDLER_ARGS)
 	if (error == 0)
 		sc->hw_started = value;
 	sc->hw_busy = 0;
+	sc->hw_stopping = 0;
 	cv_broadcast(&sc->io_drain_cv);
 	mtx_unlock(&sc->mtx);
 
@@ -1102,7 +1105,7 @@ rtw88_native_attach(device_t dev)
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO,
 	    "channel", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
 	    sc, 0, rtw88_native_sysctl_channel, "I",
-	    "Tune RFE option 3 to a 2.4-GHz channel (1-13), 20 MHz") == NULL) {
+	    "Tune RFE option 3 to a supported 2.4/5-GHz channel center at 20 MHz") == NULL) {
 		rtw88_native_usb_unsetup(sc);
 		for (i = 0; i < RTW88_NATIVE_TX_QUEUES; i++)
 			cv_destroy(&sc->tx_cv[i]);

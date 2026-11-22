@@ -40,7 +40,7 @@ USB ID `0bda:b812`.
   management rate, retry count, power and group-frame NOACK). Unsupported
   radiotap/BPF features and hardware-crypto requests remain rejected.
 - Management/control frames use QSEL 18 on the management/high-priority OUT
-  endpoint (0x05), with a conservative 1-Mbps rate. Group-addressed data uses
+  endpoint (0x05), with 1-Mbps CCK on 2.4 GHz and 6-Mbps OFDM on 5 GHz. Group-addressed data uses
   QSEL_HIGH (17) on the high-priority endpoint. Unicast BE/BK map to their
   corresponding TIDs (0/1); unicast VI/VO map to QSEL_BEACON (16), matching
   Linux RTW88's three-pipe USB queue policy. Non-QoS unicast PAE/EAPOL frames
@@ -353,8 +353,8 @@ This is RX metadata parity only. HT/VHT association capabilities, hardware key-c
 
 The STA VAP now wraps `iv_newstate`: before net80211 publishes
 `IEEE80211_S_RUN`, the driver programs and verifies port-0 BSSID (0x0618),
-AID (0x06a8), and managed-linked network type (CR[17:16]=2), following the
-upstream RTW88 register map. On leaving RUN it clears link mode before
+AID (0x06a8, mask 0x7ff), and managed-linked network type (CR[17:16], mask
+0x30000, value 2), matching the upstream RTL8822B RTW88 port-0 register map. On leaving RUN it clears link mode before
 clearing AID/BSSID. A failed link-programming readback prevents the STA VAP
 from publishing RUN.
 
@@ -363,3 +363,9 @@ The RX diagnostics add `rx_assoc_resp_to_self_count`,
 `rx_disassoc_from_bss_count`, and `rx_last_disassoc_reason`, to distinguish
 frames addressed to this station and disassociations sourced by its programmed
 BSSID from the older all-BSS subtype totals.
+
+
+The shutdown interlock distinguishes an actual hardware stop from an ordinary
+channel/diagnostic register operation: link teardown waits for ordinary
+hardware work to finish, but clears cached link state without waiting on the
+stop operation that is itself stopping the VAP.

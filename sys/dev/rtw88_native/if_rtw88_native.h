@@ -300,6 +300,7 @@ struct rtw88_native_softc {
 	int			dying;
 	int			detaching;
 	int			hw_busy;
+	int			hw_stopping;
 	int			hw_started;
 	unsigned int		io_users;
 	int			xfers_initialized;
