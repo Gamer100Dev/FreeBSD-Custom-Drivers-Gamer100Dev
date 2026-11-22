@@ -34,6 +34,8 @@
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
 
+#include <net80211/ieee80211_crypto.h>
+
 #include "if_rtw88_native.h"
 #include "rtw88_native_build.h"
 
@@ -518,7 +520,8 @@ rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
  * sleepable TX task.
  */
 static int
-rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
+rtw88_native_tx_one(struct rtw88_native_softc *sc,
+    struct ieee80211_node *ni, struct mbuf *m)
 {
 	struct ieee80211_frame_min whbuf;
 	struct ieee80211_frame_min *wh;
@@ -532,13 +535,35 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	usb_error_t uerr;
 	int do_rfk, rfk_error, error;
 
-	if (m->m_pkthdr.len < sizeof(whbuf))
+	if (ni == NULL || m->m_pkthdr.len < sizeof(whbuf))
 		return (EINVAL);
 	if (m->m_pkthdr.len > 20 * 1024 - RTW88_NATIVE_TX_DESC_SIZE)
 		return (EFBIG);
 
-	/* The header may span mbuf segments; copy only the bounded header. */
+	/*
+	 * Net80211 sets the Protected bit and reserves room for cipher material
+	 * during 802.11 encapsulation, but software encryption is deliberately
+	 * performed by the driver at the final TX handoff. The native device
+	 * advertises CCMP/WEP/TKIP as software ciphers and has no hardware key
+	 * cache, so every protected frame must pass through crypto_encap() here.
+	 * In particular, do this before sizing/copying the MPDU into the USB
+	 * descriptor; otherwise the AP receives a Protected frame with plaintext
+	 * payload and no cipher header/MIC.
+	 */
 	m_copydata(m, 0, sizeof(whbuf), (caddr_t)&whbuf);
+	if ((whbuf.i_fc[1] & IEEE80211_FC1_PROTECTED) != 0) {
+		if (ieee80211_crypto_encap(ni, m) == NULL) {
+			device_printf(sc->dev,
+			    "software TX crypto encapsulation failed for protected frame\n");
+			return (ENOBUFS);
+		}
+		if (m->m_pkthdr.len >
+		    20 * 1024 - RTW88_NATIVE_TX_DESC_SIZE)
+			return (EFBIG);
+
+		/* Crypto may adjust the mbuf data; refresh its header and length. */
+		m_copydata(m, 0, sizeof(whbuf), (caddr_t)&whbuf);
+	}
 	wh = &whbuf;
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 
@@ -746,7 +771,7 @@ rtw88_native_tx_task(void *arg, int pending __unused)
 
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
-		error = enabled ? rtw88_native_tx_one(sc, m) : ENETDOWN;
+		error = enabled ? rtw88_native_tx_one(sc, ni, m) : ENETDOWN;
 
 		mtx_lock(&sc->mtx);
 		if (error == 0)
