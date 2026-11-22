@@ -1,0 +1,131 @@
+#!/bin/sh
+#
+# PROVIDE: rtw88_native
+# REQUIRE: FILESYSTEMS
+# BEFORE: netif
+# KEYWORD: nojail
+#
+# Start the native RTL8822BU driver after the root filesystem is mounted.
+# devd invokes the hotplug action when a later USB insertion creates a
+# rtw88_nativeN device.
+
+. /etc/rc.subr
+
+name="rtw88_native"
+rcvar="rtw88_native_enable"
+start_cmd="rtw88_native_start"
+stop_cmd="rtw88_native_stop"
+
+load_rc_config "$name"
+: ${rtw88_native_enable:="YES"}
+
+rtw88_native_oids()
+{
+	/sbin/sysctl -a 2>/dev/null | /usr/bin/awk -F: '
+	    $1 ~ /^dev\.rtw88_native\.[0-9]+\.hw_start$/ { print $1 }'
+}
+
+rtw88_native_start_oid()
+{
+	_oid="$1"
+	_value=$(/sbin/sysctl -n "$_oid" 2>/dev/null) || return 1
+	[ "$_value" = "1" ] && return 0
+	/sbin/sysctl "${_oid}=1"
+}
+
+rtw88_native_start_unit()
+{
+	_unit="$1"
+	case "$_unit" in
+	    ''|*[!0-9]*)
+		/usr/bin/logger -t rtw88_native "invalid device unit: $_unit"
+		return 1
+		;;
+	esac
+
+	_oid="dev.rtw88_native.${_unit}.hw_start"
+	_n=0
+	while [ "$_n" -lt 20 ]; do
+		if /sbin/sysctl -n "$_oid" >/dev/null 2>&1; then
+			rtw88_native_start_oid "$_oid"
+			return $?
+		fi
+		sleep 1
+		_n=$((_n + 1))
+	done
+
+	/usr/bin/logger -t rtw88_native "timed out waiting for $_oid"
+	return 1
+}
+
+rtw88_native_start()
+{
+	# Load after FILESYSTEMS so firmware_get() can safely access firmware.
+	if ! /sbin/kldstat -q -m if_rtw88_native &&
+	    ! /sbin/kldstat -q -m rtw88_native; then
+		/sbin/kldload if_rtw88_native
+	fi
+
+	# The USB device may already be present at boot. Start every attached
+	# instance; an empty list is normal when the adapter is unplugged.
+	_n=0
+	_oids=""
+	while [ "$_n" -lt 20 ]; do
+		_oids="$(rtw88_native_oids)"
+		[ -n "$_oids" ] && break
+		sleep 1
+		_n=$((_n + 1))
+	done
+
+	if [ -z "$_oids" ]; then
+		/usr/bin/logger -t rtw88_native "module loaded; no RTL8822BU adapter currently attached"
+		return 0
+	fi
+
+	for _oid in $_oids; do
+		rtw88_native_start_oid "$_oid" || return 1
+	done
+	return 0
+}
+
+rtw88_native_stop()
+{
+	for _oid in $(rtw88_native_oids); do
+		/sbin/sysctl "${_oid}=0" >/dev/null || return 1
+	done
+	return 0
+}
+
+rtw88_native_hotplug()
+{
+	_devname="$1"
+	case "$_devname" in
+	    rtw88_native[0-9]*) ;;
+	    *)
+		/usr/bin/logger -t rtw88_native "ignoring unexpected device name: $_devname"
+		return 1
+		;;
+	esac
+
+	_unit="${_devname#rtw88_native}"
+	rtw88_native_start_unit "$_unit" || return 1
+
+	# Create/configure the VAP from wlans_rtw88_nativeN and
+	# ifconfig_wlan0 in rc.conf, without restarting unrelated interfaces.
+	/etc/rc.d/netif quietstart wlan0 || \
+	    /usr/bin/logger -t rtw88_native "radio started; netif quietstart wlan0 did not complete"
+	return 0
+}
+
+case "${1:-}" in
+hotplug)
+	load_rc_config "$name"
+	: ${rtw88_native_enable:="YES"}
+	if checkyesno rtw88_native_enable; then
+		rtw88_native_hotplug "${2:-}"
+	fi
+	exit $?
+	;;
+esac
+
+run_rc_command "$1"
