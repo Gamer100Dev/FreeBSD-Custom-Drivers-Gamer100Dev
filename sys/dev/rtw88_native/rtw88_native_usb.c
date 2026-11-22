@@ -44,8 +44,9 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	int rssi, channel;
 
 	mtx_assert(&sc->mtx, MA_OWNED);
-	if (!sc->net80211_attached || sc->current_channel < 1 ||
-	    sc->current_channel > 13) {
+	if (!sc->net80211_attached ||
+	    !((sc->current_channel >= 1 && sc->current_channel <= 13) ||
+	    (sc->current_channel >= 36 && sc->current_channel <= 161))) {
 		sc->rx_input_drop_count++;
 		return;
 	}
@@ -142,8 +143,13 @@ rtw88_native_rx_enqueue(struct rtw88_native_softc *sc, const uint8_t *desc,
 	    IEEE80211_R_BAND | IEEE80211_R_NF | IEEE80211_R_RSSI |
 	    IEEE80211_R_TSF32;
 	rxs.c_ieee = channel;
-	rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_2GHZ);
-	rxs.c_band = IEEE80211_CHAN_2GHZ;
+	if (channel >= 36) {
+		rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_5GHZ);
+		rxs.c_band = IEEE80211_CHAN_5GHZ;
+	} else {
+		rxs.c_freq = ieee80211_ieee2mhz(channel, IEEE80211_CHAN_2GHZ);
+		rxs.c_band = IEEE80211_CHAN_2GHZ;
+	}
 	rxs.c_rx_tsf = le32toh(w5);
 	rxs.c_nf = -95;
 	rssi = -95;
