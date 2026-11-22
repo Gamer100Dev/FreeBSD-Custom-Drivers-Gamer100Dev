@@ -1343,6 +1343,8 @@ rtw88_native_hw_stop(struct rtw88_native_softc *sc)
 #define REG_HMEBOX0_EX			0x01f0
 #define H2C_CMD_MEDIA_STATUS_RPT	0x01U
 #define H2C_CMD_DEFAULT_PORT		0x2cU
+#define H2C_CMD_RA_INFO			0x40U
+#define RA_INFO_DISABLE_PT		(1U << 30)
 #define H2C_MAILBOX_COUNT		4
 #define H2C_MAILBOX_POLL_COUNT		30
 #define RTW88_NATIVE_STA_PORT		0U
@@ -1526,14 +1528,17 @@ rtw88_native_mac_send_legacy_ra(struct rtw88_native_softc *sc,
 	if (error != 0)
 		return (error);
 
-	message = 0x40U | (RTW88_NATIVE_STA_MACID << 8) |
-	    ((uint32_t)rate_id << 16) | (1U << 30);
+	message = H2C_CMD_RA_INFO |
+	    (RTW88_NATIVE_STA_MACID << 8) |
+	    ((uint32_t)rate_id << 16) | RA_INFO_DISABLE_PT;
 	error = rtw88_native_mac_h2c_send(sc, message, ra_mask, "RA_INFO");
 	if (error != 0)
 		return (error);
 
+	mtx_lock(&sc->mtx);
 	sc->station_ra_mask = ra_mask;
 	sc->station_rate_id = rate_id;
+	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev,
 	    "firmware legacy RA configured: MACID %u rate-id %u mask 0x%08x channel %d\n",
 	    RTW88_NATIVE_STA_MACID, rate_id, ra_mask, channel);
@@ -1567,8 +1572,10 @@ rtw88_native_mac_set_link(struct rtw88_native_softc *sc,
 		    USB_ERR_NORMAL_COMPLETION)
 			return (EIO);
 		media_error = rtw88_native_mac_media_status_report(sc, 0);
+		mtx_lock(&sc->mtx);
 		sc->station_ra_mask = 0;
 		sc->station_rate_id = 0;
+		mtx_unlock(&sc->mtx);
 		aid_reg &= ~PORT0_AID_MASK;
 		if (rtw88_native_reg_write32(sc, REG_PORT0_AID, aid_reg) !=
 		    USB_ERR_NORMAL_COMPLETION ||
