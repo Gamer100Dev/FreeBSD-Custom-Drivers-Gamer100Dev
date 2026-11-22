@@ -518,7 +518,8 @@ rtw88_native_transmit(struct ieee80211com *ic, struct mbuf *m)
  * sleepable TX task.
  */
 static int
-rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
+rtw88_native_tx_one(struct rtw88_native_softc *sc, struct ieee80211_node *ni,
+    struct mbuf *m)
 {
 	struct ieee80211_frame_min whbuf;
 	struct ieee80211_frame_min *wh;
@@ -530,7 +531,29 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct mbuf *m)
 	int ac, channel;
 	uint16_t seqctl;
 	usb_error_t uerr;
+	struct ieee80211_key *key;
 	int do_rfk, rfk_error, error;
+
+	/*
+	 * FreeBSD's net80211 TX contract requires the driver to run crypto
+	 * encapsulation for Protected frames. This radio advertises software
+	 * ciphers and does not implement hardware key/crypto offload, so let
+	 * net80211 encrypt the MPDU and expand it with the CCMP header/MIC here.
+	 * Without this step the Protected bit can be set on a plaintext frame.
+	 */
+	if (m->m_pkthdr.len >= sizeof(whbuf)) {
+		m_copydata(m, 0, sizeof(whbuf), (caddr_t)&whbuf);
+		if ((whbuf.i_fc[1] & IEEE80211_FC1_PROTECTED) != 0) {
+			key = ieee80211_crypto_encap(ni, m);
+			if (key == NULL)
+				return (ENOBUFS);
+			if ((key->wk_flags & IEEE80211_KEY_SWCRYPT) == 0) {
+				device_printf(sc->dev,
+				    "Protected TX frame selected a non-software key; refusing unencrypted transmit\\n");
+				return (EOPNOTSUPP);
+			}
+		}
+	}
 
 	if (m->m_pkthdr.len < sizeof(whbuf))
 		return (EINVAL);
@@ -746,7 +769,7 @@ rtw88_native_tx_task(void *arg, int pending __unused)
 
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
-		error = enabled ? rtw88_native_tx_one(sc, m) : ENETDOWN;
+		error = enabled ? rtw88_native_tx_one(sc, ni, m) : ENETDOWN;
 
 		mtx_lock(&sc->mtx);
 		if (error == 0)
