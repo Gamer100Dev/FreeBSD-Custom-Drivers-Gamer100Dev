@@ -1566,6 +1566,9 @@ rtw88_native_phy_iqk(struct rtw88_native_softc *sc)
 		return (ENETDOWN);
 
 	mtx_lock(&sc->mtx);
+	while (sc->hw_busy && !sc->dying && !sc->detaching &&
+	    !sc->hw_stopping)
+		cv_wait(&sc->io_drain_cv, &sc->mtx);
 	if (sc->dying || sc->detaching || sc->hw_stopping) {
 		mtx_unlock(&sc->mtx);
 		return (ENETDOWN);
@@ -1586,8 +1589,8 @@ rtw88_native_phy_iqk(struct rtw88_native_softc *sc)
 
 	/* RF_DTXLOK becomes 0xabcde when firmware IQK has completed. */
 	for (i = 0; i < 300; i++) {
-		error = rtw88_native_phy_rf_read(sc, BB_PATH_A, 0x08,
-		    &rf_reg);
+		/* RF helpers use path indices (0=A, 1=B), not BB path masks. */
+		error = rtw88_native_phy_rf_read(sc, 0, 0x08, &rf_reg);
 		if (error != 0)
 			break;
 		if (rf_reg == 0xabcdeU) {
@@ -1602,7 +1605,7 @@ rtw88_native_phy_iqk(struct rtw88_native_softc *sc)
 		error = ETIMEDOUT;
 
 	/* Always clear the firmware completion marker, as Linux does. */
-	clear_error = rtw88_native_phy_rf_write(sc, BB_PATH_A, 0x08, 0);
+	clear_error = rtw88_native_phy_rf_write(sc, 0, 0x08, 0);
 	if (error == 0 && clear_error != 0)
 		error = clear_error;
 
