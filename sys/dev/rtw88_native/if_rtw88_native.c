@@ -842,10 +842,10 @@ rtw88_native_rx_task(void *arg, int pending __unused)
 		mtx_lock(&sc->mtx);
 		m = mbufq_dequeue(&sc->rx_queue);
 		/*
-		 * Mirror Linux RTW_FLAG_RUNNING: ordinary RX frames must not be
-		 * handed to the 802.11 stack before startup completes or while
-		 * stop/detach is in progress. Firmware C2H records are parsed
-		 * separately and are not affected by this data-frame gate.
+		 * Track the same hardware running lifecycle as Linux RTW_FLAG_RUNNING.
+		 * This FreeBSD taskqueue also gates queued RX handoff so stale frames
+		 * cannot enter net80211 while startup is incomplete or stop is active.
+		 * Firmware C2H records are parsed separately before this task.
 		 */
 		running = sc->hw_started && !sc->hw_stopping &&
 		    !sc->detaching && !sc->dying;
