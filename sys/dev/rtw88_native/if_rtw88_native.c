@@ -72,7 +72,8 @@ struct rtw88_native_vap {
 
 static int
 rtw88_native_station_link_update(struct rtw88_native_softc *sc,
-    const uint8_t *bssid, uint16_t aid, int linked)
+    const uint8_t *bssid, uint16_t aid, int linked,
+    const struct ieee80211_rateset *rates)
 {
 	int error;
 
@@ -85,6 +86,8 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 		/* Do not block VAP shutdown on a concurrent stop/channel operation. */
 		sc->station_linked = 0;
 		sc->station_aid = 0;
+		sc->station_ra_mask = 0;
+		sc->station_rate_id = 0;
 		bzero(sc->station_bssid, sizeof(sc->station_bssid));
 		mtx_unlock(&sc->mtx);
 		return (0);
@@ -98,6 +101,8 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 		if (!linked) {
 			sc->station_linked = 0;
 			sc->station_aid = 0;
+			sc->station_ra_mask = 0;
+			sc->station_rate_id = 0;
 			bzero(sc->station_bssid, sizeof(sc->station_bssid));
 		}
 		mtx_unlock(&sc->mtx);
@@ -106,9 +111,10 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 	sc->hw_busy = 1;
 	mtx_unlock(&sc->mtx);
 
-	error = rtw88_native_mac_set_link(sc, bssid, aid, linked);
+	error = rtw88_native_mac_set_link(sc, bssid, aid, linked,
+	    rates);
 	if (error != 0 && linked)
-		(void)rtw88_native_mac_set_link(sc, NULL, 0, 0);
+		(void)rtw88_native_mac_set_link(sc, NULL, 0, 0, NULL);
 
 	mtx_lock(&sc->mtx);
 	if (error == 0 && linked) {
@@ -118,6 +124,8 @@ rtw88_native_station_link_update(struct rtw88_native_softc *sc,
 	} else {
 		sc->station_linked = 0;
 		sc->station_aid = 0;
+		sc->station_ra_mask = 0;
+		sc->station_rate_id = 0;
 		bzero(sc->station_bssid, sizeof(sc->station_bssid));
 	}
 	sc->hw_busy = 0;
@@ -143,6 +151,7 @@ rtw88_native_vap_newstate(struct ieee80211vap *vap,
 	struct rtw88_native_softc *sc;
 	struct ieee80211com *ic;
 	struct ieee80211_node *ni;
+	const struct ieee80211_rateset *rates;
 	uint8_t bssid[IEEE80211_ADDR_LEN];
 	uint16_t aid;
 	enum ieee80211_state ostate;
@@ -174,6 +183,7 @@ rtw88_native_vap_newstate(struct ieee80211vap *vap,
 		linked = (nstate == IEEE80211_S_RUN);
 		bzero(bssid, sizeof(bssid));
 		aid = 0;
+		rates = NULL;
 		ni = NULL;
 		if (linked) {
 			if (vap->iv_bss == NULL)
@@ -181,10 +191,12 @@ rtw88_native_vap_newstate(struct ieee80211vap *vap,
 			ni = ieee80211_ref_node(vap->iv_bss);
 			IEEE80211_ADDR_COPY(bssid, ni->ni_bssid);
 			aid = IEEE80211_NODE_AID(ni);
+			rates = &ni->ni_rates;
 		}
 		/* USB register accesses sleep; release/reacquire the net80211 lock. */
 		IEEE80211_UNLOCK(ic);
-		error = rtw88_native_station_link_update(sc, bssid, aid, linked);
+		error = rtw88_native_station_link_update(sc, bssid, aid,
+		    linked, rates);
 		if (ni != NULL)
 			ieee80211_free_node(ni);
 		IEEE80211_LOCK(ic);
@@ -527,7 +539,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct ieee80211_node *ni,
 	struct rtw88_native_txdesc_params params;
 	uint8_t *buffer;
 	uint16_t frame_len, transfer_len;
-	uint8_t qsel, endpoint;
+	uint8_t qsel, endpoint, rate_id;
 	uint8_t type;
 	int ac, channel;
 	uint16_t seqctl;
@@ -641,6 +653,8 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct ieee80211_node *ni,
 	/* Snapshot frame classification before the sleepable USB transmit. */
 	mtx_lock(&sc->mtx);
 	channel = sc->current_channel;
+	rate_id = sc->station_linked && sc->station_rate_id != 0 ?
+	    sc->station_rate_id : (channel >= 36 ? 7 : 6);
 	sc->tx_last_qsel = qsel;
 	sc->tx_last_endpoint = endpoint;
 	sc->tx_last_frame_control = (int)wh->i_fc[0] |
@@ -705,7 +719,7 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct ieee80211_node *ni,
 		 * rate-adaptation table, rather than a driver-forced 1-Mbps rate,
 		 * selects the ordinary data rate.
 		 */
-		params.rate_id = 6;	/* RTW_RATEID_BG */
+		params.rate_id = rate_id;
 		params.data_rate = 4;	/* DESC_RATE6M default; ignored unless USE_RATE */
 	}
 	/*
