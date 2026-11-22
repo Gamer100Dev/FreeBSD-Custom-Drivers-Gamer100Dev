@@ -417,9 +417,10 @@ rtw88_native_tx_enqueue(struct rtw88_native_softc *sc, struct mbuf *m)
  *
  * Accept those stack-generated defaults, while rejecting descriptor features
  * this first TX path cannot honour (crypto offload, RTS/CTS, short preamble,
- * explicit retry series, data padding and FCS). The TX descriptor currently
- * uses a conservative fixed 1-Mbps rate; retry/power/rate requests are
- * validated but not yet applied.
+ * explicit retry series, data padding and FCS). Management and EAPOL
+ * use robust fixed legacy rates; ordinary data leaves the explicit-rate bit
+ * clear for firmware rate adaptation. Retry, power and explicit raw-TX rate
+ * requests are still not fully implemented.
  */
 static int
 rtw88_native_raw_params_supported(const struct ieee80211_bpf_params *params,
@@ -698,11 +699,23 @@ rtw88_native_tx_one(struct rtw88_native_softc *sc, struct ieee80211_node *ni,
 		params.rate_id = 8;	/* RTW_RATEID_B_20M */
 		params.data_rate = 0;	/* DESC_RATE1M */
 	} else {
+		/*
+		 * Match Linux RTW88's data path: use the band/peer rate profile
+		 * and leave the explicit-rate descriptor bit clear. The firmware
+		 * rate-adaptation table, rather than a driver-forced 1-Mbps rate,
+		 * selects the ordinary data rate.
+		 */
 		params.rate_id = 6;	/* RTW_RATEID_BG */
-		params.data_rate = 0;	/* DESC_RATE1M */
+		params.data_rate = 4;	/* DESC_RATE6M default; ignored unless USE_RATE */
 	}
-	params.use_hardware_rate = true;
-	params.disable_rate_fallback = true;
+	/*
+	 * Linux RTW88 fixes management and PAE rates, but leaves normal data
+	 * frames to firmware rate adaptation unless a debug fixed-rate override
+	 * is active. No fixed-rate override is exposed by this driver.
+	 */
+	params.use_hardware_rate = (type != IEEE80211_FC0_TYPE_DATA ||
+	    (m->m_flags & M_EAPOL) != 0);
+	params.disable_rate_fallback = params.use_hardware_rate;
 	params.last_segment = true;
 	params.bmc = IEEE80211_IS_MULTICAST(wh->i_addr1);
 	params.more_data = (m->m_flags & M_MORE_DATA) != 0;
