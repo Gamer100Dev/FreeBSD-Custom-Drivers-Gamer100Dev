@@ -127,7 +127,14 @@ rtw88_native_txdesc_build(uint8_t *desc, size_t desc_size,
 	    TXD_PREP(p->rate_id, 16, TXD_W1_RATE_ID) |
 	    TXD_PREP(p->security_type, 22, TXD_W1_SECURITY_TYPE) |
 	    TXD_PREP(p->packet_offset, 24, TXD_W1_PACKET_OFFSET);
-	if (p->more_data)
+	/*
+	 * RTW88 uses QSEL_HIGH for broadcast/multicast data. The upstream
+	 * rtw_tx_fill_tx_desc() sets MORE_DATA for every frame on that queue;
+	 * it is a TX-descriptor control bit, not just the 802.11 FC More Data
+	 * flag supplied by net80211. Preserve an explicit request on other
+	 * queues as well.
+	 */
+	if (p->more_data || p->queue_select == RTW88_NATIVE_TXQSEL_HIGH)
 		w[1] |= TXD_W1_MORE_DATA;
 
 	if (p->ampdu_enable)
