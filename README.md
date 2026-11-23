@@ -3,6 +3,18 @@
 Native FreeBSD driver development, currently focused on the Realtek
 RTL8822BU USB Wi-Fi adapter (USB ID `0bda:b812`).
 
+## MT7902 native port
+
+An initial native FreeBSD PCI resource layer for MediaTek MT7902 (`14c3:7902`)
+is in `sys/dev/mt76/mt7902/`, with a module Makefile in
+`sys/modules/mt7902_native/`. It is independent of LinuxKPI. The upstream
+Linux mt76 repository is cloned under `vendor/mt76/` as reference source.
+The current module only matches the PCI function and sets up MMIO/DMA
+resources; firmware boot, radio queues, net80211, scanning, association,
+packet I/O, and MediaTek Bluetooth firmware setup are not implemented yet.
+See `sys/dev/mt76/mt7902/README.md` for scope and build instructions, and
+`firmware/mediatek/` for licensed firmware payloads.
+
 ## Native RTW88 driver
 
 The default `main` branch contains the native implementation:
