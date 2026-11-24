@@ -186,6 +186,7 @@ struct mt7902_tx_pending {
 struct mt7902_rx_radiotap_header {
 	struct ieee80211_radiotap_header wr_ihdr;
 	uint8_t wr_flags;
+	uint8_t wr_pad;
 	uint16_t wr_chan_freq;
 	uint16_t wr_chan_flags;
 	int8_t wr_dbm_antsignal;
@@ -206,6 +207,9 @@ struct mt7902_tx_radiotap_header {
 	uint16_t wt_chan_flags;
 } __packed;
 
+CTASSERT(offsetof(struct mt7902_rx_radiotap_header, wr_chan_freq) == 10);
+CTASSERT(offsetof(struct mt7902_rx_radiotap_header, wr_dbm_antsignal) == 14);
+CTASSERT(offsetof(struct mt7902_tx_radiotap_header, wt_chan_freq) == 10);
 #define MT7902_TX_RADIOTAP_PRESENT \
 	((1U << IEEE80211_RADIOTAP_FLAGS) | \
 	 (1U << IEEE80211_RADIOTAP_CHANNEL))
