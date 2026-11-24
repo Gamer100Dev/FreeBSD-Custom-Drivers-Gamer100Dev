@@ -414,6 +414,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->rx_event_txs_rts_timeouts = 0;
 	sc->rx_event_txs_queue_timeouts = 0;
 	sc->rx_event_txs_retries = 0;
+	sc->rx_event_txs_bytes = 0;
 	sc->rx_event_txs_last_wcid = 0;
 	sc->rx_event_txs_last_pid = 0;
 	sc->rx_event_txs_last_status = 0;
@@ -450,7 +451,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t monitor_errors;
 	uint64_t events, txs, txs_records, tx_free, short_events, unknown;
 	uint64_t txs_failures, txs_ack_timeouts, txs_rts_timeouts;
-	uint64_t txs_queue_timeouts, txs_retries;
+	uint64_t txs_queue_timeouts, txs_retries, txs_bytes;
 	uint64_t tx_free_records, tx_free_failures, tx_free_retries;
 	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_timeouts;
 	uint64_t tx_pending_count, irq_count;
@@ -478,6 +479,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	txs_rts_timeouts = sc->rx_event_txs_rts_timeouts;
 	txs_queue_timeouts = sc->rx_event_txs_queue_timeouts;
 	txs_retries = sc->rx_event_txs_retries;
+	txs_bytes = sc->rx_event_txs_bytes;
 	txs_last_wcid = sc->rx_event_txs_last_wcid;
 	txs_last_pid = sc->rx_event_txs_last_pid;
 	txs_last_status = sc->rx_event_txs_last_status;
@@ -516,7 +518,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	event_tail_ctl = sc->rx_event.desc != NULL ?
 	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju last_txs=%u/%u/%u/%u/%u/%u\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju bytes=%ju last_txs=%u/%u/%u/%u/%u/%u\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
 	    (uintmax_t)monitor_errors, (uintmax_t)events,
@@ -532,7 +534,8 @@ mt7902_scan_end(struct ieee80211com *ic)
 	    rxd0, rxd1, rxd2, rxd3,
 	    (uintmax_t)txs_failures, (uintmax_t)txs_ack_timeouts,
 	    (uintmax_t)txs_rts_timeouts, (uintmax_t)txs_queue_timeouts,
-	    (uintmax_t)txs_retries, txs_last_wcid, txs_last_pid,
+	    (uintmax_t)txs_retries, (uintmax_t)txs_bytes,
+	    txs_last_wcid, txs_last_pid,
 	    txs_last_status, txs_last_rate, txs_last_fail_count,
 	    txs_last_retry_count);
 }
