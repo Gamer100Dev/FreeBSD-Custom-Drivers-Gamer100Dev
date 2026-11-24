@@ -162,6 +162,9 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxd3 = le32dec(data + 12);
 	rxd4 = le32dec(data + 16);
 	channel = (rxd3 >> 8) & 0xff;
+	/* MT7902's current net80211 channel list is 2.4/5 GHz only. */
+	if (channel > 180)
+		goto drop;
 
 	mtx_lock(&sc->mtx);
 	sc->rx_data_count++;
