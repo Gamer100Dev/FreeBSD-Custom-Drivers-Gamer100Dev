@@ -200,7 +200,7 @@ int
 mt7902_dma_init(struct mt7902_softc *sc)
 {
 	uint32_t cfg, value;
-	int error;
+	int error, i;
 
 	mt7902_write(sc, MT7902_REG_WFDMA_GLO_CFG, 0);
 	value = mt7902_read(sc, MT7902_REG_WFDMA_RST);
@@ -208,19 +208,21 @@ mt7902_dma_init(struct mt7902_softc *sc)
 	mt7902_write(sc, MT7902_REG_WFDMA_RST, value);
 	mt7902_write(sc, MT7902_REG_WFDMA_RST,
 	    value | MT7902_WFDMA_RST_LOGIC | MT7902_WFDMA_RST_DMASHDL);
-	if ((error = mt7902_ring_alloc(sc, &sc->tx_data, MT7902_TX_RING_SIZE,
-	    0, false, 4096)) != 0 ||
-	    (error = mt7902_ring_alloc(sc, &sc->tx_mcu, MT7902_MCU_TX_RING_SIZE,
+	for (i = 0; i < MT7902_TX_DATA_QUEUES; i++) {
+		error = mt7902_ring_alloc(sc, &sc->tx_data[i],
+		    MT7902_TX_RING_SIZE, i, false, 4096);
+		if (error != 0)
+			goto fail;
+	}
+	if ((error = mt7902_ring_alloc(sc, &sc->tx_mcu, MT7902_MCU_TX_RING_SIZE,
 	    15, false, 4096)) != 0 ||
 	    (error = mt7902_ring_alloc(sc, &sc->tx_fwdl, MT7902_FWDL_TX_RING_SIZE,
 	    16, false, 4096)) != 0 ||
 	    (error = mt7902_ring_alloc(sc, &sc->rx_event, 512, 0, true,
 	    MT7902_RX_BUF_SIZE)) != 0 ||
 	    (error = mt7902_ring_alloc(sc, &sc->rx_data, MT7902_RX_RING_SIZE,
-	    2, true, MT7902_RX_BUF_SIZE)) != 0) {
-		mt7902_dma_stop(sc);
-		return (error);
-	}
+	    2, true, MT7902_RX_BUF_SIZE)) != 0)
+		goto fail;
 	/* MT7902 uses distinct prefetch windows for RX0-3 and TX0-6,15,16. */
 	mt7902_write(sc, MT7902_REG_WFDMA_RX_BASE + 0x180,
 	    MT7902_PREFETCH(0x0000, 0x4));
@@ -289,6 +291,10 @@ mt7902_dma_init(struct mt7902_softc *sc)
 		    (uint32_t)sc->tx_mcu.buf[0].paddr);
 	}
 	return (error);
+
+fail:
+	mt7902_dma_stop(sc);
+	return (error);
 }
 
 void
@@ -298,7 +304,8 @@ mt7902_dma_stop(struct mt7902_softc *sc)
 		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN, 0);
 		mt7902_write(sc, MT7902_REG_WFDMA_GLO_CFG, 0);
 	}
-	mt7902_ring_free(&sc->tx_data);
+	for (int i = 0; i < MT7902_TX_DATA_QUEUES; i++)
+		mt7902_ring_free(&sc->tx_data[i]);
 	mt7902_ring_free(&sc->tx_mcu);
 	mt7902_ring_free(&sc->tx_fwdl);
 	mt7902_ring_free(&sc->rx_data);
