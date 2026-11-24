@@ -662,12 +662,32 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	idx = ring->head;
 	desc = &ring->desc[idx];
 	buf = &ring->buf[idx];
-	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-	control = le32toh(desc->control);
-	if ((control & MT7902_DMA_DESC_DONE) == 0) {
+	mtx_unlock(&sc->mtx);
+
+	/*
+	 * A previous transmission can outlive its software timeout.  Wait in
+	 * process context for this descriptor to return to the host before
+	 * touching its DMA buffer; never hold the device mutex while polling.
+	 */
+	for (retry = 0; retry < 10000; retry++) {
+		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+		control = le32toh(desc->control);
+		if ((control & MT7902_DMA_DESC_DONE) != 0)
+			break;
+		DELAY(10);
+	}
+	if (retry == 10000)
+		return (EBUSY);
+
+	mtx_lock(&sc->mtx);
+	if (ring->head != idx) {
 		mtx_unlock(&sc->mtx);
 		return (EBUSY);
+	}
+	if (buf->dma_pending) {
+		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTWRITE);
+		buf->dma_pending = false;
 	}
 	memset(buf->vaddr, 0, MT7902_TXD_LEN);
 	m_copydata(m, 0, len, (caddr_t)buf->vaddr + MT7902_TXD_LEN);
@@ -714,6 +734,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	txp->ptr[0].len0 = htole16((uint16_t)(len &
 	    MT7902_TXP_LEN_MASK) | MT7902_TXP_LAST);
 	bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_PREWRITE);
+	buf->dma_pending = true;
 	desc->buf0 = htole32((uint32_t)buf->paddr);
 	desc->buf1 = 0;
 	desc->info = 0;
@@ -739,8 +760,9 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 		DELAY(10);
 	}
 	error = retry == 10000 ? ETIMEDOUT : 0;
-	bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTWRITE);
 	if (error == 0) {
+		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTWRITE);
+		buf->dma_pending = false;
 		mtx_lock(&sc->mtx);
 		desc->control = htole32(MT7902_DMA_DESC_DONE);
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
