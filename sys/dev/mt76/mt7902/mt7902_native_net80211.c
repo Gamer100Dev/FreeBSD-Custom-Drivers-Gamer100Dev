@@ -637,9 +637,10 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	struct mt7902_dma_buffer *buf;
 	struct mt7902_txp *txp;
 	struct ieee80211_frame_min wh;
-	uint32_t *txwi, fc, val, control;
+	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen;
 	int idx, retry, error;
+	bool fixed_rate;
 
 	ring = &sc->tx_data;
 	len = m->m_pkthdr.len;
@@ -678,27 +679,30 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	    (((fc & 0x0c) >> 2) << 4) | ((fc & 0xf0) >> 4);
 	if (ETHER_IS_MULTICAST(wh.i_addr1))
 		val |= 1U << 10;
-	if ((fc & 0x000c) == 0 || ETHER_IS_MULTICAST(wh.i_addr1)) {
-		val |= MT7902_TXD_FIX_RATE | MT7902_TXD_HTC_VALID;
-		txwi[3] |= htole32(MT7902_TXD_BA_DISABLE);
-	}
+	fixed_rate = (fc & 0x000c) == 0 ||
+	    ETHER_IS_MULTICAST(wh.i_addr1);
+	if (fixed_rate)
+		val |= MT7902_TXD_FIX_RATE;
 	txwi[2] = htole32(val);
 	txwi[3] = htole32(MT7902_TXD_RETRY);
 	txwi[4] = 0;
 	txwi[5] = 0;
+	txwi[6] = 0;
 	/*
 	 * Connac2 MT_TX_RATE_MODE / MT_TX_RATE_IDX live in TXD6[29:16].
 	 * Use the lowest legal basic rate until net80211 basic-rate and
 	 * negotiated station rate control are plumbed: 1 Mbps CCK on 2.4 GHz,
 	 * 6 Mbps OFDM on 5 GHz.
 	 */
-	val = sc->current_band == 5 ? ((1U << 6) | 11U) : 10U;
-	txwi[6] = htole32((val << MT7902_TXD6_TX_RATE_SHIFT) |
-	    MT7902_TXD6_FIXED_BW);
+	if (fixed_rate) {
+		rate = sc->current_band == 5 ? ((1U << 6) | 11U) : 10U;
+		txwi[2] |= htole32(MT7902_TXD_HTC_VALID);
+		txwi[3] |= htole32(MT7902_TXD_BA_DISABLE);
+		txwi[6] = htole32((rate << MT7902_TXD6_TX_RATE_SHIFT) |
+		    MT7902_TXD6_FIXED_BW);
+	}
 	txwi[7] = htole32((((fc & 0x0c) >> 2) << 20) |
 	    (((fc & 0xf0) >> 4) << 16));
-	if ((fc & 0x000c) == 0)
-		txwi[2] |= htole32(1U << 13);
 	txp = (struct mt7902_txp *)((uint8_t *)buf->vaddr + MT7902_TXWI_LEN);
 	txp->msdu_id[0] = htole16((uint16_t)idx | (1U << 15));
 	txp->ptr[0].buf0 = htole32((uint32_t)(buf->paddr + MT7902_TXD_LEN));
