@@ -56,6 +56,11 @@
 #define MCU_PATCH_SEC_ENC_SCRAMBLE	0x02000000U
 #define MCU_FW_CMD_MAX	4096
 
+/* MT_TOP_MISC2_FW_STATE: power-on and N9-running bits. */
+#define MCU_FW_STATE_PWR_ON	(1U << 0)
+#define MCU_FW_STATE_N9_ON	(1U << 1)
+#define MCU_FW_STATE_N9_READY	(MCU_FW_STATE_PWR_ON | MCU_FW_STATE_N9_ON)
+
 struct mt7902_mcu_tx_header {
 	uint32_t txd[8];
 	uint16_t len;
@@ -510,7 +515,14 @@ mt7902_mcu_load_wm(struct mt7902_softc *sc)
 	error = mt7902_mcu_start_fw(sc, image->override_addr, option);
 	if (error != 0)
 		return (error);
-	return (mt7902_wait(sc, MT7902_REG_CONN_ON_MISC, 0x7, 1U, 1500000));
+	error = mt7902_wait(sc, MT7902_REG_CONN_ON_MISC,
+	    MCU_FW_STATE_N9_READY, MCU_FW_STATE_N9_READY, 1500000);
+	if (error != 0)
+		device_printf(sc->dev,
+		    "firmware N9 ready timeout (misc=%08x expected=%08x)\n",
+		    mt7902_read(sc, MT7902_REG_CONN_ON_MISC),
+		    MCU_FW_STATE_N9_READY);
+	return (error);
 }
 
 static int
@@ -637,7 +649,8 @@ mt7902_mcu_init(struct mt7902_softc *sc)
 		if (error != 0)
 			return (error);
 	}
-	error = mt7902_wait(sc, MT7902_REG_CONN_ON_MISC, 1U, 1U, 1000000);
+	error = mt7902_wait(sc, MT7902_REG_CONN_ON_MISC,
+	    MCU_FW_STATE_PWR_ON, MCU_FW_STATE_PWR_ON, 1000000);
 	if (error != 0)
 		device_printf(sc->dev,
 		    "firmware power-on state not ready before patch (misc 0x%08x, %d)\n",
