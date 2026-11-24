@@ -679,7 +679,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	    (((fc & 0x0c) >> 2) << 4) | ((fc & 0xf0) >> 4);
 	if (ETHER_IS_MULTICAST(wh.i_addr1))
 		val |= 1U << 10;
-	fixed_rate = (fc & 0x000c) == 0 ||
+	fixed_rate = (fc & 0x000c) != 0x0008 ||
 	    ETHER_IS_MULTICAST(wh.i_addr1);
 	if (fixed_rate)
 		val |= MT7902_TXD_FIX_RATE;
