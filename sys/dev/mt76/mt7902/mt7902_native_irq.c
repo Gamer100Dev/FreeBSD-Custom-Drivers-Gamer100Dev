@@ -102,7 +102,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	size_t offset, frame_len;
 	uint8_t channel, rcpi, subtype;
 	int rssi, noise;
-	bool is_mgmt;
+	bool is_mgmt, monitor_active;
 
 	if (dma_len < 24)
 		goto drop;
@@ -119,14 +119,19 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	sc->rx_last_rxd[1] = rxd1;
 	sc->rx_last_rxd[2] = rxd2;
 	sc->rx_last_rxd[3] = rxd3;
+	monitor_active = sc->monitor_active;
 	mtx_unlock(&sc->mtx);
 
 	/* PKT_TYPE_NORMAL is 2 in the Connac2 RXD0 packet-type field. */
 	if (((rxd0 >> 27) & 0x1f) != 2)
 		goto drop;
-	/* Single-band MT7902, good-FCS frames, native 802.11 headers only. */
-	if ((rxd1 & ((1U << 28) | (1U << 25) | (1U << 26) |
-	    (1U << 27))) != 0 ||
+	/*
+	 * ICV/CCMP MIC failures have no equivalent generic FreeBSD RX flag,
+	 * so keep dropping them.  FCS and TKIP-MIC failures are useful to a
+	 * monitor VAP and carry explicit net80211 packet flags below.
+	 */
+	if ((rxd1 & ((1U << 28) | (1U << 25))) != 0 ||
+	    (!monitor_active && (rxd1 & ((1U << 26) | (1U << 27))) != 0) ||
 	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0)
 		goto drop;
 
@@ -188,6 +193,10 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxs.r_flags = IEEE80211_R_NF | IEEE80211_R_RSSI;
 	rxs.c_nf = noise;
 	rxs.c_rssi = (int8_t)(rssi - noise);
+	if (rxd1 & (1U << 27))
+		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_FCSCRC;
+	if (rxd1 & (1U << 26))
+		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_MMIC;
 	/*
 	 * mt7921_mac_fill_rx() reports a nonzero hardware cipher with no
 	 * CLM/CM exception as authenticated/decrypted data.  Tell net80211
