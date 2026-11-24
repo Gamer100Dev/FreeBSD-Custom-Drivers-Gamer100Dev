@@ -19,6 +19,7 @@
 
 #include "if_mt7902_native.h"
 
+#include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
 
 #define MT7902_TXWI_LEN		32
