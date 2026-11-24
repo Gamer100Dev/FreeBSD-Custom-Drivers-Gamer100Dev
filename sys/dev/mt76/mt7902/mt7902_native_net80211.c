@@ -97,6 +97,67 @@ struct mt7902_sta_rec_state {
 	uint8_t reserved;
 } __packed;
 
+struct mt7902_mcu_tlv_hdr {
+	uint16_t tag;
+	uint16_t len;
+} __packed;
+
+struct mt7902_wtbl_req_hdr {
+	uint8_t wlan_idx_lo;
+	uint8_t operation;
+	uint16_t tlv_num;
+	uint8_t wlan_idx_hi;
+	uint8_t reserved[3];
+} __packed;
+
+struct mt7902_wtbl_generic {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t peer_addr[IEEE80211_ADDR_LEN];
+	uint8_t muar_idx;
+	uint8_t skip_tx;
+	uint8_t cf_ack;
+	uint8_t qos;
+	uint8_t mesh;
+	uint8_t adm;
+	uint16_t partial_aid;
+	uint8_t baf_en;
+	uint8_t aad_om;
+} __packed;
+
+struct mt7902_wtbl_rx {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t rcid;
+	uint8_t rca1;
+	uint8_t rca2;
+	uint8_t rv;
+	uint8_t reserved[4];
+} __packed;
+
+struct mt7902_wtbl_hdr_trans {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t to_ds;
+	uint8_t from_ds;
+	uint8_t no_rx_trans;
+	uint8_t reserved;
+} __packed;
+
+struct mt7902_sta_wtbl {
+	struct mt7902_mcu_tlv_hdr tlv;
+	struct mt7902_wtbl_req_hdr request;
+	struct mt7902_wtbl_generic generic;
+	struct mt7902_wtbl_rx rx;
+	struct mt7902_wtbl_hdr_trans hdr_trans;
+} __packed;
+
+CTASSERT(sizeof(struct mt7902_mcu_tlv_hdr) == 4);
+CTASSERT(sizeof(struct mt7902_wtbl_req_hdr) == 8);
+CTASSERT(sizeof(struct mt7902_wtbl_generic) == 20);
+CTASSERT(sizeof(struct mt7902_wtbl_rx) == 12);
+CTASSERT(sizeof(struct mt7902_wtbl_hdr_trans) == 8);
+
 struct mt7902_bss_basic {
 	uint16_t tag;
 	uint16_t len;
@@ -288,6 +349,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	struct mt7902_sta_req_hdr hdr;
 	struct mt7902_sta_rec_basic basic;
 	struct mt7902_sta_rec_state state;
+	struct mt7902_sta_wtbl wtbl;
 	uint8_t peer[IEEE80211_ADDR_LEN];
 	uint16_t aid;
 	int error;
@@ -376,7 +438,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bzero(&hdr, sizeof(hdr));
 	hdr.bss_idx = MT7902_BSS_IDX;
 	hdr.wlan_idx_lo = MT7902_PEER_WCID;
-	hdr.tlv_num = htole16(2);
+	hdr.tlv_num = htole16(3); /* BASIC, STATE, WTBL */
 	hdr.is_tlv_append = 1;
 	memset(&basic, 0, sizeof(basic));
 	basic.tag = htole16(MT7902_STA_REC_BASIC);
@@ -391,13 +453,49 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	state.tag = htole16(MT7902_STA_REC_STATE);
 	state.len = htole16(sizeof(state));
 	state.state = MT7902_STA_STATE_ASSOC;
-	{
-		uint8_t request[sizeof(hdr) + sizeof(basic) + sizeof(state)];
 
-		memcpy(request, &hdr, sizeof(hdr));
-		memcpy(request + sizeof(hdr), &basic, sizeof(basic));
-		memcpy(request + sizeof(hdr) + sizeof(basic), &state,
-		    sizeof(state));
+	/*
+	 * Connac2 requires a WTBL record alongside STA_REC.  These are the
+	 * minimum station-mode records used by mt76: GENERIC, RX and HDR_TRANS.
+	 * Keep receive header translation disabled because the native FreeBSD
+	 * RX path consumes ordinary 802.11 MAC headers.
+	 */
+	bzero(&wtbl, sizeof(wtbl));
+	wtbl.tlv.tag = htole16(13); /* STA_REC_WTBL */
+	wtbl.tlv.len = htole16(sizeof(wtbl));
+	wtbl.request.wlan_idx_lo = MT7902_PEER_WCID;
+	wtbl.request.operation = 1; /* WTBL_RESET_AND_SET */
+	wtbl.request.tlv_num = htole16(3);
+	wtbl.generic.tag = htole16(0); /* WTBL_GENERIC */
+	wtbl.generic.len = htole16(sizeof(wtbl.generic));
+	IEEE80211_ADDR_COPY(wtbl.generic.peer_addr, peer);
+	wtbl.generic.muar_idx = 0;
+	wtbl.generic.qos = (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
+	wtbl.generic.partial_aid = htole16(aid);
+	wtbl.rx.tag = htole16(1); /* WTBL_RX */
+	wtbl.rx.len = htole16(sizeof(wtbl.rx));
+	wtbl.rx.rca1 = 1; /* station interface */
+	wtbl.rx.rca2 = 1;
+	wtbl.rx.rv = 1;
+	wtbl.hdr_trans.tag = htole16(6); /* WTBL_HDR_TRANS */
+	wtbl.hdr_trans.len = htole16(sizeof(wtbl.hdr_trans));
+	wtbl.hdr_trans.to_ds = 1;
+	wtbl.hdr_trans.from_ds = 0;
+	wtbl.hdr_trans.no_rx_trans = 1;
+
+	{
+		uint8_t request[sizeof(hdr) + sizeof(basic) + sizeof(state) +
+		    sizeof(wtbl)];
+		size_t offset;
+
+		offset = 0;
+		memcpy(request + offset, &hdr, sizeof(hdr));
+		offset += sizeof(hdr);
+		memcpy(request + offset, &basic, sizeof(basic));
+		offset += sizeof(basic);
+		memcpy(request + offset, &state, sizeof(state));
+		offset += sizeof(state);
+		memcpy(request + offset, &wtbl, sizeof(wtbl));
 		error = mt7902_mcu_send_response(sc,
 		    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
 		    request, sizeof(request), NULL, &(size_t){0});
