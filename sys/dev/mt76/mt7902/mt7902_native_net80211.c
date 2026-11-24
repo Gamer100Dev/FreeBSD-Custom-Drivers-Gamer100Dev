@@ -20,7 +20,7 @@
 #include "if_mt7902_native.h"
 
 #define MT7902_TXWI_LEN		32
-#define MT7902_TXP_LEN		16
+#define MT7902_TXP_LEN		32
 #define MT7902_TXD_LEN		(MT7902_TXWI_LEN + MT7902_TXP_LEN)
 #define MT7902_TXD_QIDX_SHIFT	25
 #define MT7902_TXD_PKT_FMT_SHIFT	23
@@ -51,7 +51,7 @@ struct mt7902_txp_ptr {
 
 struct mt7902_txp {
 	uint16_t msdu_id[4];
-	struct mt7902_txp_ptr ptr[1];
+	struct mt7902_txp_ptr ptr[2];
 } __packed;
 
 struct mt7902_sta_req_hdr {
