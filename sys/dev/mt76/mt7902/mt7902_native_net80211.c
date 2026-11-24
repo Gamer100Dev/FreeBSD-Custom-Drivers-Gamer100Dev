@@ -428,6 +428,11 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->tx_free_unknown = 0;
 	sc->tx_free_pairs = 0;
 	sc->tx_free_bad = 0;
+	sc->tx_raw_count = 0;
+	sc->tx_raw_reject_count = 0;
+	sc->tx_raw_enqueue_errors = 0;
+	sc->tx_submit_count = 0;
+	sc->tx_dma_done_count = 0;
 	sc->tx_dma_timeouts = 0;
 	sc->rx_event_short_count = 0;
 	sc->rx_event_unknown_count = 0;
@@ -464,6 +469,8 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t tx_free_records, tx_free_failures, tx_free_retries;
 	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_timeouts;
 	uint64_t tx_pending_count, irq_count;
+	uint64_t tx_raw, tx_raw_reject, tx_raw_enqueue_errors;
+	uint64_t tx_submit, tx_dma_done;
 	uint32_t last_len, rxd0, rxd1, rxd2, rxd3, last_event_rxd0, last_irq;
 	uint32_t last_rxd4;
 	uint16_t last_fc, last_frame_len, last_hdr_len, last_offset;
@@ -507,6 +514,11 @@ mt7902_scan_end(struct ieee80211com *ic)
 	tx_free_bad = sc->tx_free_bad;
 	tx_dma_timeouts = sc->tx_dma_timeouts;
 	tx_pending_count = sc->tx_pending_count;
+	tx_raw = sc->tx_raw_count;
+	tx_raw_reject = sc->tx_raw_reject_count;
+	tx_raw_enqueue_errors = sc->tx_raw_enqueue_errors;
+	tx_submit = sc->tx_submit_count;
+	tx_dma_done = sc->tx_dma_done_count;
 	short_events = sc->rx_event_short_count;
 	unknown = sc->rx_event_unknown_count;
 	irq_count = sc->irq_count;
@@ -539,7 +551,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	event_tail_ctl = sc->rx_event.desc != NULL ?
 	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju bytes=%ju last_txs=%u/%u/%u/%u/%u/%u last_frame=%u:%u/%u/%u fc=%04x hdr=%u rxd4=%08x addr=%u payload=%u\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju bytes=%ju last_txs=%u/%u/%u/%u/%u/%u last_frame=%u:%u/%u/%u fc=%04x hdr=%u rxd4=%08x addr=%u payload=%u tx_path=%ju/%ju/%ju/%ju/%ju\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
 	    (uintmax_t)monitor_errors, (uintmax_t)events,
@@ -560,7 +572,9 @@ mt7902_scan_end(struct ieee80211com *ic)
 	    txs_last_status, txs_last_rate, txs_last_fail_count,
 	    txs_last_retry_count, last_pkt_type, last_channel, last_offset,
 	    last_frame_len, last_fc, last_hdr_len, last_rxd4, last_addr_type,
-	    last_payload_format);
+	    last_payload_format, (uintmax_t)tx_raw, (uintmax_t)tx_raw_reject,
+	    (uintmax_t)tx_raw_enqueue_errors, (uintmax_t)tx_submit,
+	    (uintmax_t)tx_dma_done);
 }
 
 static int
@@ -1115,7 +1129,14 @@ mt7902_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 			m_freem(m);
 		return (EINVAL);
 	}
+	sc = ni->ni_ic->ic_softc;
+	mtx_lock(&sc->mtx);
+	sc->tx_raw_count++;
+	mtx_unlock(&sc->mtx);
 	if (!mt7902_raw_params_supported(params, m)) {
+		mtx_lock(&sc->mtx);
+		sc->tx_raw_reject_count++;
+		mtx_unlock(&sc->mtx);
 		if (m->m_flags & M_TXCB)
 			ieee80211_process_callback(ni, m, 1);
 		m_freem(m);
@@ -1135,11 +1156,13 @@ mt7902_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 		m_freem(m);
 		return (ENOMEM);
 	}
-	sc = ni->ni_ic->ic_softc;
 	{
 		int error = mt7902_tx_enqueue(sc, m);
 
 		if (error != 0) {
+			mtx_lock(&sc->mtx);
+			sc->tx_raw_enqueue_errors++;
+			mtx_unlock(&sc->mtx);
 			if (m->m_flags & M_TXCB)
 				ieee80211_process_callback(ni, m, 1);
 			m_freem(m);
@@ -1412,6 +1435,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	sc->tx_pending[msdu_id].ni = ni;
 	sc->tx_pending[msdu_id].active = true;
 	sc->tx_pending_count++;
+	sc->tx_submit_count++;
 	ring->head = (idx + 1) % ring->ndesc;
 	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	mtx_unlock(&sc->mtx);
@@ -1432,6 +1456,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 		    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 		ring->tail = (idx + 1) % ring->ndesc;
+		sc->tx_dma_done_count++;
 		mtx_unlock(&sc->mtx);
 	} else {
 		/*
