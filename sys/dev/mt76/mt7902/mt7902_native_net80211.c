@@ -708,21 +708,6 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	    ic->ic_channels);
 	if (ic->ic_nchans == 0)
 		return (ENXIO);
-	/*
-	 * Ask Connac2 to pass frames from other BSSs to the host.  The
-	 * software scanner relies on beacon and probe-response RX on the
-	 * ordinary data ring; without OTHER_BSS the MCU can filter them before
-	 * the native net80211 input path ever sees them.
-	 */
-	{
-		int error;
-
-		error = mt7902_mcu_set_rxfilter(sc,
-		    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS);
-		if (error != 0)
-			device_printf(sc->dev,
-			    "could not widen MCU RX filter for scanning: %d\n", error);
-	}
 	ieee80211_ifattach(ic);
 	ic->ic_getradiocaps = mt7902_getradiocaps;
 	ic->ic_vap_create = mt7902_vap_create;
