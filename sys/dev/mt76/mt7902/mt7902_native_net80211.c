@@ -936,6 +936,7 @@ mt7902_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 	const struct ieee80211_bpf_params *params)
 {
 	struct mt7902_softc *sc;
+	struct ieee80211_bpf_params tx_params;
 
 	if (ni == NULL || m == NULL) {
 		if (m != NULL)
