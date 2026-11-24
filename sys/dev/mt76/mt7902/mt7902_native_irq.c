@@ -94,7 +94,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
     size_t dma_len)
 {
 	struct ieee80211_rx_stats rxs;
-	struct ieee80211_frame_min *wh;
+	const struct ieee80211_frame_min *wh;
 	struct mbuf *m;
 	uint32_t rxd0, rxd1, rxd2, rxd3, rcpi_word;
 	uint16_t fc;
@@ -160,7 +160,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	if (frame_len < sizeof(*wh))
 		goto drop;
 
-	wh = (struct ieee80211_frame_min *)(uintptr_t)(data + offset);
+	wh = (const struct ieee80211_frame_min *)(const void *)(data + offset);
 	fc = le16dec(&wh->i_fc[0]);
 	is_mgmt = (fc & 0x000c) == 0;
 	subtype = (fc >> 4) & 0x0f;
@@ -178,8 +178,8 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	m = m_get2(frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL)
 		goto drop;
-	m->m_len = frame_len;
-	m->m_pkthdr.len = frame_len;
+	m->m_len = (int)frame_len;
+	m->m_pkthdr.len = (int)frame_len;
 	memcpy(mtod(m, void *), data + offset, frame_len);
 
 	bzero(&rxs, sizeof(rxs));
