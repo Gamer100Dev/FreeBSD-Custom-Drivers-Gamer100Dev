@@ -164,7 +164,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag, tap_channel;
 	uint16_t tap_freq, tap_chan_flags;
 	int rssi, noise;
-	bool is_mgmt, monitor_active, rcpi_valid;
+	bool is_mgmt, monitor_active, rcpi_valid, monitor_only;
 
 	if (dma_len < 24)
 		goto drop;
@@ -204,7 +204,15 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 * so keep dropping them.  FCS and TKIP-MIC failures are useful to a
 	 * monitor VAP and carry explicit net80211 packet flags below.
 	 */
-	if ((rxd1 & ((1U << 28) | (1U << 25))) != 0 ||
+	/*
+	 * ICV failures are monitor-only (mt7921_mac_fill_rx sets
+	 * RX_FLAG_ONLY_MONITOR). FCS and TKIP-MIC errors can be delivered to
+	 * a monitor VAP with FreeBSD's packet flags; normal VAPs never receive
+	 * those frames.
+	 */
+	monitor_only = (rxd1 & (1U << 25)) != 0;
+	if ((rxd1 & (1U << 28)) != 0 ||
+	    (monitor_only && !monitor_active) ||
 	    (!monitor_active && (rxd1 & ((1U << 26) | (1U << 27))) != 0) ||
 	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24) |
 	    (1U << 25))) != 0)
@@ -338,6 +346,15 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	if (ieee80211_add_rx_params(m, &rxs) == 0) {
 		m_freem(m);
 		goto drop;
+	}
+	if (monitor_only) {
+		mtx_lock(&sc->mtx);
+		sc->rx_monitor_error_count++;
+		mtx_unlock(&sc->mtx);
+		/* Do not let an ICV-failed frame enter the normal STA path. */
+		ieee80211_radiotap_rx_all(&sc->ic, m);
+		m_freem(m);
+		return;
 	}
 	if (sc->net80211_attached)
 		(void)ieee80211_input_mimo_all(&sc->ic, m);
