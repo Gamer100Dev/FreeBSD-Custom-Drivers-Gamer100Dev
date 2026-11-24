@@ -221,6 +221,11 @@ struct mt7902_bss_update {
 struct mt7902_vap {
 	struct ieee80211vap vap;
 	int (*newstate)(struct ieee80211vap *, enum ieee80211_state, int);
+	uint8_t peer_bssid[IEEE80211_ADDR_LEN];
+	uint16_t peer_aid;
+	uint16_t peer_beacon_interval;
+	uint8_t peer_dtim_period;
+	bool peer_qos;
 	bool linked;
 };
 
@@ -434,25 +439,37 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
 	uint8_t peer[IEEE80211_ADDR_LEN], rate;
-	uint16_t aid, supp_rates, basic_rates, legacy;
-	bool band2, rate_basic;
+	uint16_t aid, supp_rates, basic_rates, legacy, beacon_interval;
+	uint8_t dtim_period;
+	bool band2, rate_basic, qos;
 	int i, j, error;
 
-	if (ni != NULL)
+	if (ni != NULL) {
 		IEEE80211_ADDR_COPY(peer, ni->ni_bssid);
-	else if (linked)
+		qos = (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
+		beacon_interval = ni->ni_intval;
+		dtim_period = ni->ni_dtim_period;
+	} else if (linked) {
 		return (EINVAL);
-	else
+	} else if (mvp->linked) {
+		IEEE80211_ADDR_COPY(peer, mvp->peer_bssid);
+		qos = mvp->peer_qos;
+		beacon_interval = mvp->peer_beacon_interval;
+		dtim_period = mvp->peer_dtim_period;
+	} else {
 		IEEE80211_ADDR_COPY(peer, vap->iv_myaddr);
-	aid = linked ? IEEE80211_NODE_AID(ni) : 0;
+		qos = false;
+		beacon_interval = 100;
+		dtim_period = 1;
+	}
+	aid = linked ? IEEE80211_NODE_AID(ni) : mvp->peer_aid;
 	bzero(&bss, sizeof(bss));
 	bss.bss_idx = MT7902_BSS_IDX;
 	bss.basic.tag = htole16(MT7902_UNI_BSS_INFO_BASIC);
 	bss.basic.len = htole16(sizeof(bss.basic));
 	bss.qos.tag = htole16(MT7902_UNI_BSS_INFO_QBSS);
 	bss.qos.len = htole16(sizeof(bss.qos));
-	bss.qos.qos = ni != NULL &&
-	    (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
+	bss.qos.qos = qos;
 	/* Keep the STA BSS object configured; conn_state tracks link state. */
 	bss.basic.active = 1;
 	bss.basic.omac_idx = 0;
@@ -463,8 +480,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.wmm_idx = 0;
 	IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
 	bss.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
-	bss.basic.bcn_interval = htole16(ni != NULL ? ni->ni_intval : 100);
-	bss.basic.dtim_period = ni != NULL ? ni->ni_dtim_period : 1;
+	bss.basic.bcn_interval = htole16(beacon_interval);
+	bss.basic.dtim_period = dtim_period;
 	bss.basic.phymode = 0x07; /* 2.4-GHz 11b/g plus 5-GHz 11a legacy */
 	bss.basic.sta_idx = htole16(MT7902_BSS_WCID);
 	error = mt7902_mcu_send_response(sc,
@@ -491,10 +508,13 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->linked = false;
 		sc->station_linked = 0;
 		sc->station_aid = 0;
-		if (ni != NULL)
-			return (mt7902_sta_disconnect(sc, peer, aid,
-			    (ni->ni_flags & IEEE80211_NODE_QOS) != 0));
-		return (0);
+		error = mt7902_sta_disconnect(sc, peer, aid, qos);
+		bzero(mvp->peer_bssid, sizeof(mvp->peer_bssid));
+		mvp->peer_aid = 0;
+		mvp->peer_beacon_interval = 0;
+		mvp->peer_dtim_period = 0;
+		mvp->peer_qos = false;
+		return (error);
 	}
 
 	/* Tell firmware the association AID/DTIM parameters after BSS setup. */
@@ -513,9 +533,9 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 
 		bzero(&conn, sizeof(conn));
 		conn.bss_idx = MT7902_BSS_IDX;
-		conn.dtim_period = ni->ni_dtim_period;
+		conn.dtim_period = dtim_period;
 		conn.aid = htole16(aid);
-		conn.beacon_interval = htole16(ni->ni_intval);
+		conn.beacon_interval = htole16(beacon_interval);
 		error = mt7902_mcu_send_cmd(sc, MT7902_MCU_CE_CMD(0x16),
 		    &conn, sizeof(conn), false);
 		if (error != 0)
@@ -532,7 +552,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	basic.len = htole16(sizeof(basic));
 	basic.conn_type = htole32(MT7902_CONN_INFRA_AP);
 	basic.conn_state = MT7902_STA_CONN_PORT_SECURE;
-	basic.qos = (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
+	basic.qos = qos;
 	basic.aid = htole16(aid);
 	IEEE80211_ADDR_COPY(basic.peer_addr, peer);
 	basic.extra_info = htole16(3); /* version + newly created */
@@ -602,7 +622,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	wtbl.generic.len = htole16(sizeof(wtbl.generic));
 	IEEE80211_ADDR_COPY(wtbl.generic.peer_addr, peer);
 	wtbl.generic.muar_idx = 0;
-	wtbl.generic.qos = (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
+	wtbl.generic.qos = qos;
 	wtbl.generic.partial_aid = htole16(aid);
 	wtbl.rx.tag = htole16(1); /* WTBL_RX */
 	wtbl.rx.len = htole16(sizeof(wtbl.rx));
@@ -636,9 +656,13 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
 		    request, sizeof(request), NULL, &(size_t){0});
 	}
-	if (error == 0)
-		mvp->linked = true;
 	if (error == 0) {
+		mvp->linked = true;
+		IEEE80211_ADDR_COPY(mvp->peer_bssid, peer);
+		mvp->peer_aid = aid;
+		mvp->peer_beacon_interval = beacon_interval;
+		mvp->peer_dtim_period = dtim_period;
+		mvp->peer_qos = qos;
 		sc->station_linked = 1;
 		sc->station_aid = aid;
 	}
