@@ -277,6 +277,17 @@ struct mt7902_softc {
 	uint64_t		rx_event_count;
 	uint64_t		rx_event_txs_count;
 	uint64_t		rx_event_txs_records;
+	uint64_t		rx_event_txs_failures;
+	uint64_t		rx_event_txs_ack_timeouts;
+	uint64_t		rx_event_txs_rts_timeouts;
+	uint64_t		rx_event_txs_queue_timeouts;
+	uint64_t		rx_event_txs_retries;
+	uint16_t		rx_event_txs_last_wcid;
+	uint8_t		rx_event_txs_last_pid;
+	uint8_t		rx_event_txs_last_status;
+	uint16_t		rx_event_txs_last_rate;
+	uint16_t		rx_event_txs_last_fail_count;
+	uint16_t		rx_event_txs_last_retry_count;
 	uint64_t		rx_event_tx_free_count;
 	uint64_t		rx_event_short_count;
 	uint64_t		rx_event_unknown_count;
