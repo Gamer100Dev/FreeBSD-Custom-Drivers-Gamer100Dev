@@ -219,6 +219,15 @@ struct mt7902_softc {
 	uint32_t		irq_last_status;
 	uint64_t		irq_count;
 	uint64_t		rx_event_count;
+	uint64_t		rx_event_txs_count;
+	uint64_t		rx_event_txs_records;
+	uint64_t		rx_event_tx_free_count;
+	uint64_t		rx_event_short_count;
+	uint64_t		rx_event_unknown_count;
+	uint64_t		rx_data_desc_count;
+	uint32_t		rx_event_last_rxd0;
+	uint16_t		rx_event_last_len;
+	uint8_t		rx_event_last_type;
 	uint64_t		rx_data_count;
 	uint64_t		rx_drop_count;
 	uint64_t		rx_mgmt_count;
