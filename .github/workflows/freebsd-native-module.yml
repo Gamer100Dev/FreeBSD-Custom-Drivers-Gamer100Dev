@@ -3,6 +3,7 @@ name: FreeBSD native RTW88 and MT7902 module build
 on:
   push:
     paths:
+      - ".gitmodules"
       - "CMakeLists.txt"
       - "tools/build-native-module.sh"
       - "sys/dev/rtw88_native/**"
@@ -11,6 +12,7 @@ on:
       - ".github/workflows/freebsd-native-module.yml"
   pull_request:
     paths:
+      - ".gitmodules"
       - "CMakeLists.txt"
       - "tools/build-native-module.sh"
       - "sys/dev/rtw88_native/**"
