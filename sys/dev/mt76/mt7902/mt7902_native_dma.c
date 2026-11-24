@@ -23,6 +23,8 @@
 #define MT7902_TX_RING_REG(q)	(0x54000300 + (q) * MT7902_RING_STRIDE)
 #define MT7902_RX_RING_REG(q)	(0x54000500 + (q) * MT7902_RING_STRIDE)
 #define MT7902_WFDMA_RX_EN	(1U << 2)
+#define MT7902_WFDMA_TX_BUSY	(1U << 1)
+#define MT7902_WFDMA_RX_BUSY	(1U << 3)
 #define MT7902_WFDMA_TX_EN	(1U << 0)
 #define MT7902_WFDMA_TX_WB	(1U << 6)
 #define MT7902_WFDMA_RX_WB	(1U << 13)
@@ -300,11 +302,17 @@ fail:
 void
 mt7902_dma_stop(struct mt7902_softc *sc)
 {
-	int i;
+	int i, error;
 
 	if (sc->mem != NULL) {
 		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN, 0);
 		mt7902_write(sc, MT7902_REG_WFDMA_GLO_CFG, 0);
+		error = mt7902_wait(sc, MT7902_REG_WFDMA_GLO_CFG,
+		    MT7902_WFDMA_TX_BUSY | MT7902_WFDMA_RX_BUSY, 0, 100000);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "WFDMA did not become idle before ring teardown (GLO=%08x)\\n",
+			    mt7902_read(sc, MT7902_REG_WFDMA_GLO_CFG));
 	}
 	for (i = 0; i < MT7902_TX_DATA_QUEUES; i++)
 		mt7902_ring_free(&sc->tx_data[i]);
