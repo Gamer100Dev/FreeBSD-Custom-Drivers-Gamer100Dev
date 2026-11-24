@@ -289,6 +289,7 @@ struct mt7902_softc {
 	uint64_t		rx_drop_count;
 	uint64_t		rx_mgmt_count;
 	uint64_t		rx_beacon_count;
+	uint64_t		rx_monitor_error_count;
 	uint32_t		rx_last_len;
 	uint32_t		rx_last_rxd[4];
 	uint8_t		mcu_seq;
