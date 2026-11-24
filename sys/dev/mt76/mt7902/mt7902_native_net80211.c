@@ -46,6 +46,12 @@
 #define MT7902_UNI_BSS_INFO_QBSS	15
 #define MT7902_STA_REC_STATE	7
 #define MT7902_STA_REC_RA		1
+#define MT7902_PHY_TYPE_HR_DSSS	(1U << 0)
+#define MT7902_PHY_TYPE_ERP		(1U << 1)
+#define MT7902_PHY_TYPE_OFDM		(1U << 3)
+#define MT7902_BSS_PHY_A		(1U << 0)
+#define MT7902_BSS_PHY_B		(1U << 1)
+#define MT7902_BSS_PHY_G		(1U << 2)
 #define MT7902_STA_REC_PHY		0x15
 #define MT7902_RA_LEGACY_CCK		0x000fU
 #define MT7902_STA_CONN_PORT_SECURE	2
@@ -516,7 +522,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	static const uint8_t legacy_hw_rates[] = {
 		10, 20, 55, 110, 11, 15, 10, 14, 9, 13, 8, 12
 	};
-	uint8_t peer[IEEE80211_ADDR_LEN], rate;
+	uint8_t peer[IEEE80211_ADDR_LEN], rate, phy_type;
 	uint16_t aid, supp_rates, basic_rates, legacy, beacon_interval;
 	uint8_t dtim_period;
 	bool band2, rate_basic, qos;
@@ -557,6 +563,14 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.conn_state = linked ? 0 : 1;
 	bss.basic.wmm_idx = 0;
 	IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
+	band2 = IEEE80211_IS_CHAN_2GHZ(ni->ni_chan);
+	phy_type = band2 ?
+	    (MT7902_PHY_TYPE_HR_DSSS | MT7902_PHY_TYPE_ERP) :
+	    MT7902_PHY_TYPE_OFDM;
+	bss.basic.phymode = band2 ?
+	    (MT7902_BSS_PHY_B | MT7902_BSS_PHY_G) : MT7902_BSS_PHY_A;
+	bss.basic.nonht_basic_phy = htole16(phy_type);
+	bss.basic.sta_idx = htole16(MT7902_PEER_WCID);
 	bss.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
 	bss.basic.bcn_interval = htole16(beacon_interval);
 	bss.basic.dtim_period = dtim_period;
@@ -643,7 +657,6 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	 * FreeBSD node rateset.  HT/VHT/HE masks stay zero because this
 	 * interface advertises legacy modes only.
 	 */
-	band2 = IEEE80211_IS_CHAN_2GHZ(ni->ni_chan);
 	supp_rates = 0;
 	basic_rates = 0;
 	for (i = 0; i < ni->ni_rates.rs_nrates; i++) {
@@ -700,8 +713,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	phy.tag = htole16(MT7902_STA_REC_PHY);
 	phy.len = htole16(sizeof(phy));
 	phy.basic_rate = htole16(basic_rates);
-	/* PHY_MODE_B|PHY_MODE_G for 2.4 GHz, PHY_MODE_A for 5 GHz. */
-	phy.phy_type = band2 ? ((1U << 1) | (1U << 2)) : (1U << 0);
+	phy.phy_type = phy_type;
 
 	bzero(&ra, sizeof(ra));
 	ra.tag = htole16(MT7902_STA_REC_RA);
