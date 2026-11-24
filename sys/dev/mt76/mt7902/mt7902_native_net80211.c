@@ -909,7 +909,8 @@ mt7902_raw_params_supported(const struct ieee80211_bpf_params *params,
 	if (params->ibp_vers != 0 || params->ibp_len != 0 ||
 	    (params->ibp_flags & ~IEEE80211_BPF_NOACK) != 0 ||
 	    params->ibp_pri > WME_AC_VO || params->ibp_try0 > 15 ||
-	    params->ibp_ctsrate != 0 || params->ibp_try1 != 0 ||
+	    params->ibp_power != 0 || params->ibp_ctsrate != 0 ||
+	    params->ibp_try1 != 0 ||
 	    params->ibp_rate1 != 0 || params->ibp_try2 != 0 ||
 	    params->ibp_rate2 != 0 || params->ibp_try3 != 0 ||
 	    params->ibp_rate3 != 0)
@@ -1158,7 +1159,10 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	if (fixed_rate)
 		val |= MT7902_TXD_FIX_RATE;
 	txwi[2] = htole32(val);
-	txwi[3] = htole32(MT7902_TXD_RETRY);
+	val = MT7902_TXD_RETRY;
+	if (has_tx_params && !noack)
+		val = (uint32_t)tx_params.ibp_try0 << 11;
+	txwi[3] = htole32(val);
 	if (noack)
 		txwi[3] |= htole32(MT7902_TXD_NO_ACK);
 	txwi[4] = 0;
@@ -1166,9 +1170,8 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	txwi[6] = 0;
 	/*
 	 * Connac2 MT_TX_RATE_MODE / MT_TX_RATE_IDX live in TXD6[29:16].
-	 * Use the lowest legal basic rate until net80211 basic-rate and
-	 * negotiated station rate control are plumbed: 1 Mbps CCK on 2.4 GHz,
-	 * 6 Mbps OFDM on 5 GHz.
+	 * Prefer an explicit BPF rate, then the AP's negotiated basic rate,
+	 * then the 1 Mbps CCK / 6 Mbps OFDM default for unassociated operation.
 	 */
 	if (fixed_rate) {
 		rate = 0;
