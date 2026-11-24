@@ -405,6 +405,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->rx_drop_count = 0;
 	sc->rx_mgmt_count = 0;
 	sc->rx_beacon_count = 0;
+	sc->rx_monitor_error_count = 0;
 	sc->rx_event_count = 0;
 	sc->rx_event_txs_count = 0;
 	sc->rx_event_txs_records = 0;
@@ -435,6 +436,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
 	uint64_t rx, rx_desc, rx_fallback, dropped, mgmt, beacon;
+	uint64_t monitor_errors;
 	uint64_t events, txs, txs_records, tx_free, short_events, unknown;
 	uint64_t tx_free_records, tx_free_failures, tx_free_retries;
 	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_timeouts;
@@ -453,6 +455,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	dropped = sc->rx_drop_count;
 	mgmt = sc->rx_mgmt_count;
 	beacon = sc->rx_beacon_count;
+	monitor_errors = sc->rx_monitor_error_count;
 	events = sc->rx_event_count;
 	txs = sc->rx_event_txs_count;
 	txs_records = sc->rx_event_txs_records;
@@ -488,10 +491,10 @@ mt7902_scan_end(struct ieee80211com *ic)
 	event_tail_ctl = sc->rx_event.desc != NULL ?
 	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
-	    (uintmax_t)events,
+	    (uintmax_t)monitor_errors, (uintmax_t)events,
 	    (uintmax_t)txs, (uintmax_t)txs_records, (uintmax_t)tx_free,
 	    (uintmax_t)tx_free_records, (uintmax_t)tx_free_failures,
 	    (uintmax_t)tx_free_retries, (uintmax_t)tx_pending_count,
