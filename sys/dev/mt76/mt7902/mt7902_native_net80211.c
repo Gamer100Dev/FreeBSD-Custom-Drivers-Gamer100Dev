@@ -54,6 +54,10 @@ struct mt7902_txp {
 	struct mt7902_txp_ptr ptr[2];
 } __packed;
 
+CTASSERT(sizeof(struct mt7902_txp_ptr) == 12);
+CTASSERT(sizeof(struct mt7902_txp) == MT7902_TXP_LEN);
+CTASSERT(MT7902_TXD_LEN == 64);
+
 struct mt7902_sta_req_hdr {
 	uint8_t bss_idx;
 	uint8_t wlan_idx_lo;
