@@ -200,11 +200,6 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	    pkt_type != MT7902_PKT_TYPE_NORMAL_MCU)
 		goto drop;
 	/*
-	 * ICV/CCMP MIC failures have no equivalent generic FreeBSD RX flag,
-	 * so keep dropping them.  FCS and TKIP-MIC failures are useful to a
-	 * monitor VAP and carry explicit net80211 packet flags below.
-	 */
-	/*
 	 * ICV failures are monitor-only (mt7921_mac_fill_rx sets
 	 * RX_FLAG_ONLY_MONITOR). FCS and TKIP-MIC errors can be delivered to
 	 * a monitor VAP with FreeBSD's packet flags; normal VAPs never receive
