@@ -29,6 +29,10 @@
 #define MT7902_TXD_WLAN_IDX_SHIFT	0
 #define MT7902_TXD_FIX_RATE	(1U << 31)
 #define MT7902_TXD_RETRY	(15U << 11)
+#define MT7902_TXD_BA_DISABLE	(1U << 28)
+#define MT7902_TXD_HTC_VALID	(1U << 13)
+#define MT7902_TXD6_FIXED_BW	(1U << 2)
+#define MT7902_TXD6_TX_RATE_SHIFT	16
 #define MT7902_TXP_LAST		(1U << 15)
 #define MT7902_STA_REC_BASIC	0
 #define MT7902_STA_REC_STATE	7
@@ -584,6 +588,47 @@ mt7902_transmit(struct ieee80211com *ic, struct mbuf *m)
 	return (mt7902_tx_enqueue(ic->ic_softc, m));
 }
 
+/*
+ * Return the actual 802.11 MAC header length represented by frame control.
+ * The first 16 bytes are common to most control frames, but management and
+ * data frames include addr3 and sequence control before optional fields.
+ */
+static size_t
+mt7902_80211_hdrlen(uint16_t fc)
+{
+	size_t len;
+	uint16_t type, subtype;
+
+	type = fc & 0x000c;
+	subtype = (fc >> 4) & 0x0f;
+	switch (type) {
+	case 0x0000:             /* management */
+		len = sizeof(struct ieee80211_frame);
+		if (fc & 0x8000)       /* Order / HT control */
+			len += 4;
+		break;
+	case 0x0004:             /* control */
+		if (subtype == 0x0c || subtype == 0x0d)
+			len = sizeof(struct ieee80211_frame_cts);
+		else
+			len = sizeof(struct ieee80211_frame_min);
+		break;
+	case 0x0008:             /* data */
+		len = sizeof(struct ieee80211_frame);
+		if ((fc & 0x0300) == 0x0300)
+			len += IEEE80211_ADDR_LEN;
+		if (subtype & 0x08)
+			len += 2;       /* QoS control */
+		if (fc & 0x8000)
+			len += 4;       /* HT control */
+		break;
+	default:
+		len = 0;
+		break;
+	}
+	return (len);
+}
+
 static int
 mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 {
@@ -599,23 +644,15 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	ring = &sc->tx_data;
 	len = m->m_pkthdr.len;
 	total = MT7902_TXD_LEN + len;
-	if (len < sizeof(wh) || total > ring->buf[0].len ||
-	    len > MT7902_TXP_LEN_MASK)
+	if (len < sizeof(struct ieee80211_frame_cts) ||
+	    total > ring->buf[0].len || len > MT7902_TXP_LEN_MASK)
 		return (EMSGSIZE);
-	m_copydata(m, 0, sizeof(wh), (caddr_t)&wh);
+	bzero(&wh, sizeof(wh));
+	m_copydata(m, 0, MIN(len, sizeof(wh)), (caddr_t)&wh);
 	fc = le16toh(wh.i_fc[0] | ((uint16_t)wh.i_fc[1] << 8));
-	hdrlen = sizeof(wh);
-	if ((fc & 0x000c) == 0x0004)
-		hdrlen = ((fc & 0x00f0) == 0x00c0 ||
-		    (fc & 0x00f0) == 0x00d0) ? 10 : 16;
-	else if ((fc & 0x000c) == 0x0008) {
-		if ((fc & 0x0300) == 0x0300)
-			hdrlen += 6;
-		if ((fc & 0x0080) != 0)
-			hdrlen += 2;
-		if ((fc & 0x8000) != 0)
-			hdrlen += 4;
-	}
+	hdrlen = mt7902_80211_hdrlen(fc);
+	if (hdrlen == 0 || len < hdrlen)
+		return (EMSGSIZE);
 	mtx_lock(&sc->mtx);
 	idx = ring->head;
 	desc = &ring->desc[idx];
@@ -641,16 +678,23 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	    (((fc & 0x0c) >> 2) << 4) | ((fc & 0xf0) >> 4);
 	if (ETHER_IS_MULTICAST(wh.i_addr1))
 		val |= 1U << 10;
-	if ((fc & 0x000c) == 0 || ETHER_IS_MULTICAST(wh.i_addr1))
-		val |= MT7902_TXD_FIX_RATE;
+	if ((fc & 0x000c) == 0 || ETHER_IS_MULTICAST(wh.i_addr1)) {
+		val |= MT7902_TXD_FIX_RATE | MT7902_TXD_HTC_VALID;
+		txwi[3] |= htole32(MT7902_TXD_BA_DISABLE);
+	}
 	txwi[2] = htole32(val);
 	txwi[3] = htole32(MT7902_TXD_RETRY);
 	txwi[4] = 0;
 	txwi[5] = 0;
-	val = 1U << 2;	/* fixed 20 MHz legacy rate */
-	if (sc->current_band == 5)
-		val |= 1U << 6;	/* OFDM 6 Mbps in 5 GHz */
-	txwi[6] = htole32(val);
+	/*
+	 * Connac2 MT_TX_RATE_MODE / MT_TX_RATE_IDX live in TXD6[29:16].
+	 * Use the lowest legal basic rate until net80211 basic-rate and
+	 * negotiated station rate control are plumbed: 1 Mbps CCK on 2.4 GHz,
+	 * 6 Mbps OFDM on 5 GHz.
+	 */
+	val = sc->current_band == 5 ? ((1U << 6) | 11U) : 10U;
+	txwi[6] = htole32((val << MT7902_TXD6_TX_RATE_SHIFT) |
+	    MT7902_TXD6_FIXED_BW);
 	txwi[7] = htole32((((fc & 0x0c) >> 2) << 20) |
 	    (((fc & 0xf0) >> 4) << 16));
 	if ((fc & 0x000c) == 0)
