@@ -20,10 +20,14 @@
 
 #include "if_mt7902_native.h"
 
+#include <net80211/ieee80211_proto.h>
+
 static int mt7902_probe(device_t);
 static int mt7902_attach(device_t);
 static int mt7902_detach(device_t);
 static int mt7902_sysctl_hw_start(SYSCTL_HANDLER_ARGS);
+static int mt7902_suspend(device_t);
+static int mt7902_resume(device_t);
 
 int
 mt7902_sysctl_init(struct mt7902_softc *sc)
@@ -58,7 +62,7 @@ mt7902_sysctl_hw_start(SYSCTL_HANDLER_ARGS)
 		return (EINVAL);
 
 	mtx_lock(&sc->mtx);
-	if (sc->dying || sc->hw_starting) {
+	if (sc->dying || sc->hw_starting || sc->suspended) {
 		mtx_unlock(&sc->mtx);
 		return (EBUSY);
 	}
@@ -344,10 +348,93 @@ mt7902_detach(device_t dev)
 	return (0);
 }
 
+/*
+ * Suspend all net80211 VAPs before stopping firmware and WFDMA.  The
+ * net80211 core remembers which VAPs were running and resume_all() restores
+ * their states only after the firmware and DMA rings are ready again.
+ */
+static int
+mt7902_suspend(device_t dev)
+{
+	struct mt7902_softc *sc;
+	bool was_started;
+
+	sc = device_get_softc(dev);
+	mtx_lock(&sc->mtx);
+	if (sc->dying || sc->suspended) {
+		mtx_unlock(&sc->mtx);
+		return (sc->dying ? ENXIO : 0);
+	}
+	was_started = sc->hw_started != 0;
+	sc->suspended = true;
+	sc->suspend_was_started = was_started;
+	mtx_unlock(&sc->mtx);
+
+	if (sc->net80211_attached)
+		ieee80211_suspend_all(&sc->ic);
+	if (was_started) {
+		mt7902_irq_teardown(sc);
+		mt7902_dma_stop(sc);
+		mtx_lock(&sc->mtx);
+		sc->hw_started = 0;
+		mtx_unlock(&sc->mtx);
+	}
+	return (0);
+}
+
+static int
+mt7902_resume(device_t dev)
+{
+	struct mt7902_softc *sc;
+	bool was_started;
+	int error;
+
+	sc = device_get_softc(dev);
+	mtx_lock(&sc->mtx);
+	if (!sc->suspended) {
+		mtx_unlock(&sc->mtx);
+		return (0);
+	}
+	if (sc->dying || sc->hw_starting) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
+	was_started = sc->suspend_was_started;
+	sc->hw_starting = was_started;
+	mtx_unlock(&sc->mtx);
+
+	if (was_started) {
+		pci_enable_busmaster(dev);
+		error = mt7902_fw_boot(sc);
+		if (error != 0) {
+			mtx_lock(&sc->mtx);
+			sc->hw_starting = 0;
+			mtx_unlock(&sc->mtx);
+			device_printf(dev, "firmware restart after suspend failed: %d\\n",
+			    error);
+			return (error);
+		}
+	}
+
+	mtx_lock(&sc->mtx);
+	if (was_started)
+		sc->hw_started = 1;
+	sc->suspend_was_started = false;
+	sc->suspended = false;
+	sc->hw_starting = 0;
+	mtx_unlock(&sc->mtx);
+
+	if (was_started && sc->net80211_attached)
+		ieee80211_resume_all(&sc->ic);
+	return (0);
+}
+
 static device_method_t mt7902_methods[] = {
 	DEVMETHOD(device_probe, mt7902_probe),
 	DEVMETHOD(device_attach, mt7902_attach),
 	DEVMETHOD(device_detach, mt7902_detach),
+	DEVMETHOD(device_suspend, mt7902_suspend),
+	DEVMETHOD(device_resume, mt7902_resume),
 	DEVMETHOD_END
 };
 
