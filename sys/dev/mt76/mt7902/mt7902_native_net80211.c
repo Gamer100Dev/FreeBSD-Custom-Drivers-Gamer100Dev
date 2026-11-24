@@ -509,9 +509,11 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	}
 	if (!linked) {
 		mvp->linked = false;
+		mtx_lock(&sc->mtx);
 		sc->station_linked = 0;
 		sc->station_aid = 0;
 		sc->station_basic_rate = 0;
+		mtx_unlock(&sc->mtx);
 		error = mt7902_sta_disconnect(sc, peer, aid, qos);
 		bzero(mvp->peer_bssid, sizeof(mvp->peer_bssid));
 		mvp->peer_aid = 0;
@@ -693,8 +695,10 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->peer_beacon_interval = beacon_interval;
 		mvp->peer_dtim_period = dtim_period;
 		mvp->peer_qos = qos;
+		mtx_lock(&sc->mtx);
 		sc->station_linked = 1;
 		sc->station_aid = aid;
+		mtx_unlock(&sc->mtx);
 	}
 	return (error);
 }
@@ -1008,8 +1012,10 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	struct ieee80211_frame_min wh;
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen;
+	uint16_t tx_basic_rate;
+	uint8_t current_band;
 	int idx, retry, error, queue;
-	bool fixed_rate;
+	bool fixed_rate, station_linked;
 
 	/* FreeBSD WME order is BE/BK/VI/VO; Connac2 LMAC is reversed. */
 	queue = 3 - M_WME_GETAC(m);
@@ -1031,6 +1037,9 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	idx = ring->head;
 	desc = &ring->desc[idx];
 	buf = &ring->buf[idx];
+	station_linked = sc->station_linked != 0;
+	current_band = sc->current_band;
+	tx_basic_rate = sc->station_basic_rate;
 	mtx_unlock(&sc->mtx);
 
 	/*
@@ -1065,7 +1074,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	    (0U << MT7902_TXD_PKT_FMT_SHIFT) |
 	    ((uint32_t)queue << MT7902_TXD_QIDX_SHIFT);
 	txwi[0] = htole32(val);
-	val = MT7902_TXD_LONG | ((uint32_t)(sc->station_linked ?
+	val = MT7902_TXD_LONG | ((uint32_t)(station_linked ?
 	    MT7902_PEER_WCID : MT7902_BSS_WCID) << MT7902_TXD_WLAN_IDX_SHIFT);
 	txwi[1] = htole32(val);
 	val = MT7902_TXD_HDR_80211 |
@@ -1089,12 +1098,10 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	 * 6 Mbps OFDM on 5 GHz.
 	 */
 	if (fixed_rate) {
-		mtx_lock(&sc->mtx);
-		rate = sc->station_basic_rate;
+		rate = tx_basic_rate;
 		if (rate == 0)
-			rate = sc->current_band == 5 ?
+			rate = current_band == 5 ?
 			    ((1U << 6) | 11U) : 10U;
-		mtx_unlock(&sc->mtx);
 		txwi[2] |= htole32(MT7902_TXD_HTC_VALID);
 		txwi[3] |= htole32(MT7902_TXD_BA_DISABLE);
 		txwi[6] = htole32((rate << MT7902_TXD6_TX_RATE_SHIFT) |
