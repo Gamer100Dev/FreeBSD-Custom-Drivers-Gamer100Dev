@@ -37,6 +37,8 @@
 #define MT7902_TXD6_TX_RATE_SHIFT	16
 #define MT7902_TXP_LAST		(1U << 15)
 #define MT7902_STA_REC_BASIC	0
+#define MT7902_UNI_BSS_INFO_BASIC	0
+#define MT7902_UNI_BSS_INFO_QBSS	15
 #define MT7902_STA_REC_STATE	7
 #define MT7902_STA_CONN_PORT_SECURE	2
 #define MT7902_STA_CONN_DISCONNECT	0
@@ -116,10 +118,18 @@ struct mt7902_bss_basic {
 	uint8_t link_idx;
 } __packed;
 
+struct mt7902_bss_qos {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t qos;
+	uint8_t pad[3];
+} __packed;
+
 struct mt7902_bss_update {
 	uint8_t bss_idx;
 	uint8_t reserved[3];
 	struct mt7902_bss_basic basic;
+	struct mt7902_bss_qos qos;
 } __packed;
 
 struct mt7902_vap {
@@ -282,19 +292,21 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	uint16_t aid;
 	int error;
 
-	if (linked) {
-		if (ni == NULL)
-			return (EINVAL);
+	if (ni != NULL)
 		IEEE80211_ADDR_COPY(peer, ni->ni_bssid);
-		aid = IEEE80211_NODE_AID(ni);
-	} else {
+	else if (linked)
+		return (EINVAL);
+	else
 		IEEE80211_ADDR_COPY(peer, vap->iv_myaddr);
-		aid = 0;
-	}
+	aid = linked ? IEEE80211_NODE_AID(ni) : 0;
 	bzero(&bss, sizeof(bss));
 	bss.bss_idx = MT7902_BSS_IDX;
-	bss.basic.tag = htole16(0); /* UNI_BSS_INFO_BASIC */
+	bss.basic.tag = htole16(MT7902_UNI_BSS_INFO_BASIC);
 	bss.basic.len = htole16(sizeof(bss.basic));
+	bss.qos.tag = htole16(MT7902_UNI_BSS_INFO_QBSS);
+	bss.qos.len = htole16(sizeof(bss.qos));
+	bss.qos.qos = ni != NULL &&
+	    (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
 	/* Keep the STA BSS object configured; conn_state tracks link state. */
 	bss.basic.active = 1;
 	bss.basic.omac_idx = 0;
