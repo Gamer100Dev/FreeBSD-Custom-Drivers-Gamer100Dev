@@ -152,7 +152,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	size_t offset, frame_len, hdr_len;
 	uint8_t channel, rcpi, subtype;
 	int rssi, noise;
-	bool is_mgmt, monitor_active;
+	bool is_mgmt, monitor_active, rcpi_valid;
 
 	if (dma_len < 24)
 		goto drop;
@@ -202,11 +202,13 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		offset += 8;              /* RXD GROUP_2 */
 
 	rcpi = 0;
+	rcpi_valid = false;
 	if (rxd1 & (1U << 13)) {
 		if (offset > dma_len || dma_len - offset < 8)
 			goto drop;
 		rcpi_word = le32dec(data + offset + 4);
 		rcpi = rcpi_word & 0xff;  /* PRXV RCPI0 */
+		rcpi_valid = true;
 		offset += 8;              /* RXD GROUP_3 */
 		if (rxd1 & (1U << 15)) {
 			if (offset > dma_len || dma_len - offset < 72)
@@ -214,6 +216,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 			offset += 24;         /* GROUP_5 prefix */
 			rcpi_word = le32dec(data + offset);
 			rcpi = rcpi_word & 0xff;
+			rcpi_valid = true;
 			offset += 48;         /* GROUP_5 RX vector */
 		}
 	}
@@ -242,7 +245,8 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 
 	/* RCPI is 0.5 dB steps with a 220 offset, per Connac2 PRXV. */
 	noise = -95;
-	rssi = rcpi != 0 ? ((int)rcpi - 220) / 2 : noise;
+	rssi = rcpi_valid ? MAX(-110, MIN(0, ((int)rcpi - 220) / 2)) :
+	    noise;
 	m = m_get2((int)frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL)
 		goto drop;
@@ -251,9 +255,12 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	memcpy(mtod(m, void *), data + offset, frame_len);
 
 	bzero(&rxs, sizeof(rxs));
-	rxs.r_flags = IEEE80211_R_NF | IEEE80211_R_RSSI;
+	rxs.r_flags = IEEE80211_R_NF;
 	rxs.c_nf = noise;
-	rxs.c_rssi = (int8_t)(rssi - noise);
+	if (rcpi_valid) {
+		rxs.r_flags |= IEEE80211_R_RSSI;
+		rxs.c_rssi = (int8_t)(rssi - noise);
+	}
 	if (rxd1 & (1U << 27))
 		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_FCSCRC;
 	if (rxd1 & (1U << 26))
