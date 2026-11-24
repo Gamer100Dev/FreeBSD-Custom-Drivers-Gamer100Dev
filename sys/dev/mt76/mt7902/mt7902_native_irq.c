@@ -37,6 +37,12 @@
 #define MT7902_PKT_TYPE_TXRX_NOTIFY	6
 #define MT7902_PKT_TYPE_RX_EVENT	7
 #define MT7902_PKT_TYPE_NORMAL_MCU	8
+#define MT7902_TX_FREE_MSDU_CNT_MASK	0x03ffU
+#define MT7902_TX_FREE_COUNT_MASK	0x1fffU
+#define MT7902_TX_FREE_STATUS_MASK	0x3U
+#define MT7902_TX_FREE_STATUS_SHIFT	13
+#define MT7902_TX_FREE_MSDU_ID_SHIFT	16
+#define MT7902_TX_FREE_PAIR		(1U << 31)
 #define MT7902_RXD1_GROUP1	(1U << 11)
 #define MT7902_RXD1_GROUP2	(1U << 12)
 #define MT7902_RXD1_GROUP3	(1U << 13)
@@ -353,6 +359,111 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 }
 
 /*
+ * Process a Connac2 TX_FREE notification. The TXP token is queue*ring_size
+ * + descriptor_index, so it is unique across all four host data queues.
+ * Each non-pair record releases one original mbuf/node held until firmware
+ * reports an over-the-air result.
+ */
+static void
+mt7902_rx_tx_free(struct mt7902_softc *sc, const uint8_t *data, size_t len)
+{
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+	uint32_t info;
+	uint16_t count;
+	uint16_t msdu_id;
+	uint8_t status;
+	size_t offset, max_records;
+	uint64_t records, failures, retries, unknown, pairs;
+	unsigned int expected, processed, attempts;
+
+	records = failures = retries = unknown = pairs = 0;
+	if (len < 8) {
+		mtx_lock(&sc->mtx);
+		sc->tx_free_bad++;
+		mtx_unlock(&sc->mtx);
+		return;
+	}
+
+	count = le16dec(data + 2) & MT7902_TX_FREE_MSDU_CNT_MASK;
+	offset = 8; /* struct mt76_connac_tx_free */
+	max_records = (len - offset) / sizeof(uint32_t);
+	expected = count;
+	if (expected > max_records) {
+		mtx_lock(&sc->mtx);
+		sc->tx_free_bad++;
+		mtx_unlock(&sc->mtx);
+		return;
+	}
+
+	for (processed = 0; processed < expected; processed++) {
+		if (offset + sizeof(uint32_t) > len) {
+			mtx_lock(&sc->mtx);
+			sc->tx_free_bad++;
+			mtx_unlock(&sc->mtx);
+			break;
+		}
+		info = le32dec(data + offset);
+		offset += sizeof(uint32_t);
+
+		/* A pair record establishes the WCID for following MSDUs. */
+		if ((info & MT7902_TX_FREE_PAIR) != 0) {
+			pairs++;
+			expected++;
+			if (expected > max_records) {
+				mtx_lock(&sc->mtx);
+				sc->tx_free_bad++;
+				mtx_unlock(&sc->mtx);
+				break;
+			}
+			continue;
+		}
+
+		msdu_id = (info >> MT7902_TX_FREE_MSDU_ID_SHIFT) & 0x7fff;
+		status = (info >> MT7902_TX_FREE_STATUS_SHIFT) &
+		    MT7902_TX_FREE_STATUS_MASK;
+		attempts = info & MT7902_TX_FREE_COUNT_MASK;
+		records++;
+		if (status != 0)
+			failures++;
+		if (attempts > 0)
+			retries += attempts - 1;
+
+		if (msdu_id >= MT7902_TX_PENDING_COUNT) {
+			unknown++;
+			continue;
+		}
+		mtx_lock(&sc->mtx);
+		if (!sc->tx_pending[msdu_id].active) {
+			unknown++;
+			mtx_unlock(&sc->mtx);
+			continue;
+		}
+		m = sc->tx_pending[msdu_id].m;
+		ni = sc->tx_pending[msdu_id].ni;
+		bzero(&sc->tx_pending[msdu_id],
+		    sizeof(sc->tx_pending[msdu_id]));
+		if (sc->tx_pending_count != 0)
+			sc->tx_pending_count--;
+		mtx_unlock(&sc->mtx);
+
+		/* ieee80211_tx_complete may acquire net80211 locks. */
+		if (ni != NULL)
+			ieee80211_tx_complete(ni, m, status != 0);
+		else if (m != NULL)
+			m_freem(m);
+	}
+
+	mtx_lock(&sc->mtx);
+	sc->tx_free_records += records;
+	sc->tx_free_failures += failures;
+	sc->tx_free_retries += retries;
+	sc->tx_free_unknown += unknown;
+	sc->tx_free_pairs += pairs;
+	mtx_unlock(&sc->mtx);
+}
+
+/*
  * RX ring 0 is shared by MCU events and TX status notifications on MT7902.
  * Dispatch by RXD0 packet type just as mt7921_queue_rx_skb() does. In
  * particular, TXS notifications can be shorter than a full MCU RXD header;
@@ -439,15 +550,10 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 			break;
 
 		case MT7902_PKT_TYPE_TXRX_NOTIFY:
-			/*
-			 * TX free notifications share this ring too. TX descriptors
-			 * are currently reclaimed by the native WFDMA completion
-			 * path, so count and consume the notification without
-			 * mistaking it for an MCU command response.
-			 */
 			mtx_lock(&sc->mtx);
 			sc->rx_event_tx_free_count++;
 			mtx_unlock(&sc->mtx);
+			mt7902_rx_tx_free(sc, data, dma_len);
 			break;
 
 		case MT7902_PKT_TYPE_NORMAL:
