@@ -100,6 +100,28 @@
 #define MT7902_TXP_LEN_MASK	0x0fffU
 #define MT7902_DMA_LEN_SHIFT	16
 
+/* Per-scan RX drop accounting; keep values stable for diagnostic output. */
+enum mt7902_rx_drop_reason {
+	MT7902_RX_DROP_SHORT = 0,
+	MT7902_RX_DROP_BAD_CHANNEL,
+	MT7902_RX_DROP_BAD_PACKET_TYPE,
+	MT7902_RX_DROP_HDR_TRANS,
+	MT7902_RX_DROP_ICV,
+	MT7902_RX_DROP_FCS,
+	MT7902_RX_DROP_MIC,
+	MT7902_RX_DROP_RXD_ERROR,
+	MT7902_RX_DROP_PAYLOAD_FORMAT,
+	MT7902_RX_DROP_GROUP_TRUNCATED,
+	MT7902_RX_DROP_BAD_OFFSET,
+	MT7902_RX_DROP_SHORT_FRAME,
+	MT7902_RX_DROP_BAD_HEADER,
+	MT7902_RX_DROP_NOMEM,
+	MT7902_RX_DROP_RX_PARAMS,
+	MT7902_RX_DROP_NOT_ATTACHED,
+	MT7902_RX_DROP_INVALID_DMA,
+	MT7902_RX_DROP_REASON_COUNT
+};
+
 #define MT7902_MCU_PKT_ID	0xa0
 #define MT7902_MCU_CMD_FW_SCATTER	0xee
 #define MT7902_MCU_CMD_PATCH_START	0x05
@@ -318,6 +340,29 @@ struct mt7902_softc {
 	uint8_t		rx_last_addr_type;
 	uint8_t		rx_last_payload_format;
 	uint8_t		rx_last_channel;
+
+	/* Verbose RX/scan diagnostics, reset at the start of each scan. */
+	int			rx_debug;
+	uint64_t		rx_drop_reason[MT7902_RX_DROP_REASON_COUNT];
+	uint64_t		rx_frame_type[4];
+	uint64_t		rx_mgmt_subtype[16];
+	uint64_t		rx_channel_frames[256];
+	uint64_t		rx_event_type_count[16];
+	uint64_t		irq_bit_count[32];
+	uint32_t		rx_last_drop_rxd[5];
+	uint16_t		rx_last_drop_len;
+	uint8_t		rx_last_drop_reason;
+	uint64_t		rx_input_count;
+	uint64_t		chan_switch_count;
+	uint64_t		chan_switch_failures;
+	uint8_t		chan_last_request;
+	uint8_t		chan_last_band;
+	uint32_t		chan_last_flags;
+	int			chan_last_result;
+	bool			chan_last_scan;
+	uint64_t		rx_filter_count;
+	uint32_t		rx_filter_flags;
+	int			rx_filter_error;
 	uint8_t		mcu_seq;
 	uint8_t		mcu_wait_seq;
 	uint8_t		mcu_wait_cmd;

@@ -101,12 +101,59 @@ mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
 	return (0);
 }
 
-static void
-mt7902_rx_drop(struct mt7902_softc *sc)
+static const char *
+mt7902_rx_drop_name(enum mt7902_rx_drop_reason reason)
 {
+	switch (reason) {
+	case MT7902_RX_DROP_SHORT: return ("short-rxd");
+	case MT7902_RX_DROP_BAD_CHANNEL: return ("bad-channel");
+	case MT7902_RX_DROP_BAD_PACKET_TYPE: return ("bad-packet-type");
+	case MT7902_RX_DROP_HDR_TRANS: return ("header-translated");
+	case MT7902_RX_DROP_ICV: return ("icv-monitor-only");
+	case MT7902_RX_DROP_FCS: return ("fcs-error");
+	case MT7902_RX_DROP_MIC: return ("mic-error");
+	case MT7902_RX_DROP_RXD_ERROR: return ("rxd-error-bits");
+	case MT7902_RX_DROP_PAYLOAD_FORMAT: return ("amsdu-payload-format");
+	case MT7902_RX_DROP_GROUP_TRUNCATED: return ("truncated-rx-group");
+	case MT7902_RX_DROP_BAD_OFFSET: return ("bad-frame-offset");
+	case MT7902_RX_DROP_SHORT_FRAME: return ("short-80211-frame");
+	case MT7902_RX_DROP_BAD_HEADER: return ("invalid-80211-header");
+	case MT7902_RX_DROP_NOMEM: return ("mbuf-allocation");
+	case MT7902_RX_DROP_RX_PARAMS: return ("rx-params-attach");
+	case MT7902_RX_DROP_NOT_ATTACHED: return ("net80211-not-attached");
+	case MT7902_RX_DROP_INVALID_DMA: return ("invalid-dma-length");
+	default: return ("unknown");
+	}
+}
+
+static void
+mt7902_rx_drop(struct mt7902_softc *sc,
+    enum mt7902_rx_drop_reason reason, size_t dma_len, uint32_t rxd0,
+    uint32_t rxd1, uint32_t rxd2, uint32_t rxd3, uint32_t rxd4,
+    size_t offset, uint16_t fc)
+{
+	int debug;
+	bool scanning;
+
 	mtx_lock(&sc->mtx);
 	sc->rx_drop_count++;
+	if (reason < MT7902_RX_DROP_REASON_COUNT)
+		sc->rx_drop_reason[reason]++;
+	sc->rx_last_drop_reason = reason;
+	sc->rx_last_drop_len = (uint16_t)MIN(dma_len, UINT16_MAX);
+	sc->rx_last_drop_rxd[0] = rxd0;
+	sc->rx_last_drop_rxd[1] = rxd1;
+	sc->rx_last_drop_rxd[2] = rxd2;
+	sc->rx_last_drop_rxd[3] = rxd3;
+	sc->rx_last_drop_rxd[4] = rxd4;
+	debug = sc->rx_debug;
+	scanning = sc->scan_active;
 	mtx_unlock(&sc->mtx);
+	if (debug > 0 && scanning)
+		device_printf(sc->dev,
+		    "RX DROP reason=%s(%u) len=%ju off=%ju fc=%04x RXD=%08x/%08x/%08x/%08x/%08x\n",
+		    mt7902_rx_drop_name(reason), reason, (uintmax_t)dma_len,
+		    (uintmax_t)offset, fc, rxd0, rxd1, rxd2, rxd3, rxd4);
 }
 
 static size_t
@@ -160,12 +207,20 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	struct mbuf *m;
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
-	size_t offset, frame_len, hdr_len;
 	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag, tap_channel;
+	uint8_t frame_type;
 	uint16_t tap_freq, tap_chan_flags;
-	int rssi, noise;
+	int rssi, noise, debug;
+	size_t offset, frame_len, hdr_len;
+	enum mt7902_rx_drop_reason drop_reason;
 	bool is_mgmt, monitor_active, rcpi_valid, monitor_only;
+	bool scanning, attached;
 
+	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
+	fc = 0;
+	offset = frame_len = hdr_len = 0;
+	pkt_type = pkt_flag = channel = rcpi = subtype = tap_channel = 0;
+	drop_reason = MT7902_RX_DROP_SHORT;
 	if (dma_len < 24)
 		goto drop;
 	rxd0 = le32dec(data);
@@ -179,8 +234,10 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	if (pkt_type == MT7902_PKT_TYPE_RX_EVENT && pkt_flag == 1)
 		pkt_type = MT7902_PKT_TYPE_NORMAL_MCU;
 	/* MT7902's current net80211 channel list is 2.4/5 GHz only. */
-	if (channel > 180)
+	if (channel > 180) {
+		drop_reason = MT7902_RX_DROP_BAD_CHANNEL;
 		goto drop;
+	}
 
 	mtx_lock(&sc->mtx);
 	sc->rx_data_count++;
@@ -197,8 +254,10 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 * PKT_TYPE_NORMAL_MCU as native 802.11 frames after RXD parsing.
 	 */
 	if (pkt_type != MT7902_PKT_TYPE_NORMAL &&
-	    pkt_type != MT7902_PKT_TYPE_NORMAL_MCU)
+	    pkt_type != MT7902_PKT_TYPE_NORMAL_MCU) {
+		drop_reason = MT7902_RX_DROP_BAD_PACKET_TYPE;
 		goto drop;
+	}
 	/*
 	 * ICV failures are monitor-only (mt7921_mac_fill_rx sets
 	 * RX_FLAG_ONLY_MONITOR). FCS and TKIP-MIC errors can be delivered to
@@ -213,14 +272,31 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 * HDR_TRANS. Do not discard ordinary 802.11 frames when that bit is
 	 * independently set by the device.
 	 */
-	if ((rxd1 & (1U << 28)) != 0 ||
-	    (monitor_only && !monitor_active) ||
-	    (!monitor_active && (rxd1 & ((1U << 26) | (1U << 27))) != 0) ||
-	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0)
+	if ((rxd1 & (1U << 28)) != 0) {
+		drop_reason = MT7902_RX_DROP_HDR_TRANS;
 		goto drop;
+	}
+	if (monitor_only && !monitor_active) {
+		drop_reason = MT7902_RX_DROP_ICV;
+		goto drop;
+	}
+	if (!monitor_active && (rxd1 & (1U << 27)) != 0) {
+		drop_reason = MT7902_RX_DROP_FCS;
+		goto drop;
+	}
+	if (!monitor_active && (rxd1 & (1U << 26)) != 0) {
+		drop_reason = MT7902_RX_DROP_MIC;
+		goto drop;
+	}
+	if ((rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0) {
+		drop_reason = MT7902_RX_DROP_RXD_ERROR;
+		goto drop;
+	}
 	/* RXD4 payload format != 0 describes a deaggregated A-MSDU. */
-	if ((rxd4 & 0x3) != 0)
+	if ((rxd4 & 0x3) != 0) {
+		drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 		goto drop;
+	}
 
 	offset = 24;
 	if (rxd1 & (1U << 14))
@@ -233,15 +309,19 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rcpi = 0;
 	rcpi_valid = false;
 	if (rxd1 & (1U << 13)) {
-		if (offset > dma_len || dma_len - offset < 8)
+		if (offset > dma_len || dma_len - offset < 8) {
+			drop_reason = MT7902_RX_DROP_GROUP_TRUNCATED;
 			goto drop;
+		}
 		rcpi_word = le32dec(data + offset + 4);
 		rcpi = rcpi_word & 0xff;  /* PRXV RCPI0 */
 		rcpi_valid = true;
 		offset += 8;              /* RXD GROUP_3 */
 		if (rxd1 & (1U << 15)) {
-			if (offset > dma_len || dma_len - offset < 72)
+			if (offset > dma_len || dma_len - offset < 72) {
+				drop_reason = MT7902_RX_DROP_GROUP_TRUNCATED;
 				goto drop;
+			}
 			offset += 24;         /* GROUP_5 prefix */
 			rcpi_word = le32dec(data + offset);
 			rcpi = rcpi_word & 0xff;
@@ -251,19 +331,26 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	}
 	/* RXD2 HDR_OFFSET is measured in 16-bit words. */
 	offset += 2 * ((rxd2 >> 14) & 0x3);
-	if (offset >= dma_len)
+	if (offset >= dma_len) {
+		drop_reason = MT7902_RX_DROP_BAD_OFFSET;
 		goto drop;
+	}
 	frame_len = dma_len - offset;
-	if (frame_len < sizeof(*wh))
+	if (frame_len < sizeof(*wh)) {
+		drop_reason = MT7902_RX_DROP_SHORT_FRAME;
 		goto drop;
+	}
 
 	wh = (const struct ieee80211_frame_min *)(const void *)(data + offset);
 	fc = le16dec(&wh->i_fc[0]);
 	hdr_len = mt7902_rx_80211_hdrlen(fc);
-	if (hdr_len == 0 || frame_len < hdr_len)
+	if (hdr_len == 0 || frame_len < hdr_len) {
+		drop_reason = MT7902_RX_DROP_BAD_HEADER;
 		goto drop;
+	}
 	is_mgmt = (fc & 0x000c) == 0;
 	subtype = (fc >> 4) & 0x0f;
+	frame_type = (fc >> 2) & 0x3;
 	mtx_lock(&sc->mtx);
 	sc->rx_last_rxd4 = rxd4;
 	sc->rx_last_fc = fc;
@@ -275,21 +362,36 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	sc->rx_last_payload_format = rxd4 & 0x3;
 	sc->rx_last_channel = channel;
 	mtx_unlock(&sc->mtx);
+	mtx_lock(&sc->mtx);
+	sc->rx_frame_type[frame_type]++;
+	if (channel < nitems(sc->rx_channel_frames))
+		sc->rx_channel_frames[channel]++;
 	if (is_mgmt) {
-		mtx_lock(&sc->mtx);
 		sc->rx_mgmt_count++;
+		sc->rx_mgmt_subtype[subtype]++;
 		if (subtype == 8 || subtype == 5)
 			sc->rx_beacon_count++;
-		mtx_unlock(&sc->mtx);
 	}
+	debug = sc->rx_debug;
+	scanning = sc->scan_active;
+	mtx_unlock(&sc->mtx);
 
 	/* RCPI is 0.5 dB steps with a 220 offset, per Connac2 PRXV. */
 	noise = -95;
 	rssi = rcpi_valid ? MAX(-110, MIN(0, ((int)rcpi - 220) / 2)) :
 	    noise;
+	if (debug > 0 && scanning)
+		device_printf(sc->dev,
+		    "RX FRAME ch=%u band=%s type=%u subtype=%u fc=%04x len=%ju hdr=%ju off=%ju rssi=%d rcpi=%u valid=%u addr_type=%u payload=%u sec=%u flags=%08x RXD=%08x/%08x/%08x/%08x/%08x\n",
+		    channel, channel <= 14 ? "2g" : "5g", frame_type, subtype, fc,
+		    (uintmax_t)frame_len, (uintmax_t)hdr_len, (uintmax_t)offset,
+		    rssi, rcpi, rcpi_valid, (rxd3 >> 16) & 0x3, rxd4 & 0x3,
+		    (rxd1 >> 16) & 0x1f, rxd0, rxd1, rxd2, rxd3, rxd4);
 	m = m_get2((int)frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
-	if (m == NULL)
+	if (m == NULL) {
+		drop_reason = MT7902_RX_DROP_NOMEM;
 		goto drop;
+	}
 	m->m_len = (int)frame_len;
 	m->m_pkthdr.len = (int)frame_len;
 	memcpy(mtod(m, void *), data + offset, frame_len);
@@ -357,6 +459,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 
 	if (ieee80211_add_rx_params(m, &rxs) == 0) {
 		m_freem(m);
+		drop_reason = MT7902_RX_DROP_RX_PARAMS;
 		goto drop;
 	}
 	if (monitor_only) {
@@ -368,14 +471,26 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		m_freem(m);
 		return;
 	}
-	if (sc->net80211_attached)
-		(void)ieee80211_input_mimo_all(&sc->ic, m);
-	else
+	mtx_lock(&sc->mtx);
+	attached = sc->net80211_attached != 0;
+	if (attached)
+		sc->rx_input_count++;
+	mtx_unlock(&sc->mtx);
+	if (!attached) {
 		m_freem(m);
+		drop_reason = MT7902_RX_DROP_NOT_ATTACHED;
+		goto drop;
+	}
+	if (debug > 0 && scanning)
+		device_printf(sc->dev,
+		    "RX DELIVER ch=%u fc=%04x subtype=%u len=%ju flags=%08x\n",
+		    channel, fc, subtype, (uintmax_t)frame_len, rxs.c_pktflags);
+	(void)ieee80211_input_mimo_all(&sc->ic, m);
 	return;
 
 drop:
-	mt7902_rx_drop(sc);
+	mt7902_rx_drop(sc, drop_reason, dma_len, rxd0, rxd1, rxd2, rxd3,
+	    rxd4, offset, fc);
 }
 
 static void
@@ -386,7 +501,8 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 	struct mt7902_dma_buffer *buf;
 	uint32_t control;
 	size_t dma_len;
-	int idx, count, error;
+	int idx, count, error, debug;
+	bool scanning;
 
 	ring = &sc->rx_data;
 	if (ring->desc == NULL)
@@ -405,8 +521,19 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 		sc->rx_data_desc_count++;
 		mtx_unlock(&sc->mtx);
 		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
+		mtx_lock(&sc->mtx);
+		debug = sc->rx_debug;
+		scanning = sc->scan_active;
+		mtx_unlock(&sc->mtx);
+		if (debug >= 2 && scanning)
+			device_printf(sc->dev,
+			    "RX DATA DESC idx=%d control=%08x len=%ju buf_len=%ju head=%d tail=%d hwidx=%08x\n",
+			    idx, control, (uintmax_t)dma_len, (uintmax_t)buf->len,
+			    ring->head, ring->tail,
+			    mt7902_read(sc, ring->reg_base + 0x0c));
 		if (dma_len == 0 || dma_len > buf->len)
-			mt7902_rx_drop(sc);
+			mt7902_rx_drop(sc, MT7902_RX_DROP_INVALID_DMA, dma_len,
+			    0, 0, 0, 0, 0, 0, 0);
 		else
 			mt7902_rx_data_frame(sc, buf->vaddr, dma_len);
 		error = mt7902_rx_rearm(sc, ring, idx);
@@ -548,7 +675,8 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 	size_t dma_len, event_len, offset;
 	int idx, count, error;
 	uint8_t seq, eid, pkt_type, pkt_flag;
-	bool log_short, log_unknown;
+	bool log_short, log_unknown, scanning;
+	int debug;
 
 	ring = &sc->rx_event;
 	if (ring->desc == NULL)
@@ -592,7 +720,16 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 		sc->rx_event_last_rxd0 = rxd0;
 		sc->rx_event_last_len = (uint16_t)dma_len;
 		sc->rx_event_last_type = pkt_type;
+		if (pkt_type < nitems(sc->rx_event_type_count))
+			sc->rx_event_type_count[pkt_type]++;
+		debug = sc->rx_debug;
+		scanning = sc->scan_active;
 		mtx_unlock(&sc->mtx);
+		if (debug >= 2 && scanning)
+			device_printf(sc->dev,
+			    "RX EVENT DESC idx=%d control=%08x len=%ju RXD0=%08x type=%u flag=%u hwidx=%08x\n",
+			    idx, control, (uintmax_t)dma_len, rxd0, pkt_type,
+			    pkt_flag, mt7902_read(sc, ring->reg_base + 0x0c));
 
 		switch (pkt_type) {
 		case MT7902_PKT_TYPE_TXS:
@@ -728,6 +865,7 @@ mt7902_intr(void *arg)
 {
 	struct mt7902_softc *sc;
 	uint32_t status;
+	int bit;
 
 	sc = arg;
 	status = mt7902_read(sc, MT7902_REG_WFDMA_INT_STA);
@@ -739,6 +877,9 @@ mt7902_intr(void *arg)
 	sc->irq_status |= status;
 	sc->irq_last_status = status;
 	sc->irq_count++;
+	for (bit = 0; bit < 32; bit++)
+		if ((status & (1U << bit)) != 0)
+			sc->irq_bit_count[bit]++;
 	mtx_unlock(&sc->mtx);
 	taskqueue_enqueue(taskqueue_thread, &sc->irq_task);
 }
@@ -811,12 +952,22 @@ mt7902_irq_task(void *arg, int pending __unused)
 {
 	struct mt7902_softc *sc;
 	uint32_t status, intr_sw;
+	int debug;
 
 	sc = arg;
 	mtx_lock(&sc->mtx);
 	status = sc->irq_status;
 	sc->irq_status = 0;
+	debug = sc->rx_debug;
 	mtx_unlock(&sc->mtx);
+	if (debug >= 3)
+		device_printf(sc->dev,
+		    "IRQ TASK status=%08x int_sta=%08x int_en=%08x mcu_cmd=%08x rx_data_idx=%08x rx_event_idx=%08x\n",
+		    status, mt7902_read(sc, MT7902_REG_WFDMA_INT_STA),
+		    mt7902_read(sc, MT7902_REG_WFDMA_INT_EN),
+		    mt7902_read(sc, MT7902_REG_MCU_CMD),
+		    mt7902_read(sc, sc->rx_data.reg_base + 0x0c),
+		    mt7902_read(sc, sc->rx_event.reg_base + 0x0c));
 
 	/*
 	 * On PCIe the MCU can signal that data RX should be serviced through

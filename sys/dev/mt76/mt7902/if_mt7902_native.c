@@ -42,6 +42,10 @@ mt7902_sysctl_init(struct mt7902_softc *sc)
 	    mt7902_sysctl_hw_start, "I",
 	    "Load MT7902 Wi-Fi firmware and initialize WFDMA") == NULL)
 		return (ENOMEM);
+	if (SYSCTL_ADD_INT(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "rx_debug",
+	    CTLFLAG_RW | CTLFLAG_MPSAFE, &sc->rx_debug, 0,
+	    "MT7902 RX diagnostics: 0=off, 1=frames/drops, 2=RX descriptors, 3=interrupts") == NULL)
+		return (ENOMEM);
 	return (0);
 }
 
@@ -233,6 +237,8 @@ mt7902_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+	/* Keep scan-time RX trace enabled until the first hardware diagnosis. */
+	sc->rx_debug = 2;
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK,
 	    MTX_DEF);
 	mtx_init(&sc->reg_mtx, "mt7902 register remap", NULL, MTX_DEF);

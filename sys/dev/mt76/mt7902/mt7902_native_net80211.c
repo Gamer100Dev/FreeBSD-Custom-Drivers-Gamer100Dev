@@ -372,21 +372,37 @@ static void
 mt7902_set_channel_cb(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc;
-	int error;
+	struct ieee80211_channel *c;
+	bool scanning;
+	int error, debug;
 
 	sc = ic->ic_softc;
-	if (ic->ic_curchan == NULL)
+	c = ic->ic_curchan;
+	if (c == NULL)
 		return;
-	error = mt7902_set_channel(sc, ic->ic_curchan);
+	error = mt7902_set_channel(sc, c);
+	mtx_lock(&sc->mtx);
+	sc->chan_switch_count++;
+	sc->chan_last_request = c->ic_ieee;
+	sc->chan_last_band = IEEE80211_IS_CHAN_2GHZ(c) ? 2 : 5;
+	sc->chan_last_flags = c->ic_flags;
+	sc->chan_last_result = error;
+	sc->chan_last_scan = sc->scan_active;
 	if (error == 0) {
-		mtx_lock(&sc->mtx);
-		sc->current_channel = ic->ic_curchan->ic_ieee;
-		sc->current_band = IEEE80211_IS_CHAN_2GHZ(ic->ic_curchan) ? 2 : 5;
-		mtx_unlock(&sc->mtx);
-	} else {
-		device_printf(sc->dev, "channel %u command failed: %d\n",
-		    ic->ic_curchan->ic_ieee, error);
-	}
+		sc->current_channel = c->ic_ieee;
+		sc->current_band = IEEE80211_IS_CHAN_2GHZ(c) ? 2 : 5;
+	} else
+		sc->chan_switch_failures++;
+	debug = sc->rx_debug;
+	scanning = sc->scan_active;
+	mtx_unlock(&sc->mtx);
+	if (debug > 0 || scanning)
+		device_printf(sc->dev,
+		    "CHANNEL switch %s ch=%u freq=%u band=%s flags=%08x passive=%u scan=%u result=%d\n",
+		    error == 0 ? "complete" : "FAILED", c->ic_ieee,
+		    c->ic_freq, IEEE80211_IS_CHAN_2GHZ(c) ? "2g" : "5g",
+		    c->ic_flags, (c->ic_flags & IEEE80211_CHAN_PASSIVE) != 0,
+		    scanning, error);
 }
 
 static void
@@ -394,9 +410,19 @@ mt7902_scan_start(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
 	bool active;
+	int i, passive, active_channels, debug;
+	uint32_t scan_flags, filter_flags;
 
 	active = ic->ic_scan != NULL &&
 	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0;
+	scan_flags = ic->ic_scan != NULL ? ic->ic_scan->ss_flags : 0;
+	passive = active_channels = 0;
+	for (i = 0; i < ic->ic_nchans; i++) {
+		if (ic->ic_channels[i].ic_flags & IEEE80211_CHAN_PASSIVE)
+			passive++;
+		else
+			active_channels++;
+	}
 	mtx_lock(&sc->mtx);
 	sc->scan_active = true;
 	sc->rx_data_count = 0;
@@ -452,9 +478,30 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->rx_last_addr_type = 0;
 	sc->rx_last_payload_format = 0;
 	sc->rx_last_channel = 0;
+	bzero(sc->rx_drop_reason, sizeof(sc->rx_drop_reason));
+	bzero(sc->rx_frame_type, sizeof(sc->rx_frame_type));
+	bzero(sc->rx_mgmt_subtype, sizeof(sc->rx_mgmt_subtype));
+	bzero(sc->rx_channel_frames, sizeof(sc->rx_channel_frames));
+	bzero(sc->rx_event_type_count, sizeof(sc->rx_event_type_count));
+	bzero(sc->irq_bit_count, sizeof(sc->irq_bit_count));
+	bzero(sc->rx_last_drop_rxd, sizeof(sc->rx_last_drop_rxd));
+	sc->rx_last_drop_len = 0;
+	sc->rx_last_drop_reason = 0;
+	sc->rx_input_count = 0;
+	sc->chan_switch_count = 0;
+	sc->chan_switch_failures = 0;
+	sc->chan_last_request = 0;
+	sc->chan_last_band = 0;
+	sc->chan_last_flags = 0;
+	sc->chan_last_result = 0;
+	sc->chan_last_scan = false;
+	debug = sc->rx_debug;
+	filter_flags = sc->rx_filter_flags;
 	mtx_unlock(&sc->mtx);
-	device_printf(sc->dev, "net80211 %s scan started\n",
-	    active ? "active" : "passive");
+	device_printf(sc->dev,
+	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\n",
+	    active ? "active" : "passive", scan_flags, ic->ic_nchans,
+	    active_channels, passive, filter_flags, debug);
 }
 
 static void
@@ -479,7 +526,14 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint16_t last_event_len, txs_last_wcid, txs_last_rate;
 	uint16_t txs_last_fail_count, txs_last_retry_count;
 	uint8_t last_event_type, txs_last_pid, txs_last_status;
-	int rx_head, rx_tail, rx_queued;
+	uint64_t drop_reason[MT7902_RX_DROP_REASON_COUNT];
+	uint64_t frame_type[4], mgmt_subtype[16], channel_frames[256];
+	uint64_t event_type_count[16], irq_bits[32];
+	uint64_t input_count, chan_switch_count, chan_switch_failures;
+	uint64_t rx_filter_count;
+	uint32_t rx_filter_flags;
+	int rx_filter_error, rx_debug;
+	int rx_head, rx_tail, rx_queued, i;
 
 	mtx_lock(&sc->mtx);
 	sc->scan_active = false;
@@ -543,6 +597,20 @@ mt7902_scan_end(struct ieee80211com *ic)
 	rx_head = sc->rx_data.head;
 	rx_tail = sc->rx_data.tail;
 	rx_queued = sc->rx_data.queued;
+	memcpy(drop_reason, sc->rx_drop_reason, sizeof(drop_reason));
+	memcpy(frame_type, sc->rx_frame_type, sizeof(frame_type));
+	memcpy(mgmt_subtype, sc->rx_mgmt_subtype, sizeof(mgmt_subtype));
+	memcpy(channel_frames, sc->rx_channel_frames, sizeof(channel_frames));
+	memcpy(event_type_count, sc->rx_event_type_count,
+	    sizeof(event_type_count));
+	memcpy(irq_bits, sc->irq_bit_count, sizeof(irq_bits));
+	input_count = sc->rx_input_count;
+	chan_switch_count = sc->chan_switch_count;
+	chan_switch_failures = sc->chan_switch_failures;
+	rx_filter_count = sc->rx_filter_count;
+	rx_filter_flags = sc->rx_filter_flags;
+	rx_filter_error = sc->rx_filter_error;
+	rx_debug = sc->rx_debug;
 	mtx_unlock(&sc->mtx);
 	data_hw_idx = mt7902_read(sc, sc->rx_data.reg_base + 0x0c);
 	event_hw_idx = mt7902_read(sc, sc->rx_event.reg_base + 0x0c);
@@ -575,6 +643,66 @@ mt7902_scan_end(struct ieee80211com *ic)
 	    last_payload_format, (uintmax_t)tx_raw, (uintmax_t)tx_raw_reject,
 	    (uintmax_t)tx_raw_enqueue_errors, (uintmax_t)tx_submit,
 	    (uintmax_t)tx_dma_done);
+	if (rx_debug > 0) {
+		device_printf(sc->dev,
+		    "RX DIAG: descriptors=%ju parsed=%ju handed_to_net80211=%ju dropped=%ju monitor_only=%ju\n",
+		    (uintmax_t)rx_desc, (uintmax_t)rx, (uintmax_t)input_count,
+		    (uintmax_t)dropped, (uintmax_t)monitor_errors);
+		device_printf(sc->dev,
+		    "RX DROP REASONS: short_rxd=%ju bad_channel=%ju bad_type=%ju hdr_trans=%ju icv=%ju fcs=%ju mic=%ju rxd_error=%ju payload=%ju group_truncated=%ju bad_offset=%ju short_frame=%ju bad_header=%ju nomem=%ju rx_params=%ju no_net80211=%ju invalid_dma=%ju\n",
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_SHORT],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_BAD_CHANNEL],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_BAD_PACKET_TYPE],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_HDR_TRANS],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_ICV],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_FCS],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_MIC],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_RXD_ERROR],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_PAYLOAD_FORMAT],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_GROUP_TRUNCATED],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_BAD_OFFSET],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_SHORT_FRAME],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_BAD_HEADER],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_NOMEM],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_RX_PARAMS],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_NOT_ATTACHED],
+		    (uintmax_t)drop_reason[MT7902_RX_DROP_INVALID_DMA]);
+		device_printf(sc->dev,
+		    "RX FRAME TYPES: management=%ju control=%ju data=%ju extension=%ju mgmt_seen=%ju\n",
+		    (uintmax_t)frame_type[0], (uintmax_t)frame_type[1],
+		    (uintmax_t)frame_type[2], (uintmax_t)frame_type[3],
+		    (uintmax_t)mgmt);
+		device_printf(sc->dev,
+		    "CHANNEL/FILTER: switches=%ju failed=%ju last=%u/%u flags=%08x result=%d filter_commands=%ju filter=%08x filter_error=%d\n",
+		    (uintmax_t)chan_switch_count,
+		    (uintmax_t)chan_switch_failures, last_channel,
+		    last_channel <= 14 ? 2 : 5, 0U, 0,
+		    (uintmax_t)rx_filter_count, rx_filter_flags, rx_filter_error);
+		for (i = 0; i < 16; i++) {
+			if (mgmt_subtype[i] != 0)
+				device_printf(sc->dev,
+				    "RX MGMT SUBTYPE %u count=%ju\\n",
+				    i, (uintmax_t)mgmt_subtype[i]);
+		}
+		for (i = 0; i < 256; i++) {
+			if (channel_frames[i] != 0)
+				device_printf(sc->dev,
+				    "RX CHANNEL ch=%d frames=%ju\\n",
+				    i, (uintmax_t)channel_frames[i]);
+		}
+		for (i = 0; i < 16; i++) {
+			if (event_type_count[i] != 0)
+				device_printf(sc->dev,
+				    "RX RING0 TYPE %d count=%ju\\n",
+				    i, (uintmax_t)event_type_count[i]);
+		}
+		for (i = 0; i < 32; i++) {
+			if (irq_bits[i] != 0)
+				device_printf(sc->dev,
+				    "IRQ BIT %d count=%ju\\n",
+				    i, (uintmax_t)irq_bits[i]);
+		}
+	}
 }
 
 static int

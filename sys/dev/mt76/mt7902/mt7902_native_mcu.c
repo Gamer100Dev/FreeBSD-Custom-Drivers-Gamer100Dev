@@ -688,12 +688,28 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 		uint8_t pad[51];
 	} __packed req;
 
+	int error, debug;
+	bool scanning;
+
 	bzero(&req, sizeof(req));
 	req.mode = flags != 0 ? 1 : 2;
 	req.fif = htole32(flags);
-	return (mt7902_mcu_send_cmd(sc,
+	error = mt7902_mcu_send_cmd(sc,
 	    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_RX_FILTER),
-	    &req, sizeof(req), false));
+	    &req, sizeof(req), false);
+	mtx_lock(&sc->mtx);
+	sc->rx_filter_count++;
+	sc->rx_filter_flags = flags;
+	sc->rx_filter_error = error;
+	debug = sc->rx_debug;
+	scanning = sc->scan_active;
+	mtx_unlock(&sc->mtx);
+	if (debug > 0 || scanning)
+		device_printf(sc->dev,
+		    "RX filter: cmd=%s mode=%u flags=%08x bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\n",
+		    error == 0 ? "submitted" : "failed", req.mode,
+		    flags, le32toh(req.bit_map), error);
+	return (error);
 }
 
 int
