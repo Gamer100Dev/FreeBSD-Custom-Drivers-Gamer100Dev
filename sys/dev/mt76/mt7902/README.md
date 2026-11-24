@@ -113,12 +113,15 @@ AMPDU reordering, A-MSDU deaggregation, complete PHY/rate metadata,
 radiotap-quality monitor capture, and the full RX control/event taxonomy
 remain outstanding.
 
-TX uses basic legacy TXWI/TXP descriptors and polls WFDMA ownership for
-completion. Four hardware queues and EDCA are implemented, and the driver
-uses the AP's legacy basic-rate bitmap for fixed-rate management/multicast
-frames. Full mt76 rate control, TX status event processing, retransmission
+TX uses basic legacy TXWI/TXP descriptors and four hardware queues with
+FreeBSD WME/EDCA programming. The driver keeps each packet/node pending until
+the firmware's Connac2 TX_FREE notification returns its MSDU token, then
+completes the net80211 packet with the reported success/failure status.
+Outstanding packets are failed and drained only after WFDMA is stopped.
+TXS notification records are recognized and counted, but are not yet used for
+rate adaptation or detailed retry feedback. Full mt76 rate control, per-rate
 statistics, AMPDU aggregation, hardware key offload, power-save buffering,
-and robust queue backpressure are not implemented. Unicast data rate
+and stronger queue backpressure are not implemented. Unicast data rate
 selection and all TX behavior still require over-the-air validation.
 
 Scanning currently uses FreeBSD's software scanner and normal channel-switch
