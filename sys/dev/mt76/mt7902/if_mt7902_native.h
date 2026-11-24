@@ -138,6 +138,10 @@ enum mt7902_rx_drop_reason {
 #define MT7902_RX_FILTER_OTHER_BSS	(1U << 6)
 #define MT7902_RX_FILTER_CONTROL	(1U << 5)
 #define MT7902_RX_FILTER_FCSFAIL	(1U << 2)
+/* SET_RX_FILTER bitmap operations mirror mt7921_mcu_set_beacon_filter(). */
+#define MT7902_RX_FILTER_BIT_SET	(1U << 0)
+#define MT7902_RX_FILTER_BIT_CLEAR	(1U << 1)
+#define MT7902_RFCR_DROP_OTHER_BEACON	(1U << 11)
 #define MT7902_MCU_CMD_QUERY	0x01
 #define MT7902_MCU_SEQ_MAX	15
 #define MT7902_MCU_EXT_CID		0xed
@@ -363,6 +367,10 @@ struct mt7902_softc {
 	uint64_t		rx_filter_count;
 	uint32_t		rx_filter_flags;
 	int			rx_filter_error;
+	uint64_t		rx_filter_bitmap_count;
+	uint32_t		rx_filter_bitmap;
+	uint8_t		rx_filter_bit_op;
+	int			rx_filter_bitmap_error;
 	uint8_t		mcu_seq;
 	uint8_t		mcu_wait_seq;
 	uint8_t		mcu_wait_cmd;
