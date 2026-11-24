@@ -639,10 +639,14 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	struct ieee80211_frame_min wh;
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen;
-	int idx, retry, error;
+	int idx, retry, error, queue;
 	bool fixed_rate;
 
-	ring = &sc->tx_data;
+	/* FreeBSD WME order is BE/BK/VI/VO; Connac2 LMAC is reversed. */
+	queue = 3 - M_WME_GETAC(m);
+	if (queue < 0 || queue >= MT7902_TX_DATA_QUEUES)
+		return (EINVAL);
+	ring = &sc->tx_data[queue];
 	len = m->m_pkthdr.len;
 	total = MT7902_TXD_LEN + len;
 	if (len < sizeof(struct ieee80211_frame_cts) ||
@@ -669,7 +673,8 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	m_copydata(m, 0, len, (caddr_t)buf->vaddr + MT7902_TXD_LEN);
 	txwi = buf->vaddr;
 	val = (uint32_t)(len + MT7902_TXWI_LEN) |
-	    (0U << MT7902_TXD_PKT_FMT_SHIFT) | (0U << MT7902_TXD_QIDX_SHIFT);
+	    (0U << MT7902_TXD_PKT_FMT_SHIFT) |
+	    ((uint32_t)queue << MT7902_TXD_QIDX_SHIFT);
 	txwi[0] = htole32(val);
 	val = MT7902_TXD_LONG | ((uint32_t)(sc->station_linked ?
 	    MT7902_PEER_WCID : MT7902_BSS_WCID) << MT7902_TXD_WLAN_IDX_SHIFT);
