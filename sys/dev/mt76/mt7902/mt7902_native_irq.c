@@ -17,10 +17,11 @@
 #include <sys/taskqueue.h>
 #include <machine/bus.h>
 #include <dev/pci/pcivar.h>
-#include <net80211/ieee80211_freebsd.h>
-#include <net80211/ieee80211_proto.h>
 
 #include "if_mt7902_native.h"
+
+#include <net80211/ieee80211_freebsd.h>
+#include <net80211/ieee80211_proto.h>
 
 #define MT7902_RXD_SIZE	36
 #define MT7902_RXD_EID_OFFSET	28
