@@ -123,11 +123,12 @@ FreeBSD WME/EDCA programming. The driver keeps each packet/node pending until
 the firmware's Connac2 TX_FREE notification returns its MSDU token, then
 completes the net80211 packet with the reported success/failure status.
 Outstanding packets are failed and drained only after WFDMA is stopped.
-TXS notification records are recognized and counted, but are not yet used for
-rate adaptation or detailed retry feedback. Full mt76 rate control, per-rate
-statistics, AMPDU aggregation, hardware key offload, power-save buffering,
-and stronger queue backpressure are not implemented. Unicast data rate
-selection and all TX behavior still require over-the-air validation.
+TXS notification records are parsed for per-record WCID/PID/rate, ACK/RTS/queue
+timeouts, failure/retry counts, and transmitted MPDU bytes. TXS is currently
+diagnostic accounting rather than a rate-control input. Full mt76 rate control,
+AMPDU aggregation, hardware key offload, power-save buffering, and stronger
+queue backpressure are not implemented. Unicast data rate selection and all
+TX behavior still require over-the-air validation.
 
 Scanning currently uses FreeBSD's software scanner and normal channel-switch
 and probe-request TX paths. The channel-switch command waits for firmware
