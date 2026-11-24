@@ -1203,14 +1203,13 @@ mt7902_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 	    ieee80211_media_status, mac);
 
 	/*
-	 * net80211 enters vap_create with its lock held. Firmware command
-	 * transactions wait for an MCU response, so release that lock around
-	 * the DEV/BSS registration sequence.
+	 * wlan_clone_create() invokes ic_vap_create without ic_comlock held.
+	 * ieee80211_vap_attach() takes and releases that lock internally, so
+	 * do not unlock/relock it here.  This callback runs in the ifconfig
+	 * ioctl context and may sleep while waiting for firmware responses.
 	 */
 	if (sc->hw_started) {
-		IEEE80211_UNLOCK(ic);
 		error = mt7902_vap_fw_update(sc, vap, true);
-		IEEE80211_LOCK(ic);
 		if (error != 0) {
 			vap->iv_newstate = mvp->newstate;
 			ieee80211_vap_detach(vap);
@@ -1259,9 +1258,11 @@ mt7902_vap_delete(struct ieee80211vap *vap)
 	}
 	ieee80211_stop(vap);
 	if (mvp->fw_registered && sc->hw_started) {
-		IEEE80211_UNLOCK(vap->iv_ic);
+		/*
+		 * wlan_clone_destroy() invokes ic_vap_delete without ic_comlock
+		 * held.  The firmware transaction is allowed to sleep here.
+		 */
 		error = mt7902_vap_fw_update(sc, vap, false);
-		IEEE80211_LOCK(vap->iv_ic);
 		if (error == 0)
 			mvp->fw_registered = false;
 	}
