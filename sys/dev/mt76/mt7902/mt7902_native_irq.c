@@ -17,6 +17,8 @@
 #include <sys/taskqueue.h>
 #include <machine/bus.h>
 #include <dev/pci/pcivar.h>
+#include <net80211/ieee80211_freebsd.h>
+#include <net80211/ieee80211_proto.h>
 
 #include "if_mt7902_native.h"
 
@@ -37,11 +39,211 @@
 #define MT7902_RXD2_PAD_MASK	(3U << 14)
 #define MT7902_RXD2_PAD_SHIFT	14
 
+/*
+ * Return the reserved producer slot to WFDMA.  RX buffers stay paired with
+ * their descriptors for their entire lifetime: swapping buffer structs here
+ * leaves the descriptor-to-buffer mapping inconsistent after the ring wraps.
+ */
+static int
+mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
+{
+	struct mt7902_dma_buffer *buf;
+	struct mt7902_dma_desc *desc;
+	int refill_idx;
+
+	refill_idx = ring->head;
+	if (refill_idx == idx)
+		return (EBUSY);
+
+	buf = &ring->buf[refill_idx];
+	desc = &ring->desc[refill_idx];
+	bus_dmamap_sync(ring->buf_tag, buf->map,
+	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+	bus_dmamap_sync(ring->buf_tag, buf->map,
+	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+	desc->buf0 = htole32((uint32_t)buf->paddr);
+	desc->buf1 = 0;
+	desc->info = 0;
+	desc->control = htole32(((uint32_t)buf->len &
+	    MT7902_DMA_LEN_MASK) << MT7902_DMA_LEN_SHIFT);
+	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
+	ring->tail = (idx + 1) % ring->ndesc;
+	ring->head = (refill_idx + 1) % ring->ndesc;
+	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
+	return (0);
+}
+
+static void
+mt7902_rx_drop(struct mt7902_softc *sc)
+{
+	mtx_lock(&sc->mtx);
+	sc->rx_drop_count++;
+	mtx_unlock(&sc->mtx);
+}
+
+/*
+ * Connac2 normal RXD parser.  The six-word base RXD is followed by optional
+ * groups in the order used by mt7921_mac_fill_rx(): GROUP_4, GROUP_1,
+ * GROUP_2, GROUP_3 and (inside GROUP_3) GROUP_5.  Header-translated frames
+ * are deliberately rejected for now because net80211 expects native 802.11
+ * headers; the management frames needed for scanning are not translated.
+ */
+static void
+mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
+    size_t dma_len)
+{
+	struct ieee80211_rx_stats rxs;
+	struct ieee80211_frame_min *wh;
+	struct mbuf *m;
+	uint32_t rxd0, rxd1, rxd2, rxd3, rcpi_word;
+	uint16_t fc;
+	size_t offset, frame_len;
+	uint8_t channel, rcpi, subtype;
+	int rssi, noise;
+	bool is_mgmt;
+
+	if (dma_len < 24)
+		goto drop;
+	rxd0 = le32dec(data);
+	rxd1 = le32dec(data + 4);
+	rxd2 = le32dec(data + 8);
+	rxd3 = le32dec(data + 12);
+	channel = (rxd3 >> 8) & 0xff;
+
+	mtx_lock(&sc->mtx);
+	sc->rx_data_count++;
+	sc->rx_last_len = dma_len;
+	sc->rx_last_rxd[0] = rxd0;
+	sc->rx_last_rxd[1] = rxd1;
+	sc->rx_last_rxd[2] = rxd2;
+	sc->rx_last_rxd[3] = rxd3;
+	mtx_unlock(&sc->mtx);
+
+	/* PKT_TYPE_NORMAL is 2 in the Connac2 RXD0 packet-type field. */
+	if (((rxd0 >> 27) & 0x1f) != 2)
+		goto drop;
+	/* Single-band MT7902, good-FCS frames, native 802.11 headers only. */
+	if ((rxd1 & ((1U << 28) | (1U << 25) | (1U << 27))) != 0 ||
+	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0)
+		goto drop;
+
+	offset = 24;
+	if (rxd1 & (1U << 14))
+		offset += 16;             /* RXD GROUP_4 */
+	if (rxd1 & (1U << 11))
+		offset += 16;             /* RXD GROUP_1 */
+	if (rxd1 & (1U << 12))
+		offset += 8;              /* RXD GROUP_2 */
+
+	rcpi = 0;
+	if (rxd1 & (1U << 13)) {
+		if (offset > dma_len || dma_len - offset < 8)
+			goto drop;
+		rcpi_word = le32dec(data + offset + 4);
+		rcpi = rcpi_word & 0xff;  /* PRXV RCPI0 */
+		offset += 8;              /* RXD GROUP_3 */
+		if (rxd1 & (1U << 15)) {
+			if (offset > dma_len || dma_len - offset < 72)
+				goto drop;
+			offset += 24;         /* GROUP_5 prefix */
+			rcpi_word = le32dec(data + offset);
+			rcpi = rcpi_word & 0xff;
+			offset += 48;         /* GROUP_5 RX vector */
+		}
+	}
+	/* RXD2 HDR_OFFSET is measured in 16-bit words. */
+	offset += 2 * ((rxd2 >> 14) & 0x3);
+	if (offset >= dma_len)
+		goto drop;
+	frame_len = dma_len - offset;
+	if (frame_len < sizeof(*wh))
+		goto drop;
+
+	wh = (struct ieee80211_frame_min *)(uintptr_t)(data + offset);
+	fc = le16dec(&wh->i_fc[0]);
+	is_mgmt = (fc & 0x000c) == 0;
+	subtype = (fc >> 4) & 0x0f;
+	if (is_mgmt) {
+		mtx_lock(&sc->mtx);
+		sc->rx_mgmt_count++;
+		if (subtype == 8 || subtype == 5)
+			sc->rx_beacon_count++;
+		mtx_unlock(&sc->mtx);
+	}
+
+	/* RCPI is 0.5 dB steps with a 220 offset, per Connac2 PRXV. */
+	noise = -95;
+	rssi = rcpi != 0 ? ((int)rcpi - 220) / 2 : noise;
+	m = m_get2(frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
+	if (m == NULL)
+		goto drop;
+	m->m_len = frame_len;
+	m->m_pkthdr.len = frame_len;
+	memcpy(mtod(m, void *), data + offset, frame_len);
+
+	bzero(&rxs, sizeof(rxs));
+	rxs.r_flags = IEEE80211_R_NF | IEEE80211_R_RSSI;
+	rxs.c_nf = noise;
+	rxs.c_rssi = rssi - noise;
+	if (channel != 0) {
+		rxs.r_flags |= IEEE80211_R_IEEE | IEEE80211_R_FREQ |
+		    IEEE80211_R_BAND;
+		rxs.c_ieee = channel;
+		rxs.c_freq = ieee80211_ieee2mhz(channel,
+		    channel <= 14 ? IEEE80211_CHAN_2GHZ : IEEE80211_CHAN_5GHZ);
+		rxs.c_band = channel <= 14 ? IEEE80211_CHAN_2GHZ :
+		    IEEE80211_CHAN_5GHZ;
+	}
+	if (ieee80211_add_rx_params(m, &rxs) == 0) {
+		m_freem(m);
+		goto drop;
+	}
+	if (sc->net80211_attached)
+		(void)ieee80211_input_mimo_all(&sc->ic, m);
+	else
+		m_freem(m);
+	return;
+
+drop:
+	mt7902_rx_drop(sc);
+}
+
 static void
 mt7902_rx_data_poll(struct mt7902_softc *sc)
 {
-	/* Data RX deliberately remains unimplemented in this feature slice. */
-	(void)sc;
+	struct mt7902_ring *ring;
+	struct mt7902_dma_desc *desc;
+	struct mt7902_dma_buffer *buf;
+	uint32_t control;
+	size_t dma_len;
+	int idx, count, error;
+
+	ring = &sc->rx_data;
+	if (ring->desc == NULL)
+		return;
+	for (count = 0; count < ring->ndesc; count++) {
+		idx = ring->tail;
+		desc = &ring->desc[idx];
+		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+		control = le32toh(desc->control);
+		if ((control & MT7902_DMA_DESC_DONE) == 0)
+			break;
+		buf = &ring->buf[idx];
+		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
+		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
+		if (dma_len == 0 || dma_len > buf->len)
+			mt7902_rx_drop(sc);
+		else
+			mt7902_rx_data_frame(sc, buf->vaddr, dma_len);
+		error = mt7902_rx_rearm(sc, ring, idx);
+		if (error != 0) {
+			device_printf(sc->dev,
+			    "RX data ring cursor collision at descriptor %d\n", idx);
+			break;
+		}
+	}
 }
 
 static void
@@ -49,12 +251,12 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 {
 	struct mt7902_ring *ring;
 	struct mt7902_dma_desc *desc;
-	struct mt7902_dma_buffer *buf, tmp;
+	struct mt7902_dma_buffer *buf;
 	uint8_t *data;
 	uint16_t mcu_len;
 	uint32_t control;
-	size_t event_len;
-	int idx, refill_idx, count;
+	size_t dma_len, event_len;
+	int idx, count, error;
 	uint8_t seq, eid;
 
 	ring = &sc->rx_event;
@@ -71,11 +273,10 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 		buf = &ring->buf[idx];
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
 		data = buf->vaddr;
+		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
 		mcu_len = 0;
-		if (((control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK) >=
-		    MT7902_RXD_SIZE) {
-			event_len = ((control >> MT7902_RX_LEN_SHIFT) &
-			    MT7902_RX_LEN_MASK) - MT7902_RXD_SIZE;
+		if (dma_len >= MT7902_RXD_SIZE && dma_len <= buf->len) {
+			event_len = dma_len - MT7902_RXD_SIZE;
 			memcpy(&mcu_len, data + MT7902_RXD_LEN_OFFSET,
 			    sizeof(mcu_len));
 			eid = data[MT7902_RXD_EID_OFFSET];
@@ -110,37 +311,16 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 			}
 			mtx_unlock(&sc->mtx);
 		} else {
-			device_printf(sc->dev, "short MCU event descriptor (%u bytes)\n",
-			    (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK);
+			device_printf(sc->dev,
+			    "invalid MCU event descriptor length (%ju bytes, buffer %ju)\n",
+			    (uintmax_t)dma_len, (uintmax_t)buf->len);
 		}
-		/* Refill the reserved producer slot, as mt76_dma_rx_fill() does.
-		 * The received buffer is returned there; the old reserved buffer
-		 * takes its place behind the consumer cursor.
-		 */
-		refill_idx = ring->head;
-		if (refill_idx == idx) {
+		error = mt7902_rx_rearm(sc, ring, idx);
+		if (error != 0) {
 			device_printf(sc->dev,
 			    "RX event ring cursor collision at descriptor %d\n", idx);
 			break;
 		}
-		bus_dmamap_sync(ring->buf_tag, ring->buf[refill_idx].map,
-		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-		tmp = ring->buf[idx];
-		ring->buf[idx] = ring->buf[refill_idx];
-		ring->buf[refill_idx] = tmp;
-		buf = &ring->buf[refill_idx];
-		bus_dmamap_sync(ring->buf_tag, buf->map,
-		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-		ring->desc[refill_idx].buf0 = htole32((uint32_t)buf->paddr);
-		ring->desc[refill_idx].buf1 = 0;
-		ring->desc[refill_idx].info = 0;
-		ring->desc[refill_idx].control = htole32(((uint32_t)buf->len &
-		    MT7902_DMA_LEN_MASK) << MT7902_DMA_LEN_SHIFT);
-		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
-		    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
-		ring->tail = (idx + 1) % ring->ndesc;
-		ring->head = (refill_idx + 1) % ring->ndesc;
-		mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	}
 }
 
@@ -231,14 +411,28 @@ void
 mt7902_irq_task(void *arg, int pending __unused)
 {
 	struct mt7902_softc *sc;
-	uint32_t status;
+	uint32_t status, intr_sw;
 
 	sc = arg;
 	mtx_lock(&sc->mtx);
 	status = sc->irq_status;
 	sc->irq_status = 0;
 	mtx_unlock(&sc->mtx);
-	if (status & (MT7902_INT_RX_DONE_WM | MT7902_INT_RX_DONE_WM2))
+
+	/*
+	 * On PCIe the MCU can signal that data RX should be serviced through
+	 * the software interrupt register rather than the host RX-done bit.
+	 * This is the MT792x MCU_CMD_WAKE_RX_PCIE path.
+	 */
+	if (status & MT7902_INT_MCU_CMD) {
+		intr_sw = mt7902_read(sc, MT7902_REG_MCU_CMD);
+		if (intr_sw != 0 && intr_sw != 0xffffffff) {
+			mt7902_write(sc, MT7902_REG_MCU_CMD, intr_sw);
+			if (intr_sw & MT7902_MCU_CMD_WAKE_RX_PCIE)
+				status |= MT7902_INT_RX_DONE_DATA;
+		}
+	}
+	if (status & MT7902_INT_RX_DONE_WM)
 		mt7902_rx_event_poll(sc);
 	if (status & MT7902_INT_RX_DONE_DATA)
 		taskqueue_enqueue(taskqueue_thread, &sc->rx_task);
@@ -246,12 +440,6 @@ mt7902_irq_task(void *arg, int pending __unused)
 	    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
 }
 
-/*
- * The data RXD-to-mbuf/net80211 decoder is intentionally not installed yet.
- * Keep the task entry point defined so an RX interrupt can never call an
- * unresolved symbol; data RX remains disabled at the protocol level until
- * that decoder and its ownership transitions are implemented.
- */
 void
 mt7902_rx_task(void *arg __unused, int pending __unused)
 {
