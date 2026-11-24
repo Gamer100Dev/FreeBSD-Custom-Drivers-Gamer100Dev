@@ -600,7 +600,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	len = m->m_pkthdr.len;
 	total = MT7902_TXD_LEN + len;
 	if (len < sizeof(wh) || total > ring->buf[0].len ||
-	    total > MT7902_DMA_LEN_MASK)
+	    len > MT7902_TXP_LEN_MASK)
 		return (EMSGSIZE);
 	m_copydata(m, 0, sizeof(wh), (caddr_t)&wh);
 	fc = le16toh(wh.i_fc[0] | ((uint16_t)wh.i_fc[1] << 8));
@@ -658,12 +658,19 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	txp = (struct mt7902_txp *)((uint8_t *)buf->vaddr + MT7902_TXWI_LEN);
 	txp->msdu_id[0] = htole16((uint16_t)idx | (1U << 15));
 	txp->ptr[0].buf0 = htole32((uint32_t)(buf->paddr + MT7902_TXD_LEN));
-	txp->ptr[0].len0 = htole16((uint16_t)len | MT7902_TXP_LAST);
+	txp->ptr[0].len0 = htole16((uint16_t)(len &
+	    MT7902_TXP_LEN_MASK) | MT7902_TXP_LAST);
 	bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_PREWRITE);
 	desc->buf0 = htole32((uint32_t)buf->paddr);
 	desc->buf1 = 0;
 	desc->info = 0;
-	desc->control = htole32(((uint32_t)total <<
+	/*
+	 * Connac2 WFDMA fetches only TXWI+TXP from this descriptor.  The
+	 * TXP's buf0/len0 then point at the frame payload in the same DMA
+	 * allocation; setting the WFDMA length to total would make it consume
+	 * the payload twice.
+	 */
+	desc->control = htole32(((uint32_t)MT7902_TXD_LEN <<
 	    MT7902_DMA_LEN_SHIFT) | MT7902_DMA_DESC_LAST);
 	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
