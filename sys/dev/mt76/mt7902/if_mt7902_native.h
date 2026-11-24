@@ -282,6 +282,7 @@ struct mt7902_softc {
 	uint64_t		rx_event_txs_rts_timeouts;
 	uint64_t		rx_event_txs_queue_timeouts;
 	uint64_t		rx_event_txs_retries;
+	uint64_t		rx_event_txs_bytes;
 	uint16_t		rx_event_txs_last_wcid;
 	uint8_t		rx_event_txs_last_pid;
 	uint8_t		rx_event_txs_last_status;
