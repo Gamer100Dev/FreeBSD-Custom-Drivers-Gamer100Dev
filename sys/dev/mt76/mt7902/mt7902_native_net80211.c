@@ -226,6 +226,12 @@ mt7902_scan_start(struct ieee80211com *ic)
 	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0;
 	mtx_lock(&sc->mtx);
 	sc->scan_active = true;
+	sc->rx_data_count = 0;
+	sc->rx_drop_count = 0;
+	sc->rx_mgmt_count = 0;
+	sc->rx_beacon_count = 0;
+	sc->rx_last_len = 0;
+	bzero(sc->rx_last_rxd, sizeof(sc->rx_last_rxd));
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev, "net80211 %s scan started\n",
 	    active ? "active" : "passive");
