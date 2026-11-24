@@ -40,6 +40,9 @@
 #define MT7902_UNI_BSS_INFO_BASIC	0
 #define MT7902_UNI_BSS_INFO_QBSS	15
 #define MT7902_STA_REC_STATE	7
+#define MT7902_STA_REC_RA		1
+#define MT7902_STA_REC_PHY		0x15
+#define MT7902_RA_LEGACY_CCK		0x000fU
 #define MT7902_STA_CONN_PORT_SECURE	2
 #define MT7902_STA_CONN_DISCONNECT	0
 #define MT7902_STA_STATE_ASSOC	2
@@ -151,6 +154,28 @@ struct mt7902_sta_wtbl {
 	struct mt7902_wtbl_rx rx;
 	struct mt7902_wtbl_hdr_trans hdr_trans;
 } __packed;
+
+struct mt7902_sta_rec_phy {
+	uint16_t tag;
+	uint16_t len;
+	uint16_t basic_rate;
+	uint8_t phy_type;
+	uint8_t ampdu;
+	uint8_t rts_policy;
+	uint8_t rcpi;
+	uint8_t max_ampdu_len;
+	uint8_t reserved;
+} __packed;
+
+struct mt7902_sta_rec_ra {
+	uint16_t tag;
+	uint16_t len;
+	uint16_t legacy;
+	uint8_t rx_mcs_bitmask[10];
+} __packed;
+
+CTASSERT(sizeof(struct mt7902_sta_rec_phy) == 12);
+CTASSERT(sizeof(struct mt7902_sta_rec_ra) == 16);
 
 CTASSERT(sizeof(struct mt7902_mcu_tlv_hdr) == 4);
 CTASSERT(sizeof(struct mt7902_wtbl_req_hdr) == 8);
@@ -349,10 +374,16 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	struct mt7902_sta_req_hdr hdr;
 	struct mt7902_sta_rec_basic basic;
 	struct mt7902_sta_rec_state state;
+	struct mt7902_sta_rec_phy phy;
+	struct mt7902_sta_rec_ra ra;
 	struct mt7902_sta_wtbl wtbl;
-	uint8_t peer[IEEE80211_ADDR_LEN];
-	uint16_t aid;
-	int error;
+	static const uint8_t legacy_rates[] = {
+		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
+	};
+	uint8_t peer[IEEE80211_ADDR_LEN], rate;
+	uint16_t aid, supp_rates, legacy;
+	bool band2;
+	int i, j, error;
 
 	if (ni != NULL)
 		IEEE80211_ADDR_COPY(peer, ni->ni_bssid);
@@ -438,7 +469,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bzero(&hdr, sizeof(hdr));
 	hdr.bss_idx = MT7902_BSS_IDX;
 	hdr.wlan_idx_lo = MT7902_PEER_WCID;
-	hdr.tlv_num = htole16(3); /* BASIC, STATE, WTBL */
+	hdr.tlv_num = htole16(5); /* BASIC, PHY, RA, STATE, WTBL */
 	hdr.is_tlv_append = 1;
 	memset(&basic, 0, sizeof(basic));
 	basic.tag = htole16(MT7902_STA_REC_BASIC);
@@ -450,6 +481,43 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	IEEE80211_ADDR_COPY(basic.peer_addr, peer);
 	basic.extra_info = htole16(3); /* version + newly created */
 	memset(&state, 0, sizeof(state));
+	/*
+	 * Build Connac2's legacy CCK/OFDM rate bitmap from the negotiated
+	 * FreeBSD node rateset.  HT/VHT/HE masks stay zero because this
+	 * interface advertises legacy modes only.
+	 */
+	band2 = IEEE80211_IS_CHAN_2GHZ(ni->ni_chan);
+	supp_rates = 0;
+	for (i = 0; i < ni->ni_rates.rs_nrates; i++) {
+		rate = ni->ni_rates.rs_rates[i] & 0x7f;
+		for (j = 0; j < nitems(legacy_rates); j++) {
+			if (legacy_rates[j] != rate)
+				continue;
+			if (band2)
+				supp_rates |= (uint16_t)(1U << j);
+			else if (j >= 4)
+				supp_rates |= (uint16_t)(1U << (j - 4));
+			break;
+		}
+	}
+	if (band2)
+		legacy = (supp_rates & MT7902_RA_LEGACY_CCK) |
+		    (((supp_rates >> 4) & 0xffU) << 6);
+	else
+		legacy = (supp_rates & 0xffU) << 6;
+
+	bzero(&phy, sizeof(phy));
+	phy.tag = htole16(MT7902_STA_REC_PHY);
+	phy.len = htole16(sizeof(phy));
+	/* PHY_MODE_B|PHY_MODE_G for 2.4 GHz, PHY_MODE_A for 5 GHz. */
+	phy.phy_type = band2 ? ((1U << 1) | (1U << 2)) : (1U << 0);
+
+	bzero(&ra, sizeof(ra));
+	ra.tag = htole16(MT7902_STA_REC_RA);
+	ra.len = htole16(sizeof(ra));
+	ra.legacy = htole16(legacy);
+
+	bzero(&state, sizeof(state));
 	state.tag = htole16(MT7902_STA_REC_STATE);
 	state.len = htole16(sizeof(state));
 	state.state = MT7902_STA_STATE_ASSOC;
@@ -484,8 +552,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	wtbl.hdr_trans.no_rx_trans = 1;
 
 	{
-		uint8_t request[sizeof(hdr) + sizeof(basic) + sizeof(state) +
-		    sizeof(wtbl)];
+		uint8_t request[sizeof(hdr) + sizeof(basic) + sizeof(phy) +
+		    sizeof(ra) + sizeof(state) + sizeof(wtbl)];
 		size_t offset;
 
 		offset = 0;
@@ -493,6 +561,10 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		offset += sizeof(hdr);
 		memcpy(request + offset, &basic, sizeof(basic));
 		offset += sizeof(basic);
+		memcpy(request + offset, &phy, sizeof(phy));
+		offset += sizeof(phy);
+		memcpy(request + offset, &ra, sizeof(ra));
+		offset += sizeof(ra);
 		memcpy(request + offset, &state, sizeof(state));
 		offset += sizeof(state);
 		memcpy(request + offset, &wtbl, sizeof(wtbl));
