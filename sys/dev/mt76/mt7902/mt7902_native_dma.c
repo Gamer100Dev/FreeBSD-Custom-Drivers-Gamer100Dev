@@ -311,7 +311,7 @@ mt7902_dma_stop(struct mt7902_softc *sc)
 		    MT7902_WFDMA_TX_BUSY | MT7902_WFDMA_RX_BUSY, 0, 100000);
 		if (error != 0) {
 			device_printf(sc->dev,
-			    "WFDMA did not become idle before ring teardown (GLO=%08x)\\n",
+			    "WFDMA did not become idle before ring teardown (GLO=%08x)\n",
 			    mt7902_read(sc, MT7902_REG_WFDMA_GLO_CFG));
 			/* Stop further device DMA before releasing host ring memory. */
 			pci_disable_busmaster(sc->dev);
