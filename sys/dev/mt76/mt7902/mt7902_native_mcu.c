@@ -688,7 +688,7 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 		uint8_t pad[51];
 	} __packed req;
 
-	int error, debug;
+	int error, bitmap_error, debug;
 	bool scanning;
 
 	bzero(&req, sizeof(req));
@@ -706,10 +706,38 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 	mtx_unlock(&sc->mtx);
 	if (debug > 0 || scanning)
 		device_printf(sc->dev,
-		    "RX filter: cmd=%s mode=%u flags=%08x bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\n",
+		    "RX filter: cmd=%s mode=%u flags=%08x bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\\n",
 		    error == 0 ? "submitted" : "failed", req.mode,
 		    flags, le32toh(req.bit_map), error);
-	return (error);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Match mt7921_mcu_set_beacon_filter(false): clear RFCR's
+	 * DROP_OTHER_BEACON bit when no BSS beacon filter is active.
+	 * The base FIF flags do not clear this separate hardware bitmap;
+	 * leaving it set suppresses beacons from other BSSs during scans.
+	 */
+	bzero(&req, sizeof(req));
+	req.mode = 2;
+	req.bit_map = htole32(MT7902_RFCR_DROP_OTHER_BEACON);
+	req.bit_op = MT7902_RX_FILTER_BIT_CLEAR;
+	bitmap_error = mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_RX_FILTER),
+	    &req, sizeof(req), false);
+	mtx_lock(&sc->mtx);
+	sc->rx_filter_bitmap_count++;
+	sc->rx_filter_bitmap = MT7902_RFCR_DROP_OTHER_BEACON;
+	sc->rx_filter_bit_op = MT7902_RX_FILTER_BIT_CLEAR;
+	sc->rx_filter_bitmap_error = bitmap_error;
+	mtx_unlock(&sc->mtx);
+	if (debug > 0 || scanning)
+		device_printf(sc->dev,
+		    "RX filter bitmap: cmd=%s mode=%u bit_op=clear(%u) bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\\n",
+		    bitmap_error == 0 ? "submitted" : "failed", req.mode,
+		    req.bit_op, le32toh(req.bit_map), bitmap_error);
+
+	return (bitmap_error);
 }
 
 int
