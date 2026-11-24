@@ -300,11 +300,13 @@ fail:
 void
 mt7902_dma_stop(struct mt7902_softc *sc)
 {
+	int i;
+
 	if (sc->mem != NULL) {
 		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN, 0);
 		mt7902_write(sc, MT7902_REG_WFDMA_GLO_CFG, 0);
 	}
-	for (int i = 0; i < MT7902_TX_DATA_QUEUES; i++)
+	for (i = 0; i < MT7902_TX_DATA_QUEUES; i++)
 		mt7902_ring_free(&sc->tx_data[i]);
 	mt7902_ring_free(&sc->tx_mcu);
 	mt7902_ring_free(&sc->tx_fwdl);
