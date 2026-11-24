@@ -561,7 +561,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	len = m->m_pkthdr.len;
 	total = MT7902_TXD_LEN + len;
 	if (len < sizeof(wh) || total > ring->buf[0].len ||
-	    len > MT7902_DMA_LEN_MASK)
+	    total > MT7902_DMA_LEN_MASK)
 		return (EMSGSIZE);
 	m_copydata(m, 0, sizeof(wh), (caddr_t)&wh);
 	fc = le16toh(wh.i_fc[0] | ((uint16_t)wh.i_fc[1] << 8));
@@ -624,8 +624,8 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	desc->buf0 = htole32((uint32_t)buf->paddr);
 	desc->buf1 = 0;
 	desc->info = 0;
-	desc->control = htole32((MT7902_TXD_LEN << MT7902_DMA_LEN_SHIFT) |
-	    MT7902_DMA_DESC_LAST);
+	desc->control = htole32(((uint32_t)total <<
+	    MT7902_DMA_LEN_SHIFT) | MT7902_DMA_DESC_LAST);
 	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 	ring->head = (idx + 1) % ring->ndesc;
