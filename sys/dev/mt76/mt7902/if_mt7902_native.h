@@ -239,6 +239,7 @@ struct mt7902_softc {
 	int			rx_running;
 	int			station_linked;
 	uint16_t		station_aid;
+	uint16_t		station_basic_rate;
 	uint8_t		macaddr[IEEE80211_ADDR_LEN];
 	uint8_t		current_channel;
 	uint8_t		current_band;
