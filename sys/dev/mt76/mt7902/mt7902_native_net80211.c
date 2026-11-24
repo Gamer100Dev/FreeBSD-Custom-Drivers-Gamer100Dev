@@ -875,7 +875,7 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 		error = mt7902_wme_update(ic);
 		if (error != 0)
 			device_printf(sc->dev,
-			    "could not program initial EDCA parameters: %d\\n",
+			    "could not program initial EDCA parameters: %d\n",
 			    error);
 	}
 	device_printf(sc->dev,
