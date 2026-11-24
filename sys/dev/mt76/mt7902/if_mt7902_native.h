@@ -47,6 +47,7 @@
 #define MT7902_FW_BT	"mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin"
 #define MT7902_FW_MAX_REGIONS	32
 #define MT7902_TX_RING_SIZE	256
+#define MT7902_TX_DATA_QUEUES	4
 #define MT7902_RX_RING_SIZE	1536
 #define MT7902_MCU_TX_RING_SIZE	256
 #define MT7902_FWDL_TX_RING_SIZE	128
@@ -202,7 +203,7 @@ struct mt7902_softc {
 	struct task		tx_task;
 	struct mtx		irq_mtx;
 	struct cv		mcu_cv;
-	struct mt7902_ring	tx_data;
+	struct mt7902_ring	tx_data[MT7902_TX_DATA_QUEUES];
 	struct mt7902_ring	tx_mcu;
 	struct mt7902_ring	tx_fwdl;
 	struct mt7902_ring	rx_data;
