@@ -47,8 +47,9 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
 * RX descriptor rearming that rotates completed buffers into the reserved
   producer slot, preserving descriptor-to-buffer ownership across ring wrap.
   Scan-end RX/drop counters and last-RXD diagnostics are available. A monitor
-  VAP requests control and failed-FCS frames and receives FCS/TKIP-MIC error
-  flags; ICV-error delivery is not implemented.
+  VAP requests control and failed-FCS frames, receives FCS/TKIP-MIC error flags,
+  and gets ICV-failed frames through radiotap only; ICV errors never enter the
+  normal station input path.
 * Native FreeBSD radiotap attachment for monitor/BPF use. RX reports
   channel frequency/flags, dBm signal/noise and failed-FCS state; ICV-failed
   frames are tapped only to monitor listeners. TX reports channel metadata.
@@ -112,11 +113,11 @@ Bluetooth operation works reliably over the air/on the device.
 The RX implementation is a first-stage port, not a complete replacement for
 all mt76 RX features. It accepts normal native-header 802.11 frames and
 safely drops unsupported packet types, header-translated frames, A-MSDU
-payload formats, ICV errors, and other unsupported RXD error conditions.
-Protected traffic needs end-to-end validation with the FreeBSD crypto path.
-AMPDU reordering, A-MSDU deaggregation, complete PHY/rate metadata,
-radiotap-quality monitor capture, and the full RX control/event taxonomy
-remain outstanding.
+payload formats, and unsupported RXD error conditions. ICV-failed frames are
+sent only to radiotap monitor listeners; they are never sent to the station
+input path. Protected traffic needs end-to-end validation with the FreeBSD
+crypto path. AMPDU reordering, A-MSDU deaggregation, complete PHY/rate/TSFT
+metadata, and the full RX control/event taxonomy remain outstanding.
 
 TX uses basic legacy TXWI/TXP descriptors and four hardware queues with
 FreeBSD WME/EDCA programming. The driver keeps each packet/node pending until
