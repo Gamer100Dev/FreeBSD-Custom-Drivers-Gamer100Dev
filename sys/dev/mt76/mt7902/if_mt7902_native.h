@@ -109,6 +109,8 @@
 
 #define MT7902_RX_FILTER_ENABLE		(1U << 31)
 #define MT7902_RX_FILTER_OTHER_BSS	(1U << 6)
+#define MT7902_RX_FILTER_CONTROL	(1U << 5)
+#define MT7902_RX_FILTER_FCSFAIL	(1U << 2)
 #define MT7902_MCU_CMD_QUERY	0x01
 #define MT7902_MCU_SEQ_MAX	15
 #define MT7902_MCU_EXT_CID		0xed
@@ -238,6 +240,7 @@ struct mt7902_softc {
 	uint16_t		pci_vendor;
 	uint16_t		pci_device;
 	bool			scan_active;
+	bool			monitor_active;
 	bool			attached;
 };
 
