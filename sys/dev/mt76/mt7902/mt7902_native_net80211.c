@@ -394,10 +394,20 @@ mt7902_scan_start(struct ieee80211com *ic)
 	mtx_lock(&sc->mtx);
 	sc->scan_active = true;
 	sc->rx_data_count = 0;
+	sc->rx_data_desc_count = 0;
 	sc->rx_drop_count = 0;
 	sc->rx_mgmt_count = 0;
 	sc->rx_beacon_count = 0;
+	sc->rx_event_count = 0;
+	sc->rx_event_txs_count = 0;
+	sc->rx_event_txs_records = 0;
+	sc->rx_event_tx_free_count = 0;
+	sc->rx_event_short_count = 0;
+	sc->rx_event_unknown_count = 0;
 	sc->rx_last_len = 0;
+	sc->rx_event_last_rxd0 = 0;
+	sc->rx_event_last_len = 0;
+	sc->rx_event_last_type = 0;
 	bzero(sc->rx_last_rxd, sizeof(sc->rx_last_rxd));
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev, "net80211 %s scan started\n",
@@ -408,25 +418,49 @@ static void
 mt7902_scan_end(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
-	uint64_t rx, dropped, mgmt, beacon;
-	uint32_t last_len, rxd0, rxd1, rxd2, rxd3;
+	uint64_t rx, rx_desc, dropped, mgmt, beacon, events, txs, txs_records;
+	uint64_t tx_free, short_events, unknown, irq_count;
+	uint32_t last_len, rxd0, rxd1, rxd2, rxd3, last_event_rxd0, last_irq;
+	uint16_t last_event_len;
+	uint8_t last_event_type;
+	int rx_head, rx_tail, rx_queued;
 
 	mtx_lock(&sc->mtx);
 	sc->scan_active = false;
 	rx = sc->rx_data_count;
+	rx_desc = sc->rx_data_desc_count;
 	dropped = sc->rx_drop_count;
 	mgmt = sc->rx_mgmt_count;
 	beacon = sc->rx_beacon_count;
+	events = sc->rx_event_count;
+	txs = sc->rx_event_txs_count;
+	txs_records = sc->rx_event_txs_records;
+	tx_free = sc->rx_event_tx_free_count;
+	short_events = sc->rx_event_short_count;
+	unknown = sc->rx_event_unknown_count;
+	irq_count = sc->irq_count;
+	last_irq = sc->irq_last_status;
 	last_len = sc->rx_last_len;
 	rxd0 = sc->rx_last_rxd[0];
 	rxd1 = sc->rx_last_rxd[1];
 	rxd2 = sc->rx_last_rxd[2];
 	rxd3 = sc->rx_last_rxd[3];
+	last_event_rxd0 = sc->rx_event_last_rxd0;
+	last_event_len = sc->rx_event_last_len;
+	last_event_type = sc->rx_event_last_type;
+	rx_head = sc->rx_data.head;
+	rx_tail = sc->rx_data.tail;
+	rx_queued = sc->rx_data.queued;
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju dropped=%ju mgmt=%ju beacon/probe=%ju last=%u RXD=%08x/%08x/%08x/%08x\n",
-	    (uintmax_t)rx, (uintmax_t)dropped, (uintmax_t)mgmt,
-	    (uintmax_t)beacon, last_len, rxd0, rxd1, rxd2, rxd3);
+	    "net80211 scan ended: rx=%ju data_desc=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju short=%ju unknown=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\\n",
+	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)dropped,
+	    (uintmax_t)mgmt, (uintmax_t)beacon, (uintmax_t)events,
+	    (uintmax_t)txs, (uintmax_t)txs_records, (uintmax_t)tx_free,
+	    (uintmax_t)short_events, (uintmax_t)unknown,
+	    (uintmax_t)irq_count, last_irq, rx_head, rx_tail, rx_queued,
+	    last_event_type, last_event_len, last_event_rxd0, last_len,
+	    rxd0, rxd1, rxd2, rxd3);
 }
 
 static int
