@@ -444,7 +444,7 @@ mt7902_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 		    MT7902_RX_FILTER_CONTROL | MT7902_RX_FILTER_FCSFAIL);
 		if (error != 0)
 			device_printf(sc->dev,
-			    "could not enable monitor receive filters: %d\\n", error);
+			    "could not enable monitor receive filters: %d\n", error);
 	}
 	return (vap);
 }
@@ -465,7 +465,7 @@ mt7902_vap_delete(struct ieee80211vap *vap)
 			    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS);
 			if (error != 0)
 				device_printf(sc->dev,
-				    "could not restore station receive filters: %d\\n",
+				    "could not restore station receive filters: %d\n",
 				    error);
 		}
 	}
