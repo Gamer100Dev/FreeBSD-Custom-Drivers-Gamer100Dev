@@ -329,6 +329,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	}
 	sc->rx_tap.wr_flags = (rxd1 & (1U << 27)) != 0 ?
 	    IEEE80211_RADIOTAP_F_BADFCS : 0;
+	sc->rx_tap.wr_pad = 0;
 	sc->rx_tap.wr_chan_freq = htole16(tap_freq);
 	sc->rx_tap.wr_chan_flags = htole16(tap_chan_flags);
 	sc->rx_tap.wr_dbm_antsignal = rcpi_valid ? (int8_t)rssi : -127;
