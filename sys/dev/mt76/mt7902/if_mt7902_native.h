@@ -182,6 +182,35 @@ struct mt7902_tx_pending {
 	bool active;
 };
 
+/* FreeBSD net80211 radiotap metadata for monitor and BPF capture. */
+struct mt7902_rx_radiotap_header {
+	struct ieee80211_radiotap_header wr_ihdr;
+	uint8_t wr_flags;
+	uint16_t wr_chan_freq;
+	uint16_t wr_chan_flags;
+	int8_t wr_dbm_antsignal;
+	int8_t wr_dbm_antnoise;
+} __packed;
+
+#define MT7902_RX_RADIOTAP_PRESENT \
+	((1U << IEEE80211_RADIOTAP_FLAGS) | \
+	 (1U << IEEE80211_RADIOTAP_CHANNEL) | \
+	 (1U << IEEE80211_RADIOTAP_DBM_ANTSIGNAL) | \
+	 (1U << IEEE80211_RADIOTAP_DBM_ANTNOISE))
+
+struct mt7902_tx_radiotap_header {
+	struct ieee80211_radiotap_header wt_ihdr;
+	uint8_t wt_flags;
+	uint8_t wt_pad;
+	uint16_t wt_chan_freq;
+	uint16_t wt_chan_flags;
+} __packed;
+
+#define MT7902_TX_RADIOTAP_PRESENT \
+	((1U << IEEE80211_RADIOTAP_FLAGS) | \
+	 (1U << IEEE80211_RADIOTAP_CHANNEL))
+
+
 
 struct mt7902_fw_region {
 	const uint8_t *data;
@@ -213,6 +242,8 @@ struct mt7902_softc {
 	bus_dma_tag_t		ring_dmat;
 	uint32_t		chip_id;
 	struct ieee80211com	ic;
+	struct mt7902_rx_radiotap_header rx_tap;
+	struct mt7902_tx_radiotap_header tx_tap;
 	struct task		irq_task;
 	struct task		rx_task;
 	struct task		tx_task;
