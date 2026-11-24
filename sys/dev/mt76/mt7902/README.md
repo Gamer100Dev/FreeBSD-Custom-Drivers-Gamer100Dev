@@ -30,12 +30,14 @@ net80211 patterns; Linux `mt76` is used as a hardware/protocol reference.
   parser reports channel/RSSI and hardware-decryption/IV/MIC-strip metadata to
   net80211. A monitor VAP requests control frames and receives FCS/TKIP-MIC
   failure indications; ICV-error frames are still discarded.
-* Four Connac2 access-category TX rings mapped from FreeBSD WME ACs, a 32-byte
-  hardware TXP, descriptor/payload DMA pointer, and 12-bit TXP payload length.
-  Fixed-rate management/multicast frames use 1 Mbps CCK on 2.4 GHz or 6 Mbps
-  OFDM on 5 GHz; unicast data rate selection remains hardware-default and is
-  not yet validated. WPA2 CCMP is configured for net80211 software crypto;
-  hardware key offload is not advertised.
+* Four Connac2 access-category TX rings mapped from FreeBSD WME ACs, plus
+  the native WME update callback that sends per-AC EDCA contention parameters
+  through CE `SET_EDCA_PARMS`. The 32-byte hardware TXP carries the payload DMA
+  pointer and 12-bit frame length separately from the 32-byte TXWI. Fixed-rate
+  management/multicast frames use 1 Mbps CCK on 2.4 GHz or 6 Mbps OFDM on 5 GHz;
+  unicast data rate selection remains hardware-default and is not yet validated.
+  WPA2 CCMP is configured for net80211 software crypto; hardware key offload is
+  not advertised.
 * An optional, separate `ng_ubt_mt7902` USB subclass. It validates the
   MT7902 79xx Bluetooth firmware section map, sends WMT patch-download
   commands over the USB control pipe, and then inherits HCI/ACL/SCO and
