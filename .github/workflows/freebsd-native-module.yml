@@ -1,4 +1,4 @@
-name: FreeBSD native RTW88 module build
+name: FreeBSD native RTW88 and MT7902 module build
 
 on:
   push:
@@ -40,7 +40,7 @@ jobs:
             cmake --build build --verbose
             test -f build/if_rtw88_native.ko
             file build/if_rtw88_native.ko
-            MT7902_DIR="$GITHUB_WORKSPACE/sys/dev/mt76/mt7902"
+            MT7902_DIR="$PWD/sys/dev/mt76/mt7902"
             make -C "$MT7902_DIR" SRCTOP=/usr/src clean
             MT7902_OBJDIR=$(make -C "$MT7902_DIR" SRCTOP=/usr/src -V .OBJDIR)
             make -C "$MT7902_DIR" SRCTOP=/usr/src
