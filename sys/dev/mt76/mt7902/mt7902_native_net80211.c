@@ -530,10 +530,10 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t frame_type[4], mgmt_subtype[16], channel_frames[256];
 	uint64_t event_type_count[16], irq_bits[32];
 	uint64_t input_count, chan_switch_count, chan_switch_failures;
-	uint64_t rx_filter_count;
-	uint32_t rx_filter_flags, chan_last_flags;
-	uint8_t chan_last_request, chan_last_band;
-	int rx_filter_error, rx_debug, chan_last_result;
+	uint64_t rx_filter_count, rx_filter_bitmap_count;
+	uint32_t rx_filter_flags, rx_filter_bitmap, chan_last_flags;
+	uint8_t rx_filter_bit_op, chan_last_request, chan_last_band;
+	int rx_filter_error, rx_filter_bitmap_error, rx_debug, chan_last_result;
 	bool chan_last_scan;
 	int rx_head, rx_tail, rx_queued, i;
 
@@ -612,6 +612,10 @@ mt7902_scan_end(struct ieee80211com *ic)
 	rx_filter_count = sc->rx_filter_count;
 	rx_filter_flags = sc->rx_filter_flags;
 	rx_filter_error = sc->rx_filter_error;
+	rx_filter_bitmap_count = sc->rx_filter_bitmap_count;
+	rx_filter_bitmap = sc->rx_filter_bitmap;
+	rx_filter_bit_op = sc->rx_filter_bit_op;
+	rx_filter_bitmap_error = sc->rx_filter_bitmap_error;
 	rx_debug = sc->rx_debug;
 	chan_last_request = sc->chan_last_request;
 	chan_last_band = sc->chan_last_band;
@@ -680,12 +684,14 @@ mt7902_scan_end(struct ieee80211com *ic)
 		    (uintmax_t)frame_type[2], (uintmax_t)frame_type[3],
 		    (uintmax_t)mgmt);
 		device_printf(sc->dev,
-		    "CHANNEL/FILTER: switches=%ju failed=%ju last_request=%u band=%u flags=%08x scan=%u result=%d filter_commands=%ju filter=%08x filter_error=%d\n",
+		    "CHANNEL/FILTER: switches=%ju failed=%ju last_request=%u band=%u flags=%08x scan=%u result=%d filter_commands=%ju filter=%08x filter_error=%d bitmap_updates=%ju bitmap=%08x bit_op=%u bitmap_error=%d\n",
 		    (uintmax_t)chan_switch_count,
 		    (uintmax_t)chan_switch_failures, chan_last_request,
 		    chan_last_band, chan_last_flags, chan_last_scan,
 		    chan_last_result, (uintmax_t)rx_filter_count,
-		    rx_filter_flags, rx_filter_error);
+		    rx_filter_flags, rx_filter_error,
+		    (uintmax_t)rx_filter_bitmap_count, rx_filter_bitmap,
+		    rx_filter_bit_op, rx_filter_bitmap_error);
 		for (i = 0; i < 16; i++) {
 			if (mgmt_subtype[i] != 0)
 				device_printf(sc->dev,
