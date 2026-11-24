@@ -155,7 +155,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
 	size_t offset, frame_len, hdr_len;
-	uint8_t channel, rcpi, subtype;
+	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag;
 	int rssi, noise;
 	bool is_mgmt, monitor_active, rcpi_valid;
 
@@ -167,6 +167,10 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxd3 = le32dec(data + 12);
 	rxd4 = le32dec(data + 16);
 	channel = (rxd3 >> 8) & 0xff;
+	pkt_type = (rxd0 >> 27) & 0x1f;
+	pkt_flag = (rxd0 >> 16) & 0x0f;
+	if (pkt_type == MT7902_PKT_TYPE_RX_EVENT && pkt_flag == 1)
+		pkt_type = MT7902_PKT_TYPE_NORMAL_MCU;
 	/* MT7902's current net80211 channel list is 2.4/5 GHz only. */
 	if (channel > 180)
 		goto drop;
@@ -185,8 +189,8 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 * mt7921_queue_rx_skb() treats both PKT_TYPE_NORMAL and
 	 * PKT_TYPE_NORMAL_MCU as native 802.11 frames after RXD parsing.
 	 */
-	if (((rxd0 >> 27) & 0x1f) != MT7902_PKT_TYPE_NORMAL &&
-	    ((rxd0 >> 27) & 0x1f) != MT7902_PKT_TYPE_NORMAL_MCU)
+	if (pkt_type != MT7902_PKT_TYPE_NORMAL &&
+	    pkt_type != MT7902_PKT_TYPE_NORMAL_MCU)
 		goto drop;
 	/*
 	 * ICV/CCMP MIC failures have no equivalent generic FreeBSD RX flag,
@@ -394,7 +398,7 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 			mtx_unlock(&sc->mtx);
 			if (log_short)
 				device_printf(sc->dev,
-				    "short RX ring0 descriptor: len=%ju buffer=%ju\\n",
+				    "short RX ring0 descriptor: len=%ju buffer=%ju\n",
 				    (uintmax_t)dma_len, (uintmax_t)buf->len);
 			goto rearm;
 		}
@@ -459,7 +463,7 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 				mtx_unlock(&sc->mtx);
 				if (log_short)
 					device_printf(sc->dev,
-					    "short MCU RX event: len=%ju RXD0=%08x flag=%u\\n",
+					    "short MCU RX event: len=%ju RXD0=%08x flag=%u\n",
 					    (uintmax_t)dma_len, rxd0, pkt_flag);
 				break;
 			}
@@ -472,7 +476,7 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 			mtx_lock(&sc->mtx);
 			if (sc->mcu_waiting && seq == sc->mcu_wait_seq) {
 				device_printf(sc->dev,
-				    "MCU RX response cmd=%02x seq=%u eid=%02x len=%u status=%02x\\n",
+				    "MCU RX response cmd=%02x seq=%u eid=%02x len=%u status=%02x\n",
 				    sc->mcu_wait_cmd, seq, eid,
 				    le16toh(mcu_len), data[MT7902_RXD_SIZE - 4]);
 				/*
@@ -505,7 +509,7 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 			mtx_unlock(&sc->mtx);
 			if (log_unknown)
 				device_printf(sc->dev,
-				    "unhandled RX ring0 packet type=%u flag=%u len=%ju RXD0=%08x\\n",
+				    "unhandled RX ring0 packet type=%u flag=%u len=%ju RXD0=%08x\n",
 				    pkt_type, pkt_flag, (uintmax_t)dma_len, rxd0);
 			break;
 		}
@@ -514,7 +518,7 @@ rearm:
 		error = mt7902_rx_rearm(sc, ring, idx);
 		if (error != 0) {
 			device_printf(sc->dev,
-			    "RX event ring cursor collision at descriptor %d\\n", idx);
+			    "RX event ring cursor collision at descriptor %d\n", idx);
 			break;
 		}
 	}
