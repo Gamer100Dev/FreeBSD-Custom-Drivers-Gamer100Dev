@@ -530,7 +530,9 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 	struct mt7902_dma_buffer *buf;
 	uint8_t *data;
 	uint16_t mcu_len;
-	uint32_t control, rxd0, txs0;
+	uint32_t control, rxd0, txs0, txs2, txs3, txs5, txs6, txs7;
+	uint16_t txs_wcid, txs_fail_count, txs_retry_count;
+	uint8_t txs_pid, txs_status;
 	size_t dma_len, event_len, offset;
 	int idx, count, error;
 	uint8_t seq, eid, pkt_type, pkt_flag;
@@ -590,10 +592,36 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 			 */
 			for (offset = 8; offset + 32 <= dma_len; offset += 32) {
 				txs0 = le32dec(data + offset);
+				/* mt7921_mac_add_txs() handles TXS formats 0 and 1. */
 				if (((txs0 >> 23) & 0x3) > 1)
 					continue;
+				txs2 = le32dec(data + offset + 8);
+				txs3 = le32dec(data + offset + 12);
+				txs5 = le32dec(data + offset + 20);
+				txs6 = le32dec(data + offset + 24);
+				txs7 = le32dec(data + offset + 28);
+				txs_wcid = (txs2 >> 16) & 0x3ff;
+				txs_pid = (txs3 >> 24) & 0xff;
+				txs_status = (txs0 >> 16) & 0x7;
+				txs_fail_count = (txs6 >> 23) & 0x1ff;
+				txs_retry_count = (txs7 >> 23) & 0x1ff;
 				mtx_lock(&sc->mtx);
 				sc->rx_event_txs_records++;
+				if (txs_status != 0 || txs_fail_count != 0)
+					sc->rx_event_txs_failures++;
+				if (txs_status & (1U << 0))
+					sc->rx_event_txs_ack_timeouts++;
+				if (txs_status & (1U << 1))
+					sc->rx_event_txs_rts_timeouts++;
+				if (txs_status & (1U << 2))
+					sc->rx_event_txs_queue_timeouts++;
+				sc->rx_event_txs_retries += txs_retry_count;
+				sc->rx_event_txs_last_wcid = txs_wcid;
+				sc->rx_event_txs_last_pid = txs_pid;
+				sc->rx_event_txs_last_status = txs_status;
+				sc->rx_event_txs_last_rate = txs0 & 0x3fff;
+				sc->rx_event_txs_last_fail_count = txs_fail_count;
+				sc->rx_event_txs_last_retry_count = txs_retry_count;
 				mtx_unlock(&sc->mtx);
 			}
 			mtx_lock(&sc->mtx);
