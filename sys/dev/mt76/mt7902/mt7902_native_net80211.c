@@ -836,8 +836,18 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 {
 	struct ieee80211com *ic;
 
-	if (sc == NULL || sc->net80211_attached)
-		return (sc == NULL ? EINVAL : 0);
+	if (sc == NULL)
+		return (EINVAL);
+	if (sc->net80211_attached) {
+		int error;
+
+		error = mt7902_wme_update(&sc->ic);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not restore EDCA parameters after firmware start: %d\n",
+			    error);
+		return (0);
+	}
 	if (ETHER_IS_MULTICAST(sc->macaddr) || sc->macaddr[0] == 0)
 		return (EINVAL);
 	ic = &sc->ic;
