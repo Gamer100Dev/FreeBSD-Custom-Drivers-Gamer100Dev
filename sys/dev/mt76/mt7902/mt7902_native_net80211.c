@@ -1368,14 +1368,16 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	struct mt7902_dma_desc *desc;
 	struct mt7902_dma_buffer *buf;
 	struct mt7902_txp *txp;
-	struct ieee80211_frame_min wh;
+	struct ieee80211_frame wh;
 	struct ieee80211_bpf_params tx_params;
+	uint8_t tx_dump[64];
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen, qos_offset;
 	uint16_t tx_basic_rate, qos_control, seq_control, msdu_id;
-	uint8_t current_band, tid, frag_idx;
-	int idx, retry, error, queue, i;
+	uint8_t current_band, current_channel, tid, frag_idx;
+	int idx, retry, error, queue, i, debug;
 	bool fixed_rate, station_linked, more_frag, has_tx_params, noack;
+	bool scanning;
 	static const uint8_t raw_rates[] = {
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
@@ -1451,7 +1453,10 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	}
 	station_linked = sc->station_linked != 0;
 	current_band = sc->current_band;
+	current_channel = sc->current_channel;
 	tx_basic_rate = sc->station_basic_rate;
+	debug = sc->rx_debug;
+	scanning = sc->scan_active;
 	mtx_unlock(&sc->mtx);
 
 	/*
@@ -1547,6 +1552,29 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	}
 	txwi[7] = htole32((((fc & 0x0c) >> 2) << 20) |
 	    (((fc & 0xf0) >> 4) << 16));
+
+	/*
+	 * A successful TX_FREE only proves that firmware released the token;
+	 * it does not prove that an over-the-air probe was transmitted.  Dump
+	 * the complete probe prefix and the TXWI used for active scan requests.
+	 */
+	if ((debug > 0 || scanning) && (fc & 0x000c) == 0 &&
+	    ((fc >> 4) & 0x0f) == 4) {
+		bzero(tx_dump, sizeof(tx_dump));
+		m_copydata(m, 0, MIN(len, sizeof(tx_dump)), tx_dump);
+		device_printf(sc->dev,
+		    "TX PROBE ch=%u band=%s len=%ju hdr=%ju queue=%d rate0=%u try0=%u flags=%04x noack=%u fixed=%u txrate=%08x addr1=%6D addr2=%6D addr3=%6D bytes=%64D TXWI=%08x/%08x/%08x/%08x/%08x/%08x/%08x/%08x\\n",
+		    current_channel, current_band == 2 ? "2g" : "5g",
+		    (uintmax_t)len, (uintmax_t)hdrlen, queue,
+		    has_tx_params ? tx_params.ibp_rate0 : 0,
+		    has_tx_params ? tx_params.ibp_try0 : 0,
+		    has_tx_params ? tx_params.ibp_flags : 0, noack, fixed_rate,
+		    le32toh(txwi[6]), wh.i_addr1, ":", wh.i_addr2, ":",
+		    wh.i_addr3, ":", tx_dump, " ",
+		    le32toh(txwi[0]), le32toh(txwi[1]), le32toh(txwi[2]),
+		    le32toh(txwi[3]), le32toh(txwi[4]), le32toh(txwi[5]),
+		    le32toh(txwi[6]), le32toh(txwi[7]));
+	}
 	txp = (struct mt7902_txp *)((uint8_t *)buf->vaddr + MT7902_TXWI_LEN);
 	txp->msdu_id[0] = htole16(msdu_id | (1U << 15));
 	txp->ptr[0].buf0 = htole32((uint32_t)(buf->paddr + MT7902_TXD_LEN));
