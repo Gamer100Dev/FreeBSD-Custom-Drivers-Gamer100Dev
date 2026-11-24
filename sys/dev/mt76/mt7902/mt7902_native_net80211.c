@@ -531,8 +531,10 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t event_type_count[16], irq_bits[32];
 	uint64_t input_count, chan_switch_count, chan_switch_failures;
 	uint64_t rx_filter_count;
-	uint32_t rx_filter_flags;
-	int rx_filter_error, rx_debug;
+	uint32_t rx_filter_flags, chan_last_flags;
+	uint8_t chan_last_request, chan_last_band;
+	int rx_filter_error, rx_debug, chan_last_result;
+	bool chan_last_scan;
 	int rx_head, rx_tail, rx_queued, i;
 
 	mtx_lock(&sc->mtx);
@@ -611,6 +613,11 @@ mt7902_scan_end(struct ieee80211com *ic)
 	rx_filter_flags = sc->rx_filter_flags;
 	rx_filter_error = sc->rx_filter_error;
 	rx_debug = sc->rx_debug;
+	chan_last_request = sc->chan_last_request;
+	chan_last_band = sc->chan_last_band;
+	chan_last_flags = sc->chan_last_flags;
+	chan_last_result = sc->chan_last_result;
+	chan_last_scan = sc->chan_last_scan;
 	mtx_unlock(&sc->mtx);
 	data_hw_idx = mt7902_read(sc, sc->rx_data.reg_base + 0x0c);
 	event_hw_idx = mt7902_read(sc, sc->rx_event.reg_base + 0x0c);
@@ -673,33 +680,34 @@ mt7902_scan_end(struct ieee80211com *ic)
 		    (uintmax_t)frame_type[2], (uintmax_t)frame_type[3],
 		    (uintmax_t)mgmt);
 		device_printf(sc->dev,
-		    "CHANNEL/FILTER: switches=%ju failed=%ju last=%u/%u flags=%08x result=%d filter_commands=%ju filter=%08x filter_error=%d\n",
+		    "CHANNEL/FILTER: switches=%ju failed=%ju last_request=%u band=%u flags=%08x scan=%u result=%d filter_commands=%ju filter=%08x filter_error=%d\\n",
 		    (uintmax_t)chan_switch_count,
-		    (uintmax_t)chan_switch_failures, last_channel,
-		    last_channel <= 14 ? 2 : 5, 0U, 0,
-		    (uintmax_t)rx_filter_count, rx_filter_flags, rx_filter_error);
+		    (uintmax_t)chan_switch_failures, chan_last_request,
+		    chan_last_band, chan_last_flags, chan_last_scan,
+		    chan_last_result, (uintmax_t)rx_filter_count,
+		    rx_filter_flags, rx_filter_error);
 		for (i = 0; i < 16; i++) {
 			if (mgmt_subtype[i] != 0)
 				device_printf(sc->dev,
-				    "RX MGMT SUBTYPE %u count=%ju\\n",
+				    "RX MGMT SUBTYPE %u count=%ju\n",
 				    i, (uintmax_t)mgmt_subtype[i]);
 		}
 		for (i = 0; i < 256; i++) {
 			if (channel_frames[i] != 0)
 				device_printf(sc->dev,
-				    "RX CHANNEL ch=%d frames=%ju\\n",
+				    "RX CHANNEL ch=%d frames=%ju\n",
 				    i, (uintmax_t)channel_frames[i]);
 		}
 		for (i = 0; i < 16; i++) {
 			if (event_type_count[i] != 0)
 				device_printf(sc->dev,
-				    "RX RING0 TYPE %d count=%ju\\n",
+				    "RX RING0 TYPE %d count=%ju\n",
 				    i, (uintmax_t)event_type_count[i]);
 		}
 		for (i = 0; i < 32; i++) {
 			if (irq_bits[i] != 0)
 				device_printf(sc->dev,
-				    "IRQ BIT %d count=%ju\\n",
+				    "IRQ BIT %d count=%ju\n",
 				    i, (uintmax_t)irq_bits[i]);
 		}
 	}
