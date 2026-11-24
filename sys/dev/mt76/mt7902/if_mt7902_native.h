@@ -246,6 +246,8 @@ struct mt7902_softc {
 	uint16_t		pci_device;
 	bool			scan_active;
 	bool			monitor_active;
+	bool			suspended;
+	bool			suspend_was_started;
 	bool			attached;
 };
 
