@@ -353,7 +353,7 @@ mt7902_vap_fw_update(struct mt7902_softc *sc, struct ieee80211vap *vap,
 	bss_req.basic.hw_bss_idx = 0;
 	bss_req.basic.band_idx = 0;
 	bss_req.basic.conn_type = htole32(conn_type);
-	bss_req.basic.conn_state = 1; /* Present but not yet associated. */
+	bss_req.basic.conn_state = !enable; /* Match MT76: active STA BSS starts DISCONNECT. */
 	bss_req.basic.wmm_idx = 0;
 	bss_req.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
 	bss_req.basic.sta_idx = htole16(MT7902_BSS_WCID);
@@ -913,7 +913,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.hw_bss_idx = 0;
 	bss.basic.band_idx = 0;
 	bss.basic.conn_type = htole32(MT7902_CONN_INFRA_STA);
-	bss.basic.conn_state = linked ? 0 : 1;
+	bss.basic.conn_state = 0; /* BSS stays DISCONNECT; SET_BSS_CONNECTED carries link state. */
 	bss.basic.wmm_idx = 0;
 	IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
 	phy_type = band2 ?
