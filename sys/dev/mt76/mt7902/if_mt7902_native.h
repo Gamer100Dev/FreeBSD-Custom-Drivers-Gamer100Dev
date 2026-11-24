@@ -47,7 +47,7 @@
 #define MT7902_FW_BT	"mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin"
 #define MT7902_FW_MAX_REGIONS	32
 #define MT7902_TX_RING_SIZE	256
-#define MT7902_RX_RING_SIZE	256
+#define MT7902_RX_RING_SIZE	1536
 #define MT7902_MCU_TX_RING_SIZE	256
 #define MT7902_FWDL_TX_RING_SIZE	128
 #define MT7902_RX_BUF_SIZE	4096
@@ -82,14 +82,14 @@
 
 #define MT7902_INT_RX_DONE_DATA	(1U << 2)
 #define MT7902_INT_RX_DONE_WM	(1U << 0)
-#define MT7902_INT_RX_DONE_WM2	(1U << 22)
+/* MT7902 has no second (MCU-WA) RX event ring. */
 #define MT7902_INT_TX_DONE_MCU	(1U << 27)
 #define MT7902_INT_TX_DONE_FWDL	(1U << 26)
-#define MT7902_INT_TX_DONE_DATA	(1U << 0)
+#define MT7902_INT_TX_DONE_DATA	(1U << 4)
 #define MT7902_INT_MCU_CMD	(1U << 29)
 #define MT7902_INT_MASK	(MT7902_INT_RX_DONE_DATA | MT7902_INT_RX_DONE_WM | \
-	MT7902_INT_RX_DONE_WM2 | MT7902_INT_TX_DONE_MCU | \
-	MT7902_INT_TX_DONE_FWDL | MT7902_INT_TX_DONE_DATA)
+	MT7902_INT_TX_DONE_MCU | MT7902_INT_TX_DONE_FWDL | \
+	MT7902_INT_TX_DONE_DATA)
 
 #define MT7902_DMA_DESC_DONE	(1U << 31)
 #define MT7902_DMA_DESC_LAST	(1U << 30)
@@ -104,6 +104,11 @@
 #define MT7902_MCU_CMD_FW_START	0x02
 #define MT7902_MCU_CMD_NIC_POWER	0x04
 #define MT7902_MCU_CMD_PATCH_SEM	0x10
+#define MT7902_MCU_CE_SET_RX_FILTER	0x0a
+#define MT7902_MCU_CMD_WAKE_RX_PCIE	(1U << 0)
+
+#define MT7902_RX_FILTER_ENABLE		(1U << 31)
+#define MT7902_RX_FILTER_OTHER_BSS	(1U << 6)
 #define MT7902_MCU_CMD_QUERY	0x01
 #define MT7902_MCU_SEQ_MAX	15
 #define MT7902_MCU_EXT_CID		0xed
@@ -207,6 +212,12 @@ struct mt7902_softc {
 	uint32_t		irq_last_status;
 	uint64_t		irq_count;
 	uint64_t		rx_event_count;
+	uint64_t		rx_data_count;
+	uint64_t		rx_drop_count;
+	uint64_t		rx_mgmt_count;
+	uint64_t		rx_beacon_count;
+	uint32_t		rx_last_len;
+	uint32_t		rx_last_rxd[4];
 	uint8_t		mcu_seq;
 	uint8_t		mcu_wait_seq;
 	uint8_t		mcu_wait_cmd;
@@ -226,6 +237,7 @@ struct mt7902_softc {
 	uint8_t		current_band;
 	uint16_t		pci_vendor;
 	uint16_t		pci_device;
+	bool			scan_active;
 	bool			attached;
 };
 
@@ -251,6 +263,7 @@ int mt7902_mcu_send_response(struct mt7902_softc *, uint32_t,
 	    const void *, size_t, void *, size_t *);
 int mt7902_mcu_init(struct mt7902_softc *);
 int mt7902_mcu_read_mac(struct mt7902_softc *);
+int mt7902_mcu_set_rxfilter(struct mt7902_softc *, uint32_t);
 void mt7902_irq_task(void *, int);
 void mt7902_rx_task(void *, int);
 int mt7902_net80211_attach(struct mt7902_softc *);
