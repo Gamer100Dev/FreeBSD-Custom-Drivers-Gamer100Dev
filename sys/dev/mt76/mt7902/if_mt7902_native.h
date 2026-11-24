@@ -231,8 +231,6 @@ struct mt7902_softc {
 	uint64_t		tx_free_unknown;
 	uint64_t		tx_free_pairs;
 	uint64_t		tx_free_bad;
-	uint64_t		tx_free_pairs;
-	uint64_t		tx_free_bad;
 	uint64_t		tx_dma_timeouts;
 	struct mt7902_fw_image	fw_wm;
 	struct mt7902_fw_image	fw_patch;
