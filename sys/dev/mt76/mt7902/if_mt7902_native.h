@@ -48,6 +48,7 @@
 #define MT7902_FW_MAX_REGIONS	32
 #define MT7902_TX_RING_SIZE	256
 #define MT7902_TX_DATA_QUEUES	4
+#define MT7902_TX_PENDING_COUNT	(MT7902_TX_DATA_QUEUES * MT7902_TX_RING_SIZE)
 #define MT7902_RX_RING_SIZE	1536
 #define MT7902_MCU_TX_RING_SIZE	256
 #define MT7902_FWDL_TX_RING_SIZE	128
@@ -171,6 +172,17 @@ struct mt7902_ring {
 	bool is_rx;
 };
 
+/*
+ * Packets are copied into permanent WFDMA buffers before doorbell. Keep the
+ * original mbuf/node until firmware emits the Connac2 TX_FREE notification.
+ */
+struct mt7902_tx_pending {
+	struct mbuf *m;
+	struct ieee80211_node *ni;
+	bool active;
+};
+
+
 struct mt7902_fw_region {
 	const uint8_t *data;
 	size_t len;
@@ -211,6 +223,13 @@ struct mt7902_softc {
 	struct mt7902_ring	tx_fwdl;
 	struct mt7902_ring	rx_data;
 	struct mt7902_ring	rx_event;
+	struct mt7902_tx_pending tx_pending[MT7902_TX_PENDING_COUNT];
+	uint64_t		tx_pending_count;
+	uint64_t		tx_free_records;
+	uint64_t		tx_free_failures;
+	uint64_t		tx_free_retries;
+	uint64_t		tx_free_unknown;
+	uint64_t		tx_dma_timeouts;
 	struct mt7902_fw_image	fw_wm;
 	struct mt7902_fw_image	fw_patch;
 	struct mbufq		txq;
@@ -292,5 +311,6 @@ void mt7902_net80211_detach(struct mt7902_softc *);
 int mt7902_sysctl_init(struct mt7902_softc *);
 int mt7902_set_channel(struct mt7902_softc *, struct ieee80211_channel *);
 void mt7902_tx_task(void *, int);
+void mt7902_tx_pending_drain(struct mt7902_softc *);
 
 #endif
