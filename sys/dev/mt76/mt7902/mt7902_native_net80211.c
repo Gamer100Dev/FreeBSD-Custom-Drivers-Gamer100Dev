@@ -438,6 +438,9 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	static const uint8_t legacy_rates[] = {
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
+	static const uint8_t legacy_hw_rates[] = {
+		10, 20, 55, 110, 11, 15, 10, 14, 9, 13, 8, 12
+	};
 	uint8_t peer[IEEE80211_ADDR_LEN], rate;
 	uint16_t aid, supp_rates, basic_rates, legacy, beacon_interval;
 	uint8_t dtim_period;
@@ -508,6 +511,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->linked = false;
 		sc->station_linked = 0;
 		sc->station_aid = 0;
+		sc->station_basic_rate = 0;
 		error = mt7902_sta_disconnect(sc, peer, aid, qos);
 		bzero(mvp->peer_bssid, sizeof(mvp->peer_bssid));
 		mvp->peer_aid = 0;
@@ -588,6 +592,32 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		    (((supp_rates >> 4) & 0xffU) << 6);
 	else
 		legacy = (supp_rates & 0xffU) << 6;
+
+	/*
+	 * Pick the first AP-advertised basic rate for management/multicast
+	 * frames. Connac2 encodes mode in bits 9:6 and rate index in bits 5:0.
+	 * Keep CCK mode 0 for 2.4 GHz CCK rates; all OFDM rates use mode 1.
+	 */
+	{
+		uint16_t tx_basic;
+		int n_basic;
+
+		tx_basic = 0;
+		n_basic = band2 ? 12 : 8;
+		for (j = 0; j < n_basic; j++) {
+			if ((basic_rates & (1U << j)) == 0)
+				continue;
+			tx_basic = legacy_hw_rates[band2 ? j : j + 4];
+			if (!band2 || j >= 4)
+				tx_basic |= (1U << 6); /* OFDM */
+			break;
+		}
+		if (tx_basic == 0)
+			tx_basic = band2 ? 10 : ((1U << 6) | 11);
+		mtx_lock(&sc->mtx);
+		sc->station_basic_rate = tx_basic;
+		mtx_unlock(&sc->mtx);
+	}
 
 	bzero(&phy, sizeof(phy));
 	phy.tag = htole16(MT7902_STA_REC_PHY);
@@ -1059,7 +1089,12 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	 * 6 Mbps OFDM on 5 GHz.
 	 */
 	if (fixed_rate) {
-		rate = sc->current_band == 5 ? ((1U << 6) | 11U) : 10U;
+		mtx_lock(&sc->mtx);
+		rate = sc->station_basic_rate;
+		if (rate == 0)
+			rate = sc->current_band == 5 ?
+			    ((1U << 6) | 11U) : 10U;
+		mtx_unlock(&sc->mtx);
 		txwi[2] |= htole32(MT7902_TXD_HTC_VALID);
 		txwi[3] |= htole32(MT7902_TXD_BA_DISABLE);
 		txwi[6] = htole32((rate << MT7902_TXD6_TX_RATE_SHIFT) |
