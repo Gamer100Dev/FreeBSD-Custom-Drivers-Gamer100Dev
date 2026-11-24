@@ -1226,12 +1226,31 @@ mt7902_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 		mtx_lock(&sc->mtx);
 		sc->monitor_active = true;
 		mtx_unlock(&sc->mtx);
+		if (sc->hw_started) {
+			error = mt7902_mcu_set_rxfilter(sc,
+			    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS |
+			    MT7902_RX_FILTER_CONTROL | MT7902_RX_FILTER_FCSFAIL);
+			if (error != 0)
+				device_printf(sc->dev,
+				    "could not enable monitor receive filters: %d\n", error);
+		}
+	} else if (sc->hw_started) {
+		/*
+		 * hw_start programs the receive filter before a station VAP has
+		 * been registered with firmware.  Refresh it after DEV_INFO_UPDATE
+		 * and BSS_INFO_UPDATE so the active station interface scans with
+		 * the same OTHER_BSS policy used by Linux mt7921_configure_filter().
+		 * mt7902_mcu_set_rxfilter() also clears DROP_OTHER_BEACON (RFCR bit 11),
+		 * which must not suppress beacons from neighbouring BSSs.
+		 *
+		 * VAP creation runs in the ifconfig ioctl context and may sleep while
+		 * waiting for MCU/WFDMA submission, unlike the scan callback.
+		 */
 		error = mt7902_mcu_set_rxfilter(sc,
-		    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS |
-		    MT7902_RX_FILTER_CONTROL | MT7902_RX_FILTER_FCSFAIL);
+		    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS);
 		if (error != 0)
 			device_printf(sc->dev,
-			    "could not enable monitor receive filters: %d\n", error);
+			    "could not refresh station scan receive filters: %d\n", error);
 	}
 	return (vap);
 }
