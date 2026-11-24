@@ -634,7 +634,19 @@ mt7902_irq_task(void *arg, int pending __unused)
 	}
 	if (status & MT7902_INT_RX_DONE_WM)
 		mt7902_rx_event_poll(sc);
-	if (status & MT7902_INT_RX_DONE_DATA)
+	/*
+	 * MT7902 shares RX ring0 between WM events and TX status. Poll ring2
+	 * after either RX interrupt: some firmware revisions raise the WM
+	 * interrupt while data descriptors are already complete, and the
+	 * dedicated ring2 interrupt can be coalesced with it.
+	 */
+	if (status & MT7902_INT_RX_DONE_WM &&
+	    (status & MT7902_INT_RX_DONE_DATA) == 0) {
+		mtx_lock(&sc->mtx);
+		sc->rx_data_fallback_poll_count++;
+		mtx_unlock(&sc->mtx);
+	}
+	if (status & (MT7902_INT_RX_DONE_DATA | MT7902_INT_RX_DONE_WM))
 		taskqueue_enqueue(taskqueue_thread, &sc->rx_task);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
 	    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
