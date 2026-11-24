@@ -409,6 +409,17 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->rx_event_count = 0;
 	sc->rx_event_txs_count = 0;
 	sc->rx_event_txs_records = 0;
+	sc->rx_event_txs_failures = 0;
+	sc->rx_event_txs_ack_timeouts = 0;
+	sc->rx_event_txs_rts_timeouts = 0;
+	sc->rx_event_txs_queue_timeouts = 0;
+	sc->rx_event_txs_retries = 0;
+	sc->rx_event_txs_last_wcid = 0;
+	sc->rx_event_txs_last_pid = 0;
+	sc->rx_event_txs_last_status = 0;
+	sc->rx_event_txs_last_rate = 0;
+	sc->rx_event_txs_last_fail_count = 0;
+	sc->rx_event_txs_last_retry_count = 0;
 	sc->rx_event_tx_free_count = 0;
 	sc->tx_free_records = 0;
 	sc->tx_free_failures = 0;
@@ -438,13 +449,16 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t rx, rx_desc, rx_fallback, dropped, mgmt, beacon;
 	uint64_t monitor_errors;
 	uint64_t events, txs, txs_records, tx_free, short_events, unknown;
+	uint64_t txs_failures, txs_ack_timeouts, txs_rts_timeouts;
+	uint64_t txs_queue_timeouts, txs_retries;
 	uint64_t tx_free_records, tx_free_failures, tx_free_retries;
 	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_timeouts;
 	uint64_t tx_pending_count, irq_count;
 	uint32_t last_len, rxd0, rxd1, rxd2, rxd3, last_event_rxd0, last_irq;
 	uint32_t data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl;
-	uint16_t last_event_len;
-	uint8_t last_event_type;
+	uint16_t last_event_len, txs_last_wcid, txs_last_rate;
+	uint16_t txs_last_fail_count, txs_last_retry_count;
+	uint8_t last_event_type, txs_last_pid, txs_last_status;
 	int rx_head, rx_tail, rx_queued;
 
 	mtx_lock(&sc->mtx);
@@ -459,6 +473,17 @@ mt7902_scan_end(struct ieee80211com *ic)
 	events = sc->rx_event_count;
 	txs = sc->rx_event_txs_count;
 	txs_records = sc->rx_event_txs_records;
+	txs_failures = sc->rx_event_txs_failures;
+	txs_ack_timeouts = sc->rx_event_txs_ack_timeouts;
+	txs_rts_timeouts = sc->rx_event_txs_rts_timeouts;
+	txs_queue_timeouts = sc->rx_event_txs_queue_timeouts;
+	txs_retries = sc->rx_event_txs_retries;
+	txs_last_wcid = sc->rx_event_txs_last_wcid;
+	txs_last_pid = sc->rx_event_txs_last_pid;
+	txs_last_status = sc->rx_event_txs_last_status;
+	txs_last_rate = sc->rx_event_txs_last_rate;
+	txs_last_fail_count = sc->rx_event_txs_last_fail_count;
+	txs_last_retry_count = sc->rx_event_txs_last_retry_count;
 	tx_free = sc->rx_event_tx_free_count;
 	tx_free_records = sc->tx_free_records;
 	tx_free_failures = sc->tx_free_failures;
@@ -491,7 +516,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	event_tail_ctl = sc->rx_event.desc != NULL ?
 	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju last_txs=%u/%u/%u/%u/%u/%u\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
 	    (uintmax_t)monitor_errors, (uintmax_t)events,
@@ -504,7 +529,12 @@ mt7902_scan_end(struct ieee80211com *ic)
 	    (uintmax_t)irq_count, last_irq, rx_head, rx_tail, rx_queued,
 	    data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl,
 	    last_event_type, last_event_len, last_event_rxd0, last_len,
-	    rxd0, rxd1, rxd2, rxd3);
+	    rxd0, rxd1, rxd2, rxd3,
+	    (uintmax_t)txs_failures, (uintmax_t)txs_ack_timeouts,
+	    (uintmax_t)txs_rts_timeouts, (uintmax_t)txs_queue_timeouts,
+	    (uintmax_t)txs_retries, txs_last_wcid, txs_last_pid,
+	    txs_last_status, txs_last_rate, txs_last_fail_count,
+	    txs_last_retry_count);
 }
 
 static int
