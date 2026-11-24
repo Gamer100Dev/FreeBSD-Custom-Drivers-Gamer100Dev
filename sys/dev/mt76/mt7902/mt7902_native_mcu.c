@@ -669,6 +669,33 @@ mt7902_mcu_init(struct mt7902_softc *sc)
 	return (0);
 }
 
+/*
+ * Configure the Connac2 receive filter before exposing the net80211 VAP.
+ * This is the same SET_RX_FILTER command used by mt7921_configure_filter():
+ * mode 1 replaces the filter flags, while bit_op/bit_map are reserved for
+ * incremental RFCR bitmap changes.
+ */
+int
+mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
+{
+	struct {
+		uint8_t reserved[4];
+		uint8_t mode;
+		uint8_t reserved2[3];
+		uint32_t fif;
+		uint32_t bit_map;
+		uint8_t bit_op;
+		uint8_t pad[51];
+	} __packed req;
+
+	bzero(&req, sizeof(req));
+	req.mode = flags != 0 ? 1 : 2;
+	req.fif = htole32(flags);
+	return (mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_RX_FILTER),
+	    &req, sizeof(req), false));
+}
+
 int
 mt7902_mcu_read_mac(struct mt7902_softc *sc)
 {
