@@ -617,7 +617,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	if ((fc & 0x000c) == 0)
 		txwi[2] |= htole32(1U << 13);
 	txp = (struct mt7902_txp *)((uint8_t *)buf->vaddr + MT7902_TXWI_LEN);
-	txp->msdu_id[0] = htole16((uint16_t)idx);
+	txp->msdu_id[0] = htole16((uint16_t)idx | (1U << 15));
 	txp->ptr[0].buf0 = htole32((uint32_t)(buf->paddr + MT7902_TXD_LEN));
 	txp->ptr[0].len0 = htole16((uint16_t)len | MT7902_TXP_LAST);
 	bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_PREWRITE);
