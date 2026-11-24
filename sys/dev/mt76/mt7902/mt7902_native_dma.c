@@ -318,6 +318,8 @@ mt7902_dma_stop(struct mt7902_softc *sc)
 			DELAY(10000);
 		}
 	}
+	/* IRQ and TX tasks are drained by irq_teardown() at callers. */
+	mt7902_tx_pending_drain(sc);
 	for (i = 0; i < MT7902_TX_DATA_QUEUES; i++)
 		mt7902_ring_free(&sc->tx_data[i]);
 	mt7902_ring_free(&sc->tx_mcu);
