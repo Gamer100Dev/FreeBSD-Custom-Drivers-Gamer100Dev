@@ -17,12 +17,19 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   firmware-download TX ring 16.
 * MSI/legacy interrupt setup, MCU event processing, sequence-matched response
   wakeups, PCIe MCU RX-wake handling, and native firmware download commands.
+  RX ring 0 is shared by MCU events and TX-status notifications; the receive
+  worker dispatches by RXD packet type, so short 16-byte TXS headers are not
+  mistaken for truncated MCU responses. Data ring 2 is polled after either
+  ring-0 or ring-2 receive interrupts to handle coalesced notifications.
 * Firmware startup and WFSYS recovery, with process-context `hw_start`
   retry/stop controls. WFDMA shutdown waits for TX/RX idle; if the engines do
   not quiesce, PCI bus mastering is disabled before ring memory is released.
 * Native net80211 STA/monitor registration, 2.4/5 GHz legacy channels,
-  software scanning, channel-switch requests, and station/BSS association.
-  Association sends the Connac2 BSS basic/QBSS TLVs, SET_BSS_ABORT /
+  software scanning, acknowledged channel-switch requests, and station/BSS
+  association. Scan-end diagnostics report ring-0 packet types/TXS counts,
+  ring-2 descriptor consumption, IRQ status, WFDMA producer indices, and
+  descriptor ownership at each receive tail. Association sends the Connac2
+  BSS basic/QBSS TLVs, SET_BSS_ABORT /
   SET_BSS_CONNECTED commands, STA_REC BASIC/PHY/RA/STATE records, and the
   minimal WTBL GENERIC/RX/HDR_TRANS records. Disconnect removes the station
   and resets its WTBL entry. AP BSSID/AID/DTIM/QoS state is cached so teardown
@@ -115,9 +122,12 @@ and robust queue backpressure are not implemented. Unicast data rate
 selection and all TX behavior still require over-the-air validation.
 
 Scanning currently uses FreeBSD's software scanner and normal channel-switch
-and probe-request TX paths. Dedicated firmware hardware scan, scheduled scan,
-scan cancellation offload, complete regulatory-domain handling, and 6 GHz
-operation are not implemented. The advertised channel/mode set remains
+and probe-request TX paths. The channel-switch command waits for firmware
+acknowledgement; ring-0 TXS notifications are recognized, and ring 2 is polled
+on shared ring-0 interrupts as well as its own data interrupt. Hardware
+beacon reception and scan results still require confirmation on the device.
+Dedicated firmware hardware scan, scheduled scan, scan cancellation offload,
+complete regulatory-domain handling, and 6 GHz operation are not implemented. The advertised channel/mode set remains
 conservative (2.4/5 GHz legacy modes); HT/VHT/HE capabilities are not
 advertised.
 
