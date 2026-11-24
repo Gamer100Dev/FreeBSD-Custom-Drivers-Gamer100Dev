@@ -730,6 +730,7 @@ mt7902_mcu_read_mac(struct mt7902_softc *sc)
 int
 mt7902_fw_boot(struct mt7902_softc *sc)
 {
+	uint32_t rx_filter;
 	int error, reset_error;
 
 	error = mt7902_fw_get(sc, MT7902_FW_PATCH, &sc->fw_patch);
@@ -760,6 +761,20 @@ mt7902_fw_boot(struct mt7902_softc *sc)
 	error = mt7902_mcu_init(sc);
 	if (error != 0)
 		goto fail;
+	/*
+	 * Re-apply the host receive filter on every firmware start, including
+	 * hw_start retries after a stop/reset. A monitor VAP additionally needs
+	 * control frames and failed-FCS frames for packet capture.
+	 */
+	rx_filter = MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS;
+	mtx_lock(&sc->mtx);
+	if (sc->monitor_active)
+		rx_filter |= MT7902_RX_FILTER_CONTROL | MT7902_RX_FILTER_FCSFAIL;
+	mtx_unlock(&sc->mtx);
+	error = mt7902_mcu_set_rxfilter(sc, rx_filter);
+	if (error != 0)
+		device_printf(sc->dev, "could not program MCU RX filter: %d\\n",
+		    error);
 	error = mt7902_mcu_read_mac(sc);
 	if (error != 0) {
 		device_printf(sc->dev, "could not read a valid MAC address: %d\n",
