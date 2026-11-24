@@ -26,10 +26,10 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   not quiesce, PCI bus mastering is disabled before ring memory is released.
 * Native net80211 STA/monitor registration, 2.4/5 GHz legacy channels,
   software scanning, acknowledged channel-switch requests, and station/BSS
-  association. Scan-end diagnostics report ring-0 packet types/TXS counts,
-  ring-2 descriptor consumption, IRQ status, WFDMA producer indices, and
-  descriptor ownership at each receive tail. Association sends the Connac2
-  BSS basic/QBSS TLVs, SET_BSS_ABORT /
+  association. Scan-end diagnostics report ring-0 packet types/TXS details,
+  TX_FREE completions, monitor-only ICV errors, ring-2 descriptor consumption,
+  IRQ status, WFDMA producer indices, and descriptor ownership at each receive
+  tail. Association sends the Connac2 BSS basic/QBSS TLVs, SET_BSS_ABORT /
   SET_BSS_CONNECTED commands, STA_REC BASIC/PHY/RA/STATE records, and the
   minimal WTBL GENERIC/RX/HDR_TRANS records. Disconnect removes the station
   and resets its WTBL entry. AP BSSID/AID/DTIM/QoS state is cached so teardown
