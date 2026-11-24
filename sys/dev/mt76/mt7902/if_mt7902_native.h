@@ -225,6 +225,7 @@ struct mt7902_softc {
 	uint64_t		rx_event_short_count;
 	uint64_t		rx_event_unknown_count;
 	uint64_t		rx_data_desc_count;
+	uint64_t		rx_data_fallback_poll_count;
 	uint32_t		rx_event_last_rxd0;
 	uint16_t		rx_event_last_len;
 	uint8_t		rx_event_last_type;
