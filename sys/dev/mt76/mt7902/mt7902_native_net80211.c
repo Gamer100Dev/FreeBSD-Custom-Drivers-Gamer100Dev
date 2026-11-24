@@ -42,6 +42,9 @@
 #define MT7902_TXD6_TX_RATE_SHIFT	16
 #define MT7902_TXP_LAST		(1U << 15)
 #define MT7902_STA_REC_BASIC	0
+#define MT7902_MCU_UNI_DEV_INFO_UPDATE	0x01
+#define MT7902_MCU_UNI_BSS_INFO_UPDATE	0x02
+#define MT7902_UNI_DEV_INFO_ACTIVE	0
 #define MT7902_UNI_BSS_INFO_BASIC	0
 #define MT7902_UNI_BSS_INFO_QBSS	15
 #define MT7902_STA_REC_STATE	7
@@ -239,6 +242,7 @@ struct mt7902_vap {
 	uint8_t peer_channel;
 	bool peer_qos;
 	bool linked;
+	bool fw_registered;
 };
 
 /*
@@ -292,6 +296,117 @@ mt7902_sta_disconnect(struct mt7902_softc *sc,
 	return (mt7902_mcu_send_response(sc,
 	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
 	    request, sizeof(request), NULL, &(size_t){0}));
+}
+
+/*
+ * Register the interface with Connac2 firmware before scans begin. Linux
+ * mt7921_add_interface() performs DEV_INFO_UPDATE followed by an initial
+ * BSS_INFO_UPDATE; without these records the firmware has no active OMAC
+ * and BSS context associated with this net80211 VAP.
+ */
+static int
+mt7902_vap_fw_update(struct mt7902_softc *sc, struct ieee80211vap *vap,
+    bool enable)
+{
+	struct {
+		struct {
+			uint8_t omac_idx;
+			uint8_t band_idx;
+			uint16_t pad;
+		} __packed hdr;
+		struct {
+			uint16_t tag;
+			uint16_t len;
+			uint8_t active;
+			uint8_t link_idx;
+			uint8_t omac_addr[IEEE80211_ADDR_LEN];
+		} __packed tlv;
+	} __packed dev_req;
+	struct {
+		struct {
+			uint8_t bss_idx;
+			uint8_t pad[3];
+		} __packed hdr;
+		struct mt7902_bss_basic basic;
+	} __packed bss_req;
+	uint32_t conn_type;
+	int error, rollback_error;
+
+	conn_type = vap->iv_opmode == IEEE80211_M_MONITOR ?
+	    MT7902_CONN_INFRA_AP : MT7902_CONN_INFRA_STA;
+
+	bzero(&dev_req, sizeof(dev_req));
+	dev_req.hdr.omac_idx = 0;
+	dev_req.hdr.band_idx = 0;
+	dev_req.tlv.tag = htole16(MT7902_UNI_DEV_INFO_ACTIVE);
+	dev_req.tlv.len = htole16(sizeof(dev_req.tlv));
+	dev_req.tlv.active = enable;
+	dev_req.tlv.link_idx = 0;
+	IEEE80211_ADDR_COPY(dev_req.tlv.omac_addr, vap->iv_myaddr);
+
+	bzero(&bss_req, sizeof(bss_req));
+	bss_req.hdr.bss_idx = MT7902_BSS_IDX;
+	bss_req.basic.tag = htole16(MT7902_UNI_BSS_INFO_BASIC);
+	bss_req.basic.len = htole16(sizeof(bss_req.basic));
+	bss_req.basic.active = enable;
+	bss_req.basic.omac_idx = 0;
+	bss_req.basic.hw_bss_idx = 0;
+	bss_req.basic.band_idx = 0;
+	bss_req.basic.conn_type = htole32(conn_type);
+	bss_req.basic.conn_state = 1; /* Present but not yet associated. */
+	bss_req.basic.wmm_idx = 0;
+	bss_req.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
+	bss_req.basic.sta_idx = htole16(MT7902_BSS_WCID);
+
+	if (enable) {
+		error = mt7902_mcu_send_response(sc,
+		    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_DEV_INFO_UPDATE),
+		    &dev_req, sizeof(dev_req), NULL, &(size_t){0});
+		if (error != 0) {
+			device_printf(sc->dev,
+			    "VAP firmware registration: DEV_INFO_UPDATE failed: %d\n",
+			    error);
+			return (error);
+		}
+		error = mt7902_mcu_send_response(sc,
+		    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_BSS_INFO_UPDATE),
+		    &bss_req, sizeof(bss_req), NULL, &(size_t){0});
+		if (error != 0) {
+			dev_req.tlv.active = 0;
+			rollback_error = mt7902_mcu_send_response(sc,
+			    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_DEV_INFO_UPDATE),
+			    &dev_req, sizeof(dev_req), NULL, &(size_t){0});
+			device_printf(sc->dev,
+			    "VAP firmware registration: BSS_INFO_UPDATE failed: %d; DEV rollback=%d\n",
+			    error, rollback_error);
+			return (error);
+		}
+		device_printf(sc->dev,
+		    "VAP firmware registered: DEV_INFO_UPDATE+BSS_INFO_UPDATE omac=0 bss=0 wcid=%u mode=%s\n",
+		    MT7902_BSS_WCID,
+		    vap->iv_opmode == IEEE80211_M_MONITOR ? "monitor" : "station");
+		return (0);
+	}
+
+	/* Remove the BSS before releasing its OMAC device record. */
+	error = mt7902_mcu_send_response(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_BSS_INFO_UPDATE),
+	    &bss_req, sizeof(bss_req), NULL, &(size_t){0});
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "VAP firmware removal: BSS_INFO_UPDATE failed: %d\n", error);
+		return (error);
+	}
+	error = mt7902_mcu_send_response(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_DEV_INFO_UPDATE),
+	    &dev_req, sizeof(dev_req), NULL, &(size_t){0});
+	if (error != 0)
+		device_printf(sc->dev,
+		    "VAP firmware removal: DEV_INFO_UPDATE failed: %d\n", error);
+	else
+		device_printf(sc->dev,
+		    "VAP firmware unregistered: omac=0 bss=0\n");
+	return (error);
 }
 
 static const uint8_t mt7902_5ghz_channels[] = {
@@ -1067,8 +1182,10 @@ mt7902_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 	const uint8_t bssid[IEEE80211_ADDR_LEN],
 	const uint8_t mac[IEEE80211_ADDR_LEN])
 {
+	struct mt7902_softc *sc = ic->ic_softc;
 	struct mt7902_vap *mvp;
 	struct ieee80211vap *vap;
+	int error;
 
 	if ((opmode != IEEE80211_M_STA && opmode != IEEE80211_M_MONITOR) ||
 	    !TAILQ_EMPTY(&ic->ic_vaps))
@@ -1084,10 +1201,29 @@ mt7902_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 	vap->iv_newstate = mt7902_vap_newstate;
 	ieee80211_vap_attach(vap, ieee80211_media_change,
 	    ieee80211_media_status, mac);
-	if (opmode == IEEE80211_M_MONITOR) {
-		struct mt7902_softc *sc = ic->ic_softc;
-		int error;
 
+	/*
+	 * net80211 enters vap_create with its lock held. Firmware command
+	 * transactions wait for an MCU response, so release that lock around
+	 * the DEV/BSS registration sequence.
+	 */
+	if (sc->hw_started) {
+		IEEE80211_UNLOCK(ic);
+		error = mt7902_vap_fw_update(sc, vap, true);
+		IEEE80211_LOCK(ic);
+		if (error != 0) {
+			vap->iv_newstate = mvp->newstate;
+			ieee80211_vap_detach(vap);
+			free(mvp, M_80211_VAP);
+			return (NULL);
+		}
+		mvp->fw_registered = true;
+	} else {
+		device_printf(sc->dev,
+		    "VAP created before firmware start; firmware registration deferred\n");
+	}
+
+	if (opmode == IEEE80211_M_MONITOR) {
 		mtx_lock(&sc->mtx);
 		sc->monitor_active = true;
 		mtx_unlock(&sc->mtx);
@@ -1122,6 +1258,13 @@ mt7902_vap_delete(struct ieee80211vap *vap)
 		}
 	}
 	ieee80211_stop(vap);
+	if (mvp->fw_registered && sc->hw_started) {
+		IEEE80211_UNLOCK(vap->iv_ic);
+		error = mt7902_vap_fw_update(sc, vap, false);
+		IEEE80211_LOCK(vap->iv_ic);
+		if (error == 0)
+			mvp->fw_registered = false;
+	}
 	vap->iv_newstate = mvp->newstate;
 	ieee80211_vap_detach(vap);
 	free(mvp, M_80211_VAP);
