@@ -150,6 +150,7 @@ struct mt7902_dma_buffer {
 	bus_addr_t paddr;
 	bus_dmamap_t map;
 	size_t len;
+	bool dma_pending;
 };
 
 struct mt7902_ring {
