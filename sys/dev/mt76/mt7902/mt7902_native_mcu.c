@@ -706,7 +706,7 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 	mtx_unlock(&sc->mtx);
 	if (debug > 0 || scanning)
 		device_printf(sc->dev,
-		    "RX filter: cmd=%s mode=%u flags=%08x bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\\n",
+		    "RX filter: cmd=%s mode=%u flags=%08x bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\n",
 		    error == 0 ? "submitted" : "failed", req.mode,
 		    flags, le32toh(req.bit_map), error);
 	if (error != 0)
@@ -733,7 +733,7 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 	mtx_unlock(&sc->mtx);
 	if (debug > 0 || scanning)
 		device_printf(sc->dev,
-		    "RX filter bitmap: cmd=%s mode=%u bit_op=clear(%u) bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\\n",
+		    "RX filter bitmap: cmd=%s mode=%u bit_op=clear(%u) bit_map=%08x error=%d (host submit status; MCU command is asynchronous)\n",
 		    bitmap_error == 0 ? "submitted" : "failed", req.mode,
 		    req.bit_op, le32toh(req.bit_map), bitmap_error);
 
