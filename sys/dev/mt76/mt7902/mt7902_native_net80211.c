@@ -28,6 +28,9 @@
 #define MT7902_TXD_PKT_FMT_SHIFT	23
 #define MT7902_TXD_LONG		(1U << 31)
 #define MT7902_TXD_HDR_80211	(2U << 16)
+#define MT7902_TXD_TID_SHIFT	20
+#define MT7902_TXD_HDR_INFO_SHIFT	11
+#define MT7902_TXD_FRAG_SHIFT	14
 #define MT7902_TXD_WLAN_IDX_SHIFT	0
 #define MT7902_TXD_FIX_RATE	(1U << 31)
 #define MT7902_TXD_RETRY	(15U << 11)
@@ -1013,11 +1016,11 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	struct mt7902_txp *txp;
 	struct ieee80211_frame_min wh;
 	uint32_t *txwi, fc, val, control, rate;
-	size_t len, total, hdrlen;
-	uint16_t tx_basic_rate;
-	uint8_t current_band;
+	size_t len, total, hdrlen, qos_offset;
+	uint16_t tx_basic_rate, qos_control, seq_control;
+	uint8_t current_band, tid, frag_idx;
 	int idx, retry, error, queue;
-	bool fixed_rate, station_linked;
+	bool fixed_rate, station_linked, more_frag;
 
 	/* FreeBSD WME order is BE/BK/VI/VO; Connac2 LMAC is reversed. */
 	queue = 3 - M_WME_GETAC(m);
@@ -1035,6 +1038,36 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	hdrlen = mt7902_80211_hdrlen(fc);
 	if (hdrlen == 0 || len < hdrlen)
 		return (EMSGSIZE);
+
+	/*
+	 * QoS control follows the optional addr4 field.  Connac2 carries a
+	 * three-bit TID in TXD1; use the low TID bits, as the HW field does.
+	 */
+	tid = 0;
+	if ((fc & 0x000c) == 0x0008 && ((fc & 0x00f0) & 0x0080) != 0) {
+		qos_offset = sizeof(struct ieee80211_frame);
+		if ((fc & 0x0300) == 0x0300)
+			qos_offset += IEEE80211_ADDR_LEN;
+		if (len < qos_offset + sizeof(qos_control))
+			return (EMSGSIZE);
+		m_copydata(m, qos_offset, sizeof(qos_control),
+		    (caddr_t)&qos_control);
+		tid = le16toh(qos_control) & 0x07;
+	}
+
+	/* TXD2 fragmentation class follows the 802.11 sequence control. */
+	more_frag = (fc & 0x0400) != 0;
+	frag_idx = 0; /* MT_TX_FRAG_NONE */
+	if ((fc & 0x000c) == 0 || (fc & 0x000c) == 0x0008) {
+		if (len < 24)
+			return (EMSGSIZE);
+		m_copydata(m, 22, sizeof(seq_control), (caddr_t)&seq_control);
+		seq_control = le16toh(seq_control);
+		if (more_frag)
+			frag_idx = (seq_control & 0x0f) == 0 ? 1 : 2;
+		else if ((seq_control & 0x0f) != 0)
+			frag_idx = 3; /* MT_TX_FRAG_LAST */
+	}
 	mtx_lock(&sc->mtx);
 	idx = ring->head;
 	desc = &ring->desc[idx];
@@ -1076,12 +1109,21 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	    (0U << MT7902_TXD_PKT_FMT_SHIFT) |
 	    ((uint32_t)queue << MT7902_TXD_QIDX_SHIFT);
 	txwi[0] = htole32(val);
-	val = MT7902_TXD_LONG | ((uint32_t)(station_linked ?
-	    MT7902_PEER_WCID : MT7902_BSS_WCID) << MT7902_TXD_WLAN_IDX_SHIFT);
+	/*
+	 * Connac2 TXD1: long format, WCID, 802.11 header format, header length
+	 * and TID.  These header-format fields must not be written to TXD2.
+	 */
+	val = MT7902_TXD_LONG |
+	    ((uint32_t)(station_linked ? MT7902_PEER_WCID :
+	    MT7902_BSS_WCID) << MT7902_TXD_WLAN_IDX_SHIFT) |
+	    MT7902_TXD_HDR_80211 |
+	    (((uint32_t)(hdrlen / 2) & 0x1f) << MT7902_TXD_HDR_INFO_SHIFT) |
+	    ((uint32_t)tid << MT7902_TXD_TID_SHIFT);
 	txwi[1] = htole32(val);
-	val = MT7902_TXD_HDR_80211 |
-	    (((uint32_t)(hdrlen / 2) & 0x1f) << 11) |
-	    (((fc & 0x0c) >> 2) << 4) | ((fc & 0xf0) >> 4);
+
+	/* Connac2 TXD2 contains frame type/subtype, multicast, rate and frag. */
+	val = (((fc & 0x0c) >> 2) << 4) | ((fc & 0xf0) >> 4) |
+	    ((uint32_t)frag_idx << MT7902_TXD_FRAG_SHIFT);
 	if (ETHER_IS_MULTICAST(wh.i_addr1))
 		val |= 1U << 10;
 	fixed_rate = (fc & 0x000c) != 0x0008 ||
