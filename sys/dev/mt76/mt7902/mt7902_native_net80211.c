@@ -381,8 +381,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
 	uint8_t peer[IEEE80211_ADDR_LEN], rate;
-	uint16_t aid, supp_rates, legacy;
-	bool band2;
+	uint16_t aid, supp_rates, basic_rates, legacy;
+	bool band2, rate_basic;
 	int i, j, error;
 
 	if (ni != NULL)
@@ -488,15 +488,22 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	 */
 	band2 = IEEE80211_IS_CHAN_2GHZ(ni->ni_chan);
 	supp_rates = 0;
+	basic_rates = 0;
 	for (i = 0; i < ni->ni_rates.rs_nrates; i++) {
+		rate_basic = (ni->ni_rates.rs_rates[i] & 0x80) != 0;
 		rate = ni->ni_rates.rs_rates[i] & 0x7f;
 		for (j = 0; j < nitems(legacy_rates); j++) {
 			if (legacy_rates[j] != rate)
 				continue;
-			if (band2)
+			if (band2) {
 				supp_rates |= (uint16_t)(1U << j);
-			else if (j >= 4)
+				if (rate_basic)
+					basic_rates |= (uint16_t)(1U << j);
+			} else if (j >= 4) {
 				supp_rates |= (uint16_t)(1U << (j - 4));
+				if (rate_basic)
+					basic_rates |= (uint16_t)(1U << (j - 4));
+			}
 			break;
 		}
 	}
@@ -509,6 +516,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bzero(&phy, sizeof(phy));
 	phy.tag = htole16(MT7902_STA_REC_PHY);
 	phy.len = htole16(sizeof(phy));
+	phy.basic_rate = htole16(basic_rates);
 	/* PHY_MODE_B|PHY_MODE_G for 2.4 GHz, PHY_MODE_A for 5 GHz. */
 	phy.phy_type = band2 ? ((1U << 1) | (1U << 2)) : (1U << 0);
 
