@@ -32,6 +32,11 @@
 #define MT7902_RX_LEN_MASK	0x3fffU
 #define MT7902_RXD0_LEN_MASK	0xffffU
 #define MT7902_RXD0_TYPE_SHIFT	27
+#define MT7902_PKT_TYPE_TXS		0
+#define MT7902_PKT_TYPE_NORMAL		2
+#define MT7902_PKT_TYPE_TXRX_NOTIFY	6
+#define MT7902_PKT_TYPE_RX_EVENT	7
+#define MT7902_PKT_TYPE_NORMAL_MCU	8
 #define MT7902_RXD1_GROUP1	(1U << 11)
 #define MT7902_RXD1_GROUP2	(1U << 12)
 #define MT7902_RXD1_GROUP3	(1U << 13)
@@ -336,6 +341,13 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 	}
 }
 
+/*
+ * RX ring 0 is shared by MCU events and TX status notifications on MT7902.
+ * Dispatch by RXD0 packet type just as mt7921_queue_rx_skb() does. In
+ * particular, TXS notifications can be shorter than a full MCU RXD header;
+ * treating every descriptor as a 36-byte MCU event caused the repeated
+ * "invalid MCU event descriptor length (16 bytes)" message.
+ */
 static void
 mt7902_rx_event_poll(struct mt7902_softc *sc)
 {
@@ -344,10 +356,11 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 	struct mt7902_dma_buffer *buf;
 	uint8_t *data;
 	uint16_t mcu_len;
-	uint32_t control;
-	size_t dma_len, event_len;
+	uint32_t control, rxd0, txs0;
+	size_t dma_len, event_len, offset;
 	int idx, count, error;
-	uint8_t seq, eid;
+	uint8_t seq, eid, pkt_type, pkt_flag;
+	bool log_short, log_unknown;
 
 	ring = &sc->rx_event;
 	if (ring->desc == NULL)
@@ -364,26 +377,101 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
 		data = buf->vaddr;
 		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
-		mcu_len = 0;
-		if (dma_len >= MT7902_RXD_SIZE && dma_len <= buf->len) {
+		log_short = false;
+		log_unknown = false;
+
+		if (dma_len < sizeof(rxd0) || dma_len > buf->len) {
+			mtx_lock(&sc->mtx);
+			sc->rx_event_short_count++;
+			log_short = sc->rx_event_short_count == 1;
+			mtx_unlock(&sc->mtx);
+			if (log_short)
+				device_printf(sc->dev,
+				    "short RX ring0 descriptor: len=%ju buffer=%ju\\n",
+				    (uintmax_t)dma_len, (uintmax_t)buf->len);
+			goto rearm;
+		}
+
+		rxd0 = le32dec(data);
+		pkt_type = (rxd0 >> 27) & 0x1f;
+		pkt_flag = (rxd0 >> 16) & 0x0f;
+		/* RX_EVENT with flag 1 is a normal MCU RX frame, not an event. */
+		if (pkt_type == MT7902_PKT_TYPE_RX_EVENT && pkt_flag == 1)
+			pkt_type = MT7902_PKT_TYPE_NORMAL_MCU;
+
+		mtx_lock(&sc->mtx);
+		sc->rx_event_count++;
+		sc->rx_event_last_rxd0 = rxd0;
+		sc->rx_event_last_len = (uint16_t)dma_len;
+		sc->rx_event_last_type = pkt_type;
+		mtx_unlock(&sc->mtx);
+
+		switch (pkt_type) {
+		case MT7902_PKT_TYPE_TXS:
+			/*
+			 * TXS has a two-dword header followed by zero or more
+			 * eight-dword records. A 16-byte descriptor contains only
+			 * the header; it is valid and simply has no complete TXS
+			 * record to consume.
+			 */
+			for (offset = 8; offset + 32 <= dma_len; offset += 32) {
+				txs0 = le32dec(data + offset);
+				if (((txs0 >> 23) & 0x3) > 1)
+					continue;
+				mtx_lock(&sc->mtx);
+				sc->rx_event_txs_records++;
+				mtx_unlock(&sc->mtx);
+			}
+			mtx_lock(&sc->mtx);
+			sc->rx_event_txs_count++;
+			mtx_unlock(&sc->mtx);
+			break;
+
+		case MT7902_PKT_TYPE_TXRX_NOTIFY:
+			/*
+			 * TX free notifications share this ring too. TX descriptors
+			 * are currently reclaimed by the native WFDMA completion
+			 * path, so count and consume the notification without
+			 * mistaking it for an MCU command response.
+			 */
+			mtx_lock(&sc->mtx);
+			sc->rx_event_tx_free_count++;
+			mtx_unlock(&sc->mtx);
+			break;
+
+		case MT7902_PKT_TYPE_NORMAL:
+		case MT7902_PKT_TYPE_NORMAL_MCU:
+			mt7902_rx_data_frame(sc, data, dma_len);
+			break;
+
+		case MT7902_PKT_TYPE_RX_EVENT:
+			if (dma_len < MT7902_RXD_SIZE) {
+				mtx_lock(&sc->mtx);
+				sc->rx_event_short_count++;
+				log_short = sc->rx_event_short_count == 1;
+				mtx_unlock(&sc->mtx);
+				if (log_short)
+					device_printf(sc->dev,
+					    "short MCU RX event: len=%ju RXD0=%08x flag=%u\\n",
+					    (uintmax_t)dma_len, rxd0, pkt_flag);
+				break;
+			}
+
 			event_len = dma_len - MT7902_RXD_SIZE;
 			memcpy(&mcu_len, data + MT7902_RXD_LEN_OFFSET,
 			    sizeof(mcu_len));
 			eid = data[MT7902_RXD_EID_OFFSET];
 			seq = data[MT7902_RXD_SEQ_OFFSET];
 			mtx_lock(&sc->mtx);
-			sc->rx_event_count++;
-			/* mt76 matches MCU replies by sequence; firmware replies can
-			 * use EIDs other than the generic 0x06 event identifier.
-			 */
 			if (sc->mcu_waiting && seq == sc->mcu_wait_seq) {
 				device_printf(sc->dev,
-				    "MCU RX response cmd=%02x seq=%u eid=%02x len=%u status=%02x\n",
+				    "MCU RX response cmd=%02x seq=%u eid=%02x len=%u status=%02x\\n",
 				    sc->mcu_wait_cmd, seq, eid,
 				    le16toh(mcu_len), data[MT7902_RXD_SIZE - 4]);
-				/* PATCH_SEM_CONTROL and PATCH_FINISH_REQ return
+				/*
+				 * PATCH_SEM_CONTROL and PATCH_FINISH_REQ return
 				 * their status in the final word of the RXD header,
-				 * matching mt7921_mcu_parse_response().
+				 * as mt7921_mcu_parse_response() specifies.
 				 */
 				if (sc->mcu_wait_cmd == MT7902_MCU_CMD_PATCH_SEM ||
 				    sc->mcu_wait_cmd == MT7902_MCU_CMD_PATCH_FINISH)
@@ -391,7 +479,8 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 				else
 					sc->mcu_error = 0;
 				sc->mcu_response_len = MIN(event_len,
-				    sizeof(sc->mcu_response));
+				    MIN((size_t)le16toh(mcu_len),
+				    sizeof(sc->mcu_response)));
 				if (sc->mcu_response_len != 0)
 					memcpy(sc->mcu_response,
 					    data + MT7902_RXD_SIZE,
@@ -400,15 +489,25 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 				cv_broadcast(&sc->mcu_cv);
 			}
 			mtx_unlock(&sc->mtx);
-		} else {
-			device_printf(sc->dev,
-			    "invalid MCU event descriptor length (%ju bytes, buffer %ju)\n",
-			    (uintmax_t)dma_len, (uintmax_t)buf->len);
+			break;
+
+		default:
+			mtx_lock(&sc->mtx);
+			sc->rx_event_unknown_count++;
+			log_unknown = sc->rx_event_unknown_count == 1;
+			mtx_unlock(&sc->mtx);
+			if (log_unknown)
+				device_printf(sc->dev,
+				    "unhandled RX ring0 packet type=%u flag=%u len=%ju RXD0=%08x\\n",
+				    pkt_type, pkt_flag, (uintmax_t)dma_len, rxd0);
+			break;
 		}
+
+rearm:
 		error = mt7902_rx_rearm(sc, ring, idx);
 		if (error != 0) {
 			device_printf(sc->dev,
-			    "RX event ring cursor collision at descriptor %d\n", idx);
+			    "RX event ring cursor collision at descriptor %d\\n", idx);
 			break;
 		}
 	}
