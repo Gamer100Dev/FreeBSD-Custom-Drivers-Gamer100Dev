@@ -260,6 +260,11 @@ struct mt7902_softc {
 	struct mt7902_ring	rx_event;
 	struct mt7902_tx_pending tx_pending[MT7902_TX_PENDING_COUNT];
 	uint64_t		tx_pending_count;
+	uint64_t		tx_raw_count;
+	uint64_t		tx_raw_reject_count;
+	uint64_t		tx_raw_enqueue_errors;
+	uint64_t		tx_submit_count;
+	uint64_t		tx_dma_done_count;
 	uint64_t		tx_free_records;
 	uint64_t		tx_free_failures;
 	uint64_t		tx_free_retries;
