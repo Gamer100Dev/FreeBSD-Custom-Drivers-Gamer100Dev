@@ -432,6 +432,20 @@ mt7902_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ],
 	vap->iv_newstate = mt7902_vap_newstate;
 	ieee80211_vap_attach(vap, ieee80211_media_change,
 	    ieee80211_media_status, mac);
+	if (opmode == IEEE80211_M_MONITOR) {
+		struct mt7902_softc *sc = ic->ic_softc;
+		int error;
+
+		mtx_lock(&sc->mtx);
+		sc->monitor_active = true;
+		mtx_unlock(&sc->mtx);
+		error = mt7902_mcu_set_rxfilter(sc,
+		    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS |
+		    MT7902_RX_FILTER_CONTROL | MT7902_RX_FILTER_FCSFAIL);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not enable monitor receive filters: %d\\n", error);
+	}
 	return (vap);
 }
 
@@ -439,7 +453,22 @@ static void
 mt7902_vap_delete(struct ieee80211vap *vap)
 {
 	struct mt7902_vap *mvp = (struct mt7902_vap *)vap;
+	struct mt7902_softc *sc = vap->iv_ic->ic_softc;
+	int error;
 
+	if (vap->iv_opmode == IEEE80211_M_MONITOR) {
+		mtx_lock(&sc->mtx);
+		sc->monitor_active = false;
+		mtx_unlock(&sc->mtx);
+		if (sc->hw_started) {
+			error = mt7902_mcu_set_rxfilter(sc,
+			    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS);
+			if (error != 0)
+				device_printf(sc->dev,
+				    "could not restore station receive filters: %d\\n",
+				    error);
+		}
+	}
 	ieee80211_stop(vap);
 	vap->iv_newstate = mvp->newstate;
 	ieee80211_vap_detach(vap);
