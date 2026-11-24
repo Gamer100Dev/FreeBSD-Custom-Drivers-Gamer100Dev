@@ -45,19 +45,32 @@
  * their descriptors for their entire lifetime: swapping buffer structs here
  * leaves the descriptor-to-buffer mapping inconsistent after the ring wraps.
  */
+/*
+ * Refill the reserved producer slot using the completed slot's buffer.
+ * mt76's dma dequeue/fill path does the same ownership rotation: the
+ * consumed buffer is recycled at head, while the formerly reserved buffer
+ * remains associated with the consumed descriptor until the ring wraps.
+ */
 static int
 mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
 {
-	struct mt7902_dma_buffer *buf;
+	struct mt7902_dma_buffer tmp, *buf;
 	struct mt7902_dma_desc *desc;
 	int refill_idx;
 
 	refill_idx = ring->head;
-	if (refill_idx == idx)
+	if (refill_idx == idx || ring->queued <= 0 ||
+	    ring->queued >= ring->ndesc)
 		return (EBUSY);
 
+	/* Remove the completed tail and rotate its buffer to the producer. */
+	ring->queued--;
+	tmp = ring->buf[idx];
+	ring->buf[idx] = ring->buf[refill_idx];
+	ring->buf[refill_idx] = tmp;
 	buf = &ring->buf[refill_idx];
 	desc = &ring->desc[refill_idx];
+
 	bus_dmamap_sync(ring->buf_tag, buf->map,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 	bus_dmamap_sync(ring->buf_tag, buf->map,
@@ -69,8 +82,10 @@ mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
 	    MT7902_DMA_LEN_MASK) << MT7902_DMA_LEN_SHIFT);
 	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
+
 	ring->tail = (idx + 1) % ring->ndesc;
 	ring->head = (refill_idx + 1) % ring->ndesc;
+	ring->queued++;
 	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	return (0);
 }
