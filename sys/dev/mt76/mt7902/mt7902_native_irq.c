@@ -364,8 +364,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	mtx_unlock(&sc->mtx);
 	mtx_lock(&sc->mtx);
 	sc->rx_frame_type[frame_type]++;
-	if (channel < nitems(sc->rx_channel_frames))
-		sc->rx_channel_frames[channel]++;
+	sc->rx_channel_frames[channel]++;
 	if (is_mgmt) {
 		sc->rx_mgmt_count++;
 		sc->rx_mgmt_subtype[subtype]++;
@@ -386,7 +385,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		    channel, channel <= 14 ? "2g" : "5g", frame_type, subtype, fc,
 		    (uintmax_t)frame_len, (uintmax_t)hdr_len, (uintmax_t)offset,
 		    rssi, rcpi, rcpi_valid, (rxd3 >> 16) & 0x3, rxd4 & 0x3,
-		    (rxd1 >> 16) & 0x1f, rxd0, rxd1, rxd2, rxd3, rxd4);
+		    (rxd1 >> 16) & 0x1f, rxd1, rxd0, rxd1, rxd2, rxd3, rxd4);
 	m = m_get2((int)frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL) {
 		drop_reason = MT7902_RX_DROP_NOMEM;
