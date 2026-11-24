@@ -50,9 +50,10 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   VAP requests control and failed-FCS frames and receives FCS/TKIP-MIC error
   flags; ICV-error delivery is not implemented.
 * Native FreeBSD radiotap attachment for monitor/BPF use. RX reports
-  channel frequency/flags, dBm signal/noise and failed-FCS state; TX reports
-  channel metadata. TSFT and PHY rate fields are deliberately omitted until
-  the RX descriptor's TSF/rate information is decoded.
+  channel frequency/flags, dBm signal/noise and failed-FCS state; ICV-failed
+  frames are tapped only to monitor listeners. TX reports channel metadata.
+  TSFT and PHY rate fields are deliberately omitted until the RX descriptor's
+  TSF/rate information is decoded.
 * Four Connac2 access-category TX rings mapped from FreeBSD WME ACs, plus a
   native WME update callback that programs per-AC EDCA contention parameters
   through CE `SET_EDCA_PARMS`. The 32-byte hardware TXP carries the payload
