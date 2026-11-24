@@ -402,6 +402,13 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->rx_event_txs_count = 0;
 	sc->rx_event_txs_records = 0;
 	sc->rx_event_tx_free_count = 0;
+	sc->tx_free_records = 0;
+	sc->tx_free_failures = 0;
+	sc->tx_free_retries = 0;
+	sc->tx_free_unknown = 0;
+	sc->tx_free_pairs = 0;
+	sc->tx_free_bad = 0;
+	sc->tx_dma_timeouts = 0;
 	sc->rx_event_short_count = 0;
 	sc->rx_event_unknown_count = 0;
 	sc->rx_last_len = 0;
@@ -422,7 +429,9 @@ mt7902_scan_end(struct ieee80211com *ic)
 	struct mt7902_softc *sc = ic->ic_softc;
 	uint64_t rx, rx_desc, rx_fallback, dropped, mgmt, beacon;
 	uint64_t events, txs, txs_records, tx_free, short_events, unknown;
-	uint64_t irq_count;
+	uint64_t tx_free_records, tx_free_failures, tx_free_retries;
+	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_timeouts;
+	uint64_t tx_pending_count, irq_count;
 	uint32_t last_len, rxd0, rxd1, rxd2, rxd3, last_event_rxd0, last_irq;
 	uint32_t data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl;
 	uint16_t last_event_len;
@@ -441,6 +450,14 @@ mt7902_scan_end(struct ieee80211com *ic)
 	txs = sc->rx_event_txs_count;
 	txs_records = sc->rx_event_txs_records;
 	tx_free = sc->rx_event_tx_free_count;
+	tx_free_records = sc->tx_free_records;
+	tx_free_failures = sc->tx_free_failures;
+	tx_free_retries = sc->tx_free_retries;
+	tx_free_unknown = sc->tx_free_unknown;
+	tx_free_pairs = sc->tx_free_pairs;
+	tx_free_bad = sc->tx_free_bad;
+	tx_dma_timeouts = sc->tx_dma_timeouts;
+	tx_pending_count = sc->tx_pending_count;
 	short_events = sc->rx_event_short_count;
 	unknown = sc->rx_event_unknown_count;
 	irq_count = sc->irq_count;
@@ -464,11 +481,15 @@ mt7902_scan_end(struct ieee80211com *ic)
 	event_tail_ctl = sc->rx_event.desc != NULL ?
 	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju short=%ju unknown=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
 	    (uintmax_t)events,
 	    (uintmax_t)txs, (uintmax_t)txs_records, (uintmax_t)tx_free,
+	    (uintmax_t)tx_free_records, (uintmax_t)tx_free_failures,
+	    (uintmax_t)tx_free_retries, (uintmax_t)tx_pending_count,
+	    (uintmax_t)tx_free_unknown, (uintmax_t)tx_free_pairs,
+	    (uintmax_t)tx_free_bad, (uintmax_t)tx_dma_timeouts,
 	    (uintmax_t)short_events, (uintmax_t)unknown,
 	    (uintmax_t)irq_count, last_irq, rx_head, rx_tail, rx_queued,
 	    data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl,
@@ -1414,10 +1435,14 @@ mt7902_tx_pending_drain(struct mt7902_softc *sc)
 		if (sc->tx_pending_count != 0)
 			sc->tx_pending_count--;
 		mtx_unlock(&sc->mtx);
-		if (ni != NULL)
-			ieee80211_tx_complete(ni, m, 1);
-		else if (m != NULL)
-			m_freem(m);
+		if (m != NULL) {
+			if (ni != NULL)
+				ieee80211_tx_complete(ni, m, 1);
+			else
+				m_freem(m);
+		} else if (ni != NULL) {
+			ieee80211_free_node(ni);
+		}
 	}
 }
 
