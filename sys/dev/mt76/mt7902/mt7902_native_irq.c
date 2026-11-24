@@ -83,6 +83,41 @@ mt7902_rx_drop(struct mt7902_softc *sc)
 	mtx_unlock(&sc->mtx);
 }
 
+static size_t
+mt7902_rx_80211_hdrlen(uint16_t fc)
+{
+	size_t len;
+	uint16_t type, subtype;
+
+	type = fc & 0x000c;
+	subtype = (fc >> 4) & 0x0f;
+	switch (type) {
+	case 0x0000:             /* management */
+		len = sizeof(struct ieee80211_frame);
+		if (fc & 0x8000)
+			len += 4;
+		break;
+	case 0x0004:             /* control */
+		len = (subtype == 0x0c || subtype == 0x0d) ?
+		    sizeof(struct ieee80211_frame_cts) :
+		    sizeof(struct ieee80211_frame_min);
+		break;
+	case 0x0008:             /* data */
+		len = sizeof(struct ieee80211_frame);
+		if ((fc & 0x0300) == 0x0300)
+			len += IEEE80211_ADDR_LEN;
+		if (subtype & 0x08)
+			len += 2;
+		if (fc & 0x8000)
+			len += 4;
+		break;
+	default:
+		len = 0;
+		break;
+	}
+	return (len);
+}
+
 /*
  * Connac2 normal RXD parser.  The six-word base RXD is followed by optional
  * groups in the order used by mt7921_mac_fill_rx(): GROUP_4, GROUP_1,
@@ -97,9 +132,9 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	struct ieee80211_rx_stats rxs;
 	const struct ieee80211_frame_min *wh;
 	struct mbuf *m;
-	uint32_t rxd0, rxd1, rxd2, rxd3, rcpi_word, sec_mode;
+	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
-	size_t offset, frame_len;
+	size_t offset, frame_len, hdr_len;
 	uint8_t channel, rcpi, subtype;
 	int rssi, noise;
 	bool is_mgmt, monitor_active;
@@ -110,6 +145,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxd1 = le32dec(data + 4);
 	rxd2 = le32dec(data + 8);
 	rxd3 = le32dec(data + 12);
+	rxd4 = le32dec(data + 16);
 	channel = (rxd3 >> 8) & 0xff;
 
 	mtx_lock(&sc->mtx);
@@ -132,7 +168,11 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 */
 	if ((rxd1 & ((1U << 28) | (1U << 25))) != 0 ||
 	    (!monitor_active && (rxd1 & ((1U << 26) | (1U << 27))) != 0) ||
-	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0)
+	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24) |
+	    (1U << 25))) != 0)
+		goto drop;
+	/* RXD4 payload format != 0 describes a deaggregated A-MSDU. */
+	if ((rxd4 & 0x3) != 0)
 		goto drop;
 
 	offset = 24;
@@ -169,6 +209,9 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 
 	wh = (const struct ieee80211_frame_min *)(const void *)(data + offset);
 	fc = le16dec(&wh->i_fc[0]);
+	hdr_len = mt7902_rx_80211_hdrlen(fc);
+	if (hdr_len == 0 || frame_len < hdr_len)
+		goto drop;
 	is_mgmt = (fc & 0x000c) == 0;
 	subtype = (fc >> 4) & 0x0f;
 	if (is_mgmt) {
