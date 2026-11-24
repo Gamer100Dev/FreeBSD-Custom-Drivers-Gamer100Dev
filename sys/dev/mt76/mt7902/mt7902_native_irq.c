@@ -616,6 +616,7 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 				if (txs_status & (1U << 2))
 					sc->rx_event_txs_queue_timeouts++;
 				sc->rx_event_txs_retries += txs_retry_count;
+				sc->rx_event_txs_bytes += txs5 & 0x7fffff;
 				sc->rx_event_txs_last_wcid = txs_wcid;
 				sc->rx_event_txs_last_pid = txs_pid;
 				sc->rx_event_txs_last_status = txs_status;
