@@ -264,6 +264,17 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		goto drop;
 	is_mgmt = (fc & 0x000c) == 0;
 	subtype = (fc >> 4) & 0x0f;
+	mtx_lock(&sc->mtx);
+	sc->rx_last_rxd4 = rxd4;
+	sc->rx_last_fc = fc;
+	sc->rx_last_frame_len = (uint16_t)MIN(frame_len, UINT16_MAX);
+	sc->rx_last_hdr_len = (uint16_t)hdr_len;
+	sc->rx_last_offset = (uint16_t)MIN(offset, UINT16_MAX);
+	sc->rx_last_pkt_type = pkt_type;
+	sc->rx_last_addr_type = (rxd3 >> 16) & 0x3;
+	sc->rx_last_payload_format = rxd4 & 0x3;
+	sc->rx_last_channel = channel;
+	mtx_unlock(&sc->mtx);
 	if (is_mgmt) {
 		mtx_lock(&sc->mtx);
 		sc->rx_mgmt_count++;
