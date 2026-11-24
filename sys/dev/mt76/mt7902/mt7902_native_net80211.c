@@ -680,7 +680,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 		    (uintmax_t)frame_type[2], (uintmax_t)frame_type[3],
 		    (uintmax_t)mgmt);
 		device_printf(sc->dev,
-		    "CHANNEL/FILTER: switches=%ju failed=%ju last_request=%u band=%u flags=%08x scan=%u result=%d filter_commands=%ju filter=%08x filter_error=%d\\n",
+		    "CHANNEL/FILTER: switches=%ju failed=%ju last_request=%u band=%u flags=%08x scan=%u result=%d filter_commands=%ju filter=%08x filter_error=%d\n",
 		    (uintmax_t)chan_switch_count,
 		    (uintmax_t)chan_switch_failures, chan_last_request,
 		    chan_last_band, chan_last_flags, chan_last_scan,
