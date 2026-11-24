@@ -35,6 +35,7 @@
 #define MT7902_TXD_FIX_RATE	(1U << 31)
 #define MT7902_TXD_RETRY	(15U << 11)
 #define MT7902_TXD_BA_DISABLE	(1U << 28)
+#define MT7902_TXD_NO_ACK	(1U << 0)
 #define MT7902_TXD_HTC_VALID	(1U << 13)
 #define MT7902_TXD6_FIXED_BW	(1U << 2)
 #define MT7902_TXD6_TX_RATE_SHIFT	16
@@ -947,6 +948,20 @@ mt7902_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 		m_freem(m);
 		return (EOPNOTSUPP);
 	}
+	/*
+	 * ieee80211_raw_output() normally attaches this tag before invoking
+	 * ic_raw_xmit().  Attach it here as well for callers that invoke the
+	 * driver raw-xmit callback directly.  TX worker reads the same tag
+	 * after the mbuf has entered the asynchronous queue.
+	 */
+	if (params != NULL &&
+	    ieee80211_get_xmit_params(m, &tx_params) != 0 &&
+	    !ieee80211_add_xmit_params(m, params)) {
+		if (m->m_flags & M_TXCB)
+			ieee80211_process_callback(ni, m, 1);
+		m_freem(m);
+		return (ENOMEM);
+	}
 	sc = ni->ni_ic->ic_softc;
 	{
 		int error = mt7902_tx_enqueue(sc, m);
@@ -1015,15 +1030,25 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	struct mt7902_dma_buffer *buf;
 	struct mt7902_txp *txp;
 	struct ieee80211_frame_min wh;
+	struct ieee80211_bpf_params tx_params;
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen, qos_offset;
 	uint16_t tx_basic_rate, qos_control, seq_control;
 	uint8_t current_band, tid, frag_idx;
-	int idx, retry, error, queue;
-	bool fixed_rate, station_linked, more_frag;
+	int idx, retry, error, queue, i;
+	bool fixed_rate, station_linked, more_frag, has_tx_params, noack;
+	static const uint8_t raw_rates[] = {
+		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
+	};
+	static const uint8_t raw_hw_rates[] = {
+		10, 20, 55, 110, 11, 15, 10, 14, 9, 13, 8, 12
+	};
 
+	has_tx_params = ieee80211_get_xmit_params(m, &tx_params) == 0;
+	noack = has_tx_params &&
+	    (tx_params.ibp_flags & IEEE80211_BPF_NOACK) != 0;
 	/* FreeBSD WME order is BE/BK/VI/VO; Connac2 LMAC is reversed. */
-	queue = 3 - M_WME_GETAC(m);
+	queue = 3 - (has_tx_params ? tx_params.ibp_pri : M_WME_GETAC(m));
 	if (queue < 0 || queue >= MT7902_TX_DATA_QUEUES)
 		return (EINVAL);
 	ring = &sc->tx_data[queue];
@@ -1127,11 +1152,14 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	if (ETHER_IS_MULTICAST(wh.i_addr1))
 		val |= 1U << 10;
 	fixed_rate = (fc & 0x000c) != 0x0008 ||
-	    ETHER_IS_MULTICAST(wh.i_addr1);
+	    ETHER_IS_MULTICAST(wh.i_addr1) ||
+	    (has_tx_params && tx_params.ibp_rate0 != 0);
 	if (fixed_rate)
 		val |= MT7902_TXD_FIX_RATE;
 	txwi[2] = htole32(val);
 	txwi[3] = htole32(MT7902_TXD_RETRY);
+	if (noack)
+		txwi[3] |= htole32(MT7902_TXD_NO_ACK);
 	txwi[4] = 0;
 	txwi[5] = 0;
 	txwi[6] = 0;
@@ -1142,7 +1170,19 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	 * 6 Mbps OFDM on 5 GHz.
 	 */
 	if (fixed_rate) {
-		rate = tx_basic_rate;
+		rate = 0;
+		if (has_tx_params && tx_params.ibp_rate0 != 0) {
+			for (i = 0; i < nitems(raw_rates); i++) {
+				if (tx_params.ibp_rate0 != raw_rates[i])
+					continue;
+				rate = raw_hw_rates[i];
+				if (i >= 4)
+					rate |= 1U << 6; /* OFDM */
+				break;
+			}
+		}
+		if (rate == 0)
+			rate = tx_basic_rate;
 		if (rate == 0)
 			rate = current_band == 5 ?
 			    ((1U << 6) | 11U) : 10U;
