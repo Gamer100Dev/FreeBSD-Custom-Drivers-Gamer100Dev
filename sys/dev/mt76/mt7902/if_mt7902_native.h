@@ -304,6 +304,15 @@ struct mt7902_softc {
 	uint64_t		rx_monitor_error_count;
 	uint32_t		rx_last_len;
 	uint32_t		rx_last_rxd[4];
+	uint32_t		rx_last_rxd4;
+	uint16_t		rx_last_fc;
+	uint16_t		rx_last_frame_len;
+	uint16_t		rx_last_hdr_len;
+	uint16_t		rx_last_offset;
+	uint8_t		rx_last_pkt_type;
+	uint8_t		rx_last_addr_type;
+	uint8_t		rx_last_payload_format;
+	uint8_t		rx_last_channel;
 	uint8_t		mcu_seq;
 	uint8_t		mcu_wait_seq;
 	uint8_t		mcu_wait_cmd;
