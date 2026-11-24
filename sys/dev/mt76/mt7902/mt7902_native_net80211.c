@@ -842,7 +842,8 @@ mt7902_tx_enqueue(struct mt7902_softc *sc, struct mbuf *m)
 	if (sc == NULL || m == NULL || (m->m_flags & M_PKTHDR) == 0)
 		return (EINVAL);
 	mtx_lock(&sc->mtx);
-	if (sc->dying || !sc->hw_started || !sc->net80211_attached)
+	if (sc->dying || sc->suspended || !sc->hw_started ||
+	    !sc->net80211_attached)
 		error = ENETDOWN;
 	else
 		error = mbufq_enqueue(&sc->txq, m);
