@@ -1124,6 +1124,14 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	if (queue < 0 || queue >= MT7902_TX_DATA_QUEUES)
 		return (EINVAL);
 	ring = &sc->tx_data[queue];
+	/* Record the pre-encapsulation 802.11 frame for BPF/radiotap users. */
+	if (ni != NULL && ieee80211_radiotap_active_vap(ni->ni_vap)) {
+		sc->tx_tap.wt_flags = 0;
+		sc->tx_tap.wt_pad = 0;
+		sc->tx_tap.wt_chan_freq = htole16(ni->ni_chan->ic_freq);
+		sc->tx_tap.wt_chan_flags = htole16(ni->ni_chan->ic_flags);
+		ieee80211_radiotap_tx(ni->ni_vap, m);
+	}
 	len = m->m_pkthdr.len;
 	total = MT7902_TXD_LEN + len;
 	if (len < sizeof(struct ieee80211_frame_cts) ||
@@ -1374,6 +1382,17 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	if (ic->ic_nchans == 0)
 		return (ENXIO);
 	ieee80211_ifattach(ic);
+
+	/*
+	 * Radiotap is attached after ifattach, following the FreeBSD native
+	 * wireless drivers. Rate/TSFT fields are omitted until the MT7902 RX
+	 * parser has a reliable PHY-rate and TSF decoder.
+	 */
+	ieee80211_radiotap_attach(ic,
+	    &sc->tx_tap.wt_ihdr, sizeof(sc->tx_tap),
+	    MT7902_TX_RADIOTAP_PRESENT,
+	    &sc->rx_tap.wr_ihdr, sizeof(sc->rx_tap),
+	    MT7902_RX_RADIOTAP_PRESENT);
 	ic->ic_getradiocaps = mt7902_getradiocaps;
 	ic->ic_vap_create = mt7902_vap_create;
 	ic->ic_vap_delete = mt7902_vap_delete;
