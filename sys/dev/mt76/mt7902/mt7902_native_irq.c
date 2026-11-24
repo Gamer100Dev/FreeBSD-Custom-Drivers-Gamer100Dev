@@ -181,8 +181,12 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	monitor_active = sc->monitor_active;
 	mtx_unlock(&sc->mtx);
 
-	/* PKT_TYPE_NORMAL is 2 in the Connac2 RXD0 packet-type field. */
-	if (((rxd0 >> 27) & 0x1f) != 2)
+	/*
+	 * mt7921_queue_rx_skb() treats both PKT_TYPE_NORMAL and
+	 * PKT_TYPE_NORMAL_MCU as native 802.11 frames after RXD parsing.
+	 */
+	if (((rxd0 >> 27) & 0x1f) != MT7902_PKT_TYPE_NORMAL &&
+	    ((rxd0 >> 27) & 0x1f) != MT7902_PKT_TYPE_NORMAL_MCU)
 		goto drop;
 	/*
 	 * ICV/CCMP MIC failures have no equivalent generic FreeBSD RX flag,
@@ -327,6 +331,9 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 			break;
 		buf = &ring->buf[idx];
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
+		mtx_lock(&sc->mtx);
+		sc->rx_data_desc_count++;
+		mtx_unlock(&sc->mtx);
 		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
 		if (dma_len == 0 || dma_len > buf->len)
 			mt7902_rx_drop(sc);
