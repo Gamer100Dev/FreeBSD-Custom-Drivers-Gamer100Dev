@@ -19,6 +19,8 @@
 
 #include "if_mt7902_native.h"
 
+#include <net80211/ieee80211_proto.h>
+
 #define MT7902_TXWI_LEN		32
 #define MT7902_TXP_LEN		32
 #define MT7902_TXD_LEN		(MT7902_TXWI_LEN + MT7902_TXP_LEN)
@@ -485,6 +487,62 @@ mt7902_vap_delete(struct ieee80211vap *vap)
 	free(mvp, M_80211_VAP);
 }
 
+/*
+ * Program the four EDCA access categories using the Connac2 CE command.
+ * FreeBSD stores CWmin/CWmax as log2 exponents; firmware expects the actual
+ * contention-window values (2^ECW - 1). Firmware ACI order is BK, BE, VI, VO.
+ */
+static int
+mt7902_wme_update(struct ieee80211com *ic)
+{
+	struct mt7902_softc *sc = ic->ic_softc;
+	struct chanAccParams chp;
+	struct mt7902_edca_entry {
+		uint16_t cw_min;
+		uint16_t cw_max;
+		uint16_t txop;
+		uint16_t aifs;
+		uint8_t guardtime;
+		uint8_t acm;
+	} __packed;
+	struct mt7902_edca_request {
+		struct mt7902_edca_entry edca[WME_NUM_AC];
+		uint8_t bss_idx;
+		uint8_t qos;
+		uint8_t wmm_idx;
+		uint8_t reserved;
+	} __packed req;
+	static const uint8_t to_aci[WME_NUM_AC] = { 1, 0, 2, 3 };
+	struct wmeParams *wmep;
+	struct mt7902_edca_entry *e;
+	uint32_t cw_min, cw_max;
+	int ac;
+
+	/* Firmware startup calls this after the MCU/WFDMA rings are ready. */
+	if (sc->tx_mcu.desc == NULL)
+		return (0);
+	ieee80211_wme_ic_getparams(ic, &chp);
+	bzero(&req, sizeof(req));
+	req.bss_idx = 0;
+	req.qos = 1;
+	req.wmm_idx = 0;
+	for (ac = 0; ac < WME_NUM_AC; ac++) {
+		wmep = &chp.cap_wmeParams[ac];
+		e = &req.edca[to_aci[ac]];
+		cw_min = (1U << MIN(wmep->wmep_logcwmin, 15)) - 1;
+		cw_max = (1U << MIN(wmep->wmep_logcwmax, 15)) - 1;
+		e->cw_min = htole16((uint16_t)cw_min);
+		e->cw_max = htole16((uint16_t)cw_max);
+		e->txop = htole16((uint16_t)wmep->wmep_txopLimit);
+		e->aifs = htole16((uint16_t)wmep->wmep_aifsn);
+		e->guardtime = 0;
+		e->acm = wmep->wmep_acm;
+	}
+	return (mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_EDCA_PARMS),
+	    &req, sizeof(req), false));
+}
+
 static void
 mt7902_parent(struct ieee80211com *ic)
 {
@@ -788,7 +846,8 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	ic->ic_phytype = IEEE80211_T_OFDM;
 	ic->ic_opmode = IEEE80211_M_STA;
 	IEEE80211_ADDR_COPY(ic->ic_macaddr, sc->macaddr);
-	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR | IEEE80211_C_WPA;
+	ic->ic_caps = IEEE80211_C_STA | IEEE80211_C_MONITOR |
+	    IEEE80211_C_WPA | IEEE80211_C_WME;
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11B);
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11G);
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11A);
@@ -805,10 +864,20 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	ic->ic_scan_start = mt7902_scan_start;
 	ic->ic_scan_end = mt7902_scan_end;
 	ic->ic_raw_xmit = mt7902_raw_xmit;
+	ic->ic_wme.wme_update = mt7902_wme_update;
 	ic->ic_transmit = mt7902_transmit;
 	ieee80211_set_software_ciphers(ic, IEEE80211_CRYPTO_AES_CCM);
 	mbufq_init(&sc->txq, MT7902_TX_RING_SIZE);
 	sc->net80211_attached = 1;
+	{
+		int error;
+
+		error = mt7902_wme_update(ic);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not program initial EDCA parameters: %d\\n",
+			    error);
+	}
 	device_printf(sc->dev,
 	    "net80211 registered (%s, station/monitor, 2.4/5 GHz)\n",
 	    ic->ic_name);
