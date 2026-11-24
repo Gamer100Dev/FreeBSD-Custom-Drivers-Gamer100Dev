@@ -773,7 +773,7 @@ mt7902_fw_boot(struct mt7902_softc *sc)
 	mtx_unlock(&sc->mtx);
 	error = mt7902_mcu_set_rxfilter(sc, rx_filter);
 	if (error != 0)
-		device_printf(sc->dev, "could not program MCU RX filter: %d\\n",
+		device_printf(sc->dev, "could not program MCU RX filter: %d\n",
 		    error);
 	error = mt7902_mcu_read_mac(sc);
 	if (error != 0) {
