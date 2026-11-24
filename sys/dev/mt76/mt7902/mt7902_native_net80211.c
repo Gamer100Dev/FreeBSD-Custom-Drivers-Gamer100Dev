@@ -1069,11 +1069,18 @@ mt7902_raw_params_supported(const struct ieee80211_bpf_params *params,
 
 	if (params == NULL)
 		return (1);
+	/*
+	 * FreeBSD's scan probe path sets ibp_power from ni_txpower, which
+	 * defaults to IEEE80211_TXPOWER_MAX (100) even when no per-packet
+	 * power override is requested.  MT7902 currently relies on firmware
+	 * calibration/regulatory power control, so accept but do not override
+	 * that value here.  Rejecting it suppresses every normal probe request.
+	 */
 	/* net80211's software scanner uses this ordinary legacy-rate profile. */
 	if (params->ibp_vers != 0 || params->ibp_len != 0 ||
 	    (params->ibp_flags & ~IEEE80211_BPF_NOACK) != 0 ||
 	    params->ibp_pri > WME_AC_VO || params->ibp_try0 > 15 ||
-	    params->ibp_power != 0 || params->ibp_ctsrate != 0 ||
+	    params->ibp_ctsrate != 0 ||
 	    params->ibp_try1 != 0 ||
 	    params->ibp_rate1 != 0 || params->ibp_try2 != 0 ||
 	    params->ibp_rate2 != 0 || params->ibp_try3 != 0 ||
