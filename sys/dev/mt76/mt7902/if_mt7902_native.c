@@ -370,7 +370,7 @@ mt7902_suspend(device_t dev)
 	sc->suspend_was_started = was_started;
 	mtx_unlock(&sc->mtx);
 
-	if (sc->net80211_attached)
+	if (was_started && sc->net80211_attached)
 		ieee80211_suspend_all(&sc->ic);
 	if (was_started) {
 		mt7902_irq_teardown(sc);
@@ -410,7 +410,7 @@ mt7902_resume(device_t dev)
 			mtx_lock(&sc->mtx);
 			sc->hw_starting = 0;
 			mtx_unlock(&sc->mtx);
-			device_printf(dev, "firmware restart after suspend failed: %d\\n",
+			device_printf(dev, "firmware restart after suspend failed: %d\n",
 			    error);
 			return (error);
 		}
