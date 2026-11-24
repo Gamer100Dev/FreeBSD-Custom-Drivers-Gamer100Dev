@@ -448,10 +448,14 @@ mt7902_rx_tx_free(struct mt7902_softc *sc, const uint8_t *data, size_t len)
 		mtx_unlock(&sc->mtx);
 
 		/* ieee80211_tx_complete may acquire net80211 locks. */
-		if (ni != NULL)
-			ieee80211_tx_complete(ni, m, status != 0);
-		else if (m != NULL)
-			m_freem(m);
+		if (m != NULL) {
+			if (ni != NULL)
+				ieee80211_tx_complete(ni, m, status != 0);
+			else
+				m_freem(m);
+		} else if (ni != NULL) {
+			ieee80211_free_node(ni);
+		}
 	}
 
 	mtx_lock(&sc->mtx);
