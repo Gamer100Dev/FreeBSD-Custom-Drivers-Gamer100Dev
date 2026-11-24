@@ -749,6 +749,8 @@ mt7902_fw_boot(struct mt7902_softc *sc)
 		device_printf(sc->dev, "invalid WM firmware container: %d\n", error);
 		goto fail;
 	}
+	/* dma_stop may disable bus mastering after a stuck WFDMA engine. */
+	pci_enable_busmaster(sc->dev);
 	error = mt7902_pci_power_on(sc);
 	if (error != 0)
 		goto fail;
