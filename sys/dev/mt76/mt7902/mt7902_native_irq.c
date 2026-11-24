@@ -161,7 +161,8 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
 	size_t offset, frame_len, hdr_len;
-	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag;
+	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag, tap_channel;
+	uint16_t tap_freq, tap_chan_flags;
 	int rssi, noise;
 	bool is_mgmt, monitor_active, rcpi_valid;
 
@@ -304,6 +305,35 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		rxs.c_band = channel <= 14 ? IEEE80211_CHAN_2GHZ :
 		    IEEE80211_CHAN_5GHZ;
 	}
+	/*
+	 * Update the radiotap template consumed by net80211's monitor/BPF
+	 * path. RX rate and TSFT are not advertised until the corresponding
+	 * Connac2 PHY fields have been decoded and validated.
+	 */
+	tap_channel = channel;
+	if (tap_channel == 0) {
+		mtx_lock(&sc->mtx);
+		tap_channel = sc->current_channel;
+		mtx_unlock(&sc->mtx);
+	}
+	tap_freq = 0;
+	tap_chan_flags = 0;
+	if (tap_channel != 0) {
+		tap_freq = ieee80211_ieee2mhz(tap_channel,
+		    tap_channel <= 14 ? IEEE80211_CHAN_2GHZ :
+		    IEEE80211_CHAN_5GHZ);
+		tap_chan_flags = tap_channel <= 14 ?
+		    (IEEE80211_CHAN_2GHZ | IEEE80211_CHAN_CCK |
+		    IEEE80211_CHAN_OFDM) :
+		    (IEEE80211_CHAN_5GHZ | IEEE80211_CHAN_OFDM);
+	}
+	sc->rx_tap.wr_flags = (rxd1 & (1U << 27)) != 0 ?
+	    IEEE80211_RADIOTAP_F_BADFCS : 0;
+	sc->rx_tap.wr_chan_freq = htole16(tap_freq);
+	sc->rx_tap.wr_chan_flags = htole16(tap_chan_flags);
+	sc->rx_tap.wr_dbm_antsignal = rcpi_valid ? (int8_t)rssi : -127;
+	sc->rx_tap.wr_dbm_antnoise = (int8_t)noise;
+
 	if (ieee80211_add_rx_params(m, &rxs) == 0) {
 		m_freem(m);
 		goto drop;
