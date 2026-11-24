@@ -408,6 +408,8 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->rx_event_last_rxd0 = 0;
 	sc->rx_event_last_len = 0;
 	sc->rx_event_last_type = 0;
+	sc->irq_count = 0;
+	sc->irq_last_status = 0;
 	bzero(sc->rx_last_rxd, sizeof(sc->rx_last_rxd));
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev, "net80211 %s scan started\n",
@@ -422,6 +424,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t events, txs, txs_records, tx_free, short_events, unknown;
 	uint64_t irq_count;
 	uint32_t last_len, rxd0, rxd1, rxd2, rxd3, last_event_rxd0, last_irq;
+	uint32_t data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl;
 	uint16_t last_event_len;
 	uint8_t last_event_type;
 	int rx_head, rx_tail, rx_queued;
@@ -454,14 +457,21 @@ mt7902_scan_end(struct ieee80211com *ic)
 	rx_tail = sc->rx_data.tail;
 	rx_queued = sc->rx_data.queued;
 	mtx_unlock(&sc->mtx);
+	data_hw_idx = mt7902_read(sc, sc->rx_data.reg_base + 0x0c);
+	event_hw_idx = mt7902_read(sc, sc->rx_event.reg_base + 0x0c);
+	data_tail_ctl = sc->rx_data.desc != NULL ?
+	    le32toh(sc->rx_data.desc[rx_tail].control) : 0;
+	event_tail_ctl = sc->rx_event.desc != NULL ?
+	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju short=%ju unknown=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju short=%ju unknown=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
 	    (uintmax_t)events,
 	    (uintmax_t)txs, (uintmax_t)txs_records, (uintmax_t)tx_free,
 	    (uintmax_t)short_events, (uintmax_t)unknown,
 	    (uintmax_t)irq_count, last_irq, rx_head, rx_tail, rx_queued,
+	    data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl,
 	    last_event_type, last_event_len, last_event_rxd0, last_len,
 	    rxd0, rxd1, rxd2, rxd3);
 }
