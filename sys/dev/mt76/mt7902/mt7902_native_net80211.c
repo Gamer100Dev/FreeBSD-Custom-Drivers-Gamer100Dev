@@ -453,7 +453,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	rx_queued = sc->rx_data.queued;
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju short=%ju unknown=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju dropped=%ju mgmt=%ju beacon/probe=%ju events=%ju txs=%ju/%ju tx_free=%ju short=%ju unknown=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)dropped,
 	    (uintmax_t)mgmt, (uintmax_t)beacon, (uintmax_t)events,
 	    (uintmax_t)txs, (uintmax_t)txs_records, (uintmax_t)tx_free,
