@@ -236,6 +236,7 @@ struct mt7902_vap {
 	uint16_t peer_aid;
 	uint16_t peer_beacon_interval;
 	uint8_t peer_dtim_period;
+	uint8_t peer_channel;
 	bool peer_qos;
 	bool linked;
 };
@@ -522,17 +523,21 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	static const uint8_t legacy_hw_rates[] = {
 		10, 20, 55, 110, 11, 15, 10, 14, 9, 13, 8, 12
 	};
-	uint8_t peer[IEEE80211_ADDR_LEN], rate, phy_type;
+	uint8_t peer[IEEE80211_ADDR_LEN], rate, phy_type, peer_channel;
 	uint16_t aid, supp_rates, basic_rates, legacy, beacon_interval;
 	uint8_t dtim_period;
 	bool band2, rate_basic, qos;
+	struct ieee80211_channel *chan;
 	int i, j, error;
 
+	peer_channel = 0;
 	if (ni != NULL) {
 		IEEE80211_ADDR_COPY(peer, ni->ni_bssid);
 		qos = (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
 		beacon_interval = ni->ni_intval;
 		dtim_period = ni->ni_dtim_period;
+		if (ni->ni_chan != NULL)
+			peer_channel = ni->ni_chan->ic_ieee;
 	} else if (linked) {
 		return (EINVAL);
 	} else if (mvp->linked) {
@@ -540,11 +545,26 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		qos = mvp->peer_qos;
 		beacon_interval = mvp->peer_beacon_interval;
 		dtim_period = mvp->peer_dtim_period;
+		peer_channel = mvp->peer_channel;
 	} else {
 		IEEE80211_ADDR_COPY(peer, vap->iv_myaddr);
 		qos = false;
 		beacon_interval = 100;
 		dtim_period = 1;
+	}
+
+	/* A disconnect may arrive without a live ni; use the saved/current channel. */
+	if (peer_channel == 0) {
+		chan = vap->iv_ic->ic_bsschan;
+		if (chan == NULL || chan->ic_ieee == 0)
+			chan = vap->iv_ic->ic_curchan;
+		if (chan != NULL)
+			peer_channel = chan->ic_ieee;
+	}
+	if (peer_channel == 0) {
+		mtx_lock(&sc->mtx);
+		peer_channel = sc->current_channel;
+		mtx_unlock(&sc->mtx);
 	}
 	aid = linked ? IEEE80211_NODE_AID(ni) : mvp->peer_aid;
 	bzero(&bss, sizeof(bss));
@@ -563,7 +583,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.conn_state = linked ? 0 : 1;
 	bss.basic.wmm_idx = 0;
 	IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
-	band2 = IEEE80211_IS_CHAN_2GHZ(ni->ni_chan);
+	band2 = peer_channel != 0 ? peer_channel <= 14 :
+	    sc->current_band == 2;
 	phy_type = band2 ?
 	    (MT7902_PHY_TYPE_HR_DSSS | MT7902_PHY_TYPE_ERP) :
 	    MT7902_PHY_TYPE_OFDM;
@@ -609,6 +630,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->peer_beacon_interval = 0;
 		mvp->peer_dtim_period = 0;
 		mvp->peer_qos = false;
+		mvp->peer_channel = 0;
 		return (error);
 	}
 
@@ -782,6 +804,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->peer_beacon_interval = beacon_interval;
 		mvp->peer_dtim_period = dtim_period;
 		mvp->peer_qos = qos;
+		mvp->peer_channel = peer_channel;
 		mtx_lock(&sc->mtx);
 		sc->station_linked = 1;
 		sc->station_aid = aid;
