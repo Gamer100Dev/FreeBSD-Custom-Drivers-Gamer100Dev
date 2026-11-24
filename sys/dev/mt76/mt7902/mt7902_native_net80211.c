@@ -368,8 +368,10 @@ mt7902_set_channel_cb(struct ieee80211com *ic)
 		return;
 	error = mt7902_set_channel(sc, ic->ic_curchan);
 	if (error == 0) {
+		mtx_lock(&sc->mtx);
 		sc->current_channel = ic->ic_curchan->ic_ieee;
 		sc->current_band = IEEE80211_IS_CHAN_2GHZ(ic->ic_curchan) ? 2 : 5;
+		mtx_unlock(&sc->mtx);
 	} else {
 		device_printf(sc->dev, "channel %u command failed: %d\n",
 		    ic->ic_curchan->ic_ieee, error);
