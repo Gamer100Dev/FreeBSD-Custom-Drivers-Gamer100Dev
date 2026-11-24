@@ -1073,7 +1073,8 @@ mt7902_80211_hdrlen(uint16_t fc)
 }
 
 static int
-mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
+mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
+    struct ieee80211_node *ni)
 {
 	struct mt7902_ring *ring;
 	struct mt7902_dma_desc *desc;
@@ -1083,7 +1084,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	struct ieee80211_bpf_params tx_params;
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen, qos_offset;
-	uint16_t tx_basic_rate, qos_control, seq_control;
+	uint16_t tx_basic_rate, qos_control, seq_control, msdu_id;
 	uint8_t current_band, tid, frag_idx;
 	int idx, retry, error, queue, i;
 	bool fixed_rate, station_linked, more_frag, has_tx_params, noack;
@@ -1147,6 +1148,11 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	idx = ring->head;
 	desc = &ring->desc[idx];
 	buf = &ring->buf[idx];
+	msdu_id = (uint16_t)(queue * MT7902_TX_RING_SIZE + idx);
+	if (sc->tx_pending[msdu_id].active) {
+		mtx_unlock(&sc->mtx);
+		return (EBUSY);
+	}
 	station_linked = sc->station_linked != 0;
 	current_band = sc->current_band;
 	tx_basic_rate = sc->station_basic_rate;
@@ -1246,7 +1252,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	txwi[7] = htole32((((fc & 0x0c) >> 2) << 20) |
 	    (((fc & 0xf0) >> 4) << 16));
 	txp = (struct mt7902_txp *)((uint8_t *)buf->vaddr + MT7902_TXWI_LEN);
-	txp->msdu_id[0] = htole16((uint16_t)idx | (1U << 15));
+	txp->msdu_id[0] = htole16(msdu_id | (1U << 15));
 	txp->ptr[0].buf0 = htole32((uint32_t)(buf->paddr + MT7902_TXD_LEN));
 	txp->ptr[0].len0 = htole16((uint16_t)(len &
 	    MT7902_TXP_LEN_MASK) | MT7902_TXP_LAST);
@@ -1265,6 +1271,16 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 	    MT7902_DMA_LEN_SHIFT) | MT7902_DMA_DESC_LAST);
 	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
+	/*
+	 * Publish the software token before ringing the WFDMA doorbell: a very
+	 * short packet may generate TX_FREE before this worker returns.
+	 */
+	if (sc->tx_pending[msdu_id].active)
+		panic("mt7902: duplicate TX token %u", msdu_id);
+	sc->tx_pending[msdu_id].m = m;
+	sc->tx_pending[msdu_id].ni = ni;
+	sc->tx_pending[msdu_id].active = true;
+	sc->tx_pending_count++;
 	ring->head = (idx + 1) % ring->ndesc;
 	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	mtx_unlock(&sc->mtx);
@@ -1286,8 +1302,20 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m)
 		    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 		ring->tail = (idx + 1) % ring->ndesc;
 		mtx_unlock(&sc->mtx);
+	} else {
+		/*
+		 * DMA ownership is retained and the packet remains pending until
+		 * firmware reports TX_FREE. Do not complete the mbuf on a host-side
+		 * poll timeout; the copied descriptor may still be in flight.
+		 */
+		mtx_lock(&sc->mtx);
+		sc->tx_dma_timeouts++;
+		mtx_unlock(&sc->mtx);
+		device_printf(sc->dev,
+		    "TX queue %d descriptor %d DMA wait timed out; awaiting TX_FREE\n",
+		    queue, idx);
 	}
-	return (error);
+	return (0);
 }
 
 int
@@ -1362,6 +1390,37 @@ mt7902_net80211_detach(struct mt7902_softc *sc)
 	sc->net80211_attached = 0;
 }
 
+/*
+ * Complete any firmware-pending packets with failure after WFDMA/IRQ has
+ * stopped. This is used by suspend, explicit hw_stop, attach failure and
+ * detach, and runs without the device mutex held across net80211 callbacks.
+ */
+void
+mt7902_tx_pending_drain(struct mt7902_softc *sc)
+{
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+	int i;
+
+	for (i = 0; i < MT7902_TX_PENDING_COUNT; i++) {
+		mtx_lock(&sc->mtx);
+		if (!sc->tx_pending[i].active) {
+			mtx_unlock(&sc->mtx);
+			continue;
+		}
+		m = sc->tx_pending[i].m;
+		ni = sc->tx_pending[i].ni;
+		bzero(&sc->tx_pending[i], sizeof(sc->tx_pending[i]));
+		if (sc->tx_pending_count != 0)
+			sc->tx_pending_count--;
+		mtx_unlock(&sc->mtx);
+		if (ni != NULL)
+			ieee80211_tx_complete(ni, m, 1);
+		else if (m != NULL)
+			m_freem(m);
+	}
+}
+
 void
 mt7902_tx_task(void *arg, int pending __unused)
 {
@@ -1378,11 +1437,13 @@ mt7902_tx_task(void *arg, int pending __unused)
 			break;
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
-		error = mt7902_tx_one(sc, m);
-		if (ni != NULL)
-			ieee80211_tx_complete(ni, m, error != 0);
-		else
-			m_freem(m);
+		error = mt7902_tx_one(sc, m, ni);
+		if (error != 0) {
+			if (ni != NULL)
+				ieee80211_tx_complete(ni, m, 1);
+			else
+				m_freem(m);
+		}
 	}
 }
 
