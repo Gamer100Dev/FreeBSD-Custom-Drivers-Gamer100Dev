@@ -224,6 +224,59 @@ struct mt7902_vap {
 	bool linked;
 };
 
+/*
+ * Remove the STA peer and reset its WTBL entry, matching the disable path
+ * in mt76_connac_mcu_sta_cmd().  With enable=false mt76 emits STA_REC_BASIC
+ * followed by a WTBL RESET_AND_SET container with no nested WTBL records.
+ */
+static int
+mt7902_sta_disconnect(struct mt7902_softc *sc,
+    const uint8_t peer[IEEE80211_ADDR_LEN], uint16_t aid, bool qos)
+{
+	struct mt7902_sta_req_hdr hdr;
+	struct mt7902_sta_rec_basic basic;
+	struct mt7902_mcu_tlv_hdr wtbl_tlv;
+	struct mt7902_wtbl_req_hdr wtbl_req;
+	uint8_t request[sizeof(hdr) + sizeof(basic) +
+	    sizeof(wtbl_tlv) + sizeof(wtbl_req)];
+	size_t offset;
+
+	bzero(&hdr, sizeof(hdr));
+	hdr.bss_idx = MT7902_BSS_IDX;
+	hdr.wlan_idx_lo = MT7902_PEER_WCID;
+	hdr.tlv_num = htole16(2);
+	hdr.is_tlv_append = 1;
+
+	bzero(&basic, sizeof(basic));
+	basic.tag = htole16(MT7902_STA_REC_BASIC);
+	basic.len = htole16(sizeof(basic));
+	basic.conn_type = htole32(MT7902_CONN_INFRA_AP);
+	basic.conn_state = MT7902_STA_CONN_DISCONNECT;
+	basic.qos = qos;
+	basic.aid = htole16(aid);
+	IEEE80211_ADDR_COPY(basic.peer_addr, peer);
+	basic.extra_info = htole16(1); /* EXTRA_INFO_VER, not a new entry */
+
+	bzero(&wtbl_tlv, sizeof(wtbl_tlv));
+	wtbl_tlv.tag = htole16(13); /* STA_REC_WTBL */
+	wtbl_tlv.len = htole16(sizeof(wtbl_tlv) + sizeof(wtbl_req));
+	bzero(&wtbl_req, sizeof(wtbl_req));
+	wtbl_req.wlan_idx_lo = MT7902_PEER_WCID;
+	wtbl_req.operation = 1; /* WTBL_RESET_AND_SET */
+
+	offset = 0;
+	memcpy(request + offset, &hdr, sizeof(hdr));
+	offset += sizeof(hdr);
+	memcpy(request + offset, &basic, sizeof(basic));
+	offset += sizeof(basic);
+	memcpy(request + offset, &wtbl_tlv, sizeof(wtbl_tlv));
+	offset += sizeof(wtbl_tlv);
+	memcpy(request + offset, &wtbl_req, sizeof(wtbl_req));
+	return (mt7902_mcu_send_response(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
+	    request, sizeof(request), NULL, &(size_t){0}));
+}
+
 static const uint8_t mt7902_5ghz_channels[] = {
 	36, 40, 44, 48, 52, 56, 60, 64,
 	100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
@@ -438,6 +491,9 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->linked = false;
 		sc->station_linked = 0;
 		sc->station_aid = 0;
+		if (ni != NULL)
+			return (mt7902_sta_disconnect(sc, peer, aid,
+			    (ni->ni_flags & IEEE80211_NODE_QOS) != 0));
 		return (0);
 	}
 
