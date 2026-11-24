@@ -181,7 +181,9 @@ mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	req.center_ch = c->ic_ieee;
 	req.tx_streams = 1;
 	req.rx_streams = 1;
-	req.switch_reason = sc->ic.ic_scan != NULL ? 9 : 0;
+	mtx_lock(&sc->mtx);
+	req.switch_reason = sc->scan_active ? 9 : 0;
+	mtx_unlock(&sc->mtx);
 	req.channel_band = IEEE80211_IS_CHAN_2GHZ(c) ? 0 : 1;
 	/* Connac2 MCU_EXT_CMD(CHANNEL_SWITCH), followed by the ordinary
 	 * management/data MAC queue setup. Keep this firmware command
@@ -214,19 +216,40 @@ static void
 mt7902_scan_start(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
+	bool active;
 
+	active = ic->ic_scan != NULL &&
+	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0;
+	mtx_lock(&sc->mtx);
+	sc->scan_active = true;
+	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev, "net80211 %s scan started\n",
-	    ic->ic_scan != NULL &&
-	    (ic->ic_scan->ss_flags & IEEE80211_SCAN_ACTIVE) != 0 ?
-	    "active" : "passive");
+	    active ? "active" : "passive");
 }
 
 static void
 mt7902_scan_end(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
+	uint64_t rx, dropped, mgmt, beacon;
+	uint32_t last_len, rxd0, rxd1, rxd2, rxd3;
 
-	device_printf(sc->dev, "net80211 scan ended\n");
+	mtx_lock(&sc->mtx);
+	sc->scan_active = false;
+	rx = sc->rx_data_count;
+	dropped = sc->rx_drop_count;
+	mgmt = sc->rx_mgmt_count;
+	beacon = sc->rx_beacon_count;
+	last_len = sc->rx_last_len;
+	rxd0 = sc->rx_last_rxd[0];
+	rxd1 = sc->rx_last_rxd[1];
+	rxd2 = sc->rx_last_rxd[2];
+	rxd3 = sc->rx_last_rxd[3];
+	mtx_unlock(&sc->mtx);
+	device_printf(sc->dev,
+	    "net80211 scan ended: rx=%ju dropped=%ju mgmt=%ju beacon/probe=%ju last=%u RXD=%08x/%08x/%08x/%08x\n",
+	    (uintmax_t)rx, (uintmax_t)dropped, (uintmax_t)mgmt,
+	    (uintmax_t)beacon, last_len, rxd0, rxd1, rxd2, rxd3);
 }
 
 static int
@@ -652,6 +675,21 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	    ic->ic_channels);
 	if (ic->ic_nchans == 0)
 		return (ENXIO);
+	/*
+	 * Ask Connac2 to pass frames from other BSSs to the host.  The
+	 * software scanner relies on beacon and probe-response RX on the
+	 * ordinary data ring; without OTHER_BSS the MCU can filter them before
+	 * the native net80211 input path ever sees them.
+	 */
+	{
+		int error;
+
+		error = mt7902_mcu_set_rxfilter(sc,
+		    MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS);
+		if (error != 0)
+			device_printf(sc->dev,
+			    "could not widen MCU RX filter for scanning: %d\n", error);
+	}
 	ieee80211_ifattach(ic);
 	ic->ic_getradiocaps = mt7902_getradiocaps;
 	ic->ic_vap_create = mt7902_vap_create;
