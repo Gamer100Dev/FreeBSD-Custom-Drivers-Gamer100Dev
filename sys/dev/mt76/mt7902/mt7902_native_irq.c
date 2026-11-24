@@ -97,7 +97,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	struct ieee80211_rx_stats rxs;
 	const struct ieee80211_frame_min *wh;
 	struct mbuf *m;
-	uint32_t rxd0, rxd1, rxd2, rxd3, rcpi_word;
+	uint32_t rxd0, rxd1, rxd2, rxd3, rcpi_word, sec_mode;
 	uint16_t fc;
 	size_t offset, frame_len;
 	uint8_t channel, rcpi, subtype;
@@ -125,7 +125,8 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	if (((rxd0 >> 27) & 0x1f) != 2)
 		goto drop;
 	/* Single-band MT7902, good-FCS frames, native 802.11 headers only. */
-	if ((rxd1 & ((1U << 28) | (1U << 25) | (1U << 27))) != 0 ||
+	if ((rxd1 & ((1U << 28) | (1U << 25) | (1U << 26) |
+	    (1U << 27))) != 0 ||
 	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0)
 		goto drop;
 
@@ -187,6 +188,17 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxs.r_flags = IEEE80211_R_NF | IEEE80211_R_RSSI;
 	rxs.c_nf = noise;
 	rxs.c_rssi = rssi - noise;
+	/*
+	 * mt7921_mac_fill_rx() reports a nonzero hardware cipher with no
+	 * CLM/CM exception as authenticated/decrypted data.  Tell net80211
+	 * that the hardware removed IV/MIC bytes so its software CCMP path
+	 * does not try to decrypt a second time.
+	 */
+	sec_mode = (rxd1 >> 16) & 0x1f;
+	if (sec_mode != 0 && (rxd1 & ((1U << 23) | (1U << 24))) == 0)
+		rxs.c_pktflags |= IEEE80211_RX_F_DECRYPTED |
+		    IEEE80211_RX_F_IV_STRIP | IEEE80211_RX_F_MMIC_STRIP |
+		    IEEE80211_RX_F_MIC_STRIP;
 	if (channel != 0) {
 		rxs.r_flags |= IEEE80211_R_IEEE | IEEE80211_R_FREQ |
 		    IEEE80211_R_BAND;
