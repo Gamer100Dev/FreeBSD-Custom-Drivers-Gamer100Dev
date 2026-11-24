@@ -564,7 +564,10 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	if (peer_channel == 0) {
 		mtx_lock(&sc->mtx);
 		peer_channel = sc->current_channel;
+		band2 = sc->current_band == 2;
 		mtx_unlock(&sc->mtx);
+	} else {
+		band2 = peer_channel <= 14;
 	}
 	aid = linked ? IEEE80211_NODE_AID(ni) : mvp->peer_aid;
 	bzero(&bss, sizeof(bss));
@@ -583,8 +586,6 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.conn_state = linked ? 0 : 1;
 	bss.basic.wmm_idx = 0;
 	IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
-	band2 = peer_channel != 0 ? peer_channel <= 14 :
-	    sc->current_band == 2;
 	phy_type = band2 ?
 	    (MT7902_PHY_TYPE_HR_DSSS | MT7902_PHY_TYPE_ERP) :
 	    MT7902_PHY_TYPE_OFDM;
