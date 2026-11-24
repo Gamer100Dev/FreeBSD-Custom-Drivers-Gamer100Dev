@@ -1563,7 +1563,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 		bzero(tx_dump, sizeof(tx_dump));
 		m_copydata(m, 0, MIN(len, sizeof(tx_dump)), tx_dump);
 		device_printf(sc->dev,
-		    "TX PROBE ch=%u band=%s len=%ju hdr=%ju queue=%d rate0=%u try0=%u flags=%04x noack=%u fixed=%u txrate=%08x addr1=%6D addr2=%6D addr3=%6D bytes=%64D TXWI=%08x/%08x/%08x/%08x/%08x/%08x/%08x/%08x\\n",
+		    "TX PROBE ch=%u band=%s len=%ju hdr=%ju queue=%d rate0=%u try0=%u flags=%04x noack=%u fixed=%u txrate=%08x addr1=%6D addr2=%6D addr3=%6D bytes=%64D TXWI=%08x/%08x/%08x/%08x/%08x/%08x/%08x/%08x\n",
 		    (unsigned int)current_channel,
 		    current_band == 2 ? "2g" : "5g",
 		    (uintmax_t)len, (uintmax_t)hdrlen, queue,
