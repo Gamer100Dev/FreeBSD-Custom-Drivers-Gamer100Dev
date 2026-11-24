@@ -206,11 +206,17 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 * those frames.
 	 */
 	monitor_only = (rxd1 & (1U << 25)) != 0;
+	/*
+	 * Reject header-translated Ethernet frames: this net80211 path expects
+	 * native 802.11 headers. HDR_TRANS_ERROR (RXD2 bit 25) is not a
+	 * standalone RX error; mt76 only interprets it in conjunction with
+	 * HDR_TRANS. Do not discard ordinary 802.11 frames when that bit is
+	 * independently set by the device.
+	 */
 	if ((rxd1 & (1U << 28)) != 0 ||
 	    (monitor_only && !monitor_active) ||
 	    (!monitor_active && (rxd1 & ((1U << 26) | (1U << 27))) != 0) ||
-	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24) |
-	    (1U << 25))) != 0)
+	    (rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0)
 		goto drop;
 	/* RXD4 payload format != 0 describes a deaggregated A-MSDU. */
 	if ((rxd4 & 0x3) != 0)
