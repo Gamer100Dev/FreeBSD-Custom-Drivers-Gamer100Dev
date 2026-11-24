@@ -38,7 +38,7 @@
 #define MT7902_TXP_LAST		(1U << 15)
 #define MT7902_STA_REC_BASIC	0
 #define MT7902_STA_REC_STATE	7
-#define MT7902_STA_CONN_CONNECT	1
+#define MT7902_STA_CONN_PORT_SECURE	2
 #define MT7902_STA_CONN_DISCONNECT	0
 #define MT7902_STA_STATE_ASSOC	2
 #define MT7902_STA_STATE_NONE	0
@@ -295,7 +295,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.bss_idx = MT7902_BSS_IDX;
 	bss.basic.tag = htole16(0); /* UNI_BSS_INFO_BASIC */
 	bss.basic.len = htole16(sizeof(bss.basic));
-	bss.basic.active = linked;
+	/* Keep the STA BSS object configured; conn_state tracks link state. */
+	bss.basic.active = 1;
 	bss.basic.omac_idx = 0;
 	bss.basic.hw_bss_idx = 0;
 	bss.basic.band_idx = 0;
@@ -314,16 +315,25 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	if (error != 0)
 		return (error);
 
-	if (!linked) {
+	/*
+	 * mt7921_mcu_set_bss_pm() first aborts any stale BSS connection on
+	 * both connect and disconnect, then sends SET_BSS_CONNECTED only on
+	 * the connect path.
+	 */
+	{
 		uint8_t abort_req[4] = { MT7902_BSS_IDX, 0, 0, 0 };
 
 		error = mt7902_mcu_send_cmd(sc,
 		    MT7902_MCU_CE_CMD(0x17) /* SET_BSS_ABORT */,
 		    abort_req, sizeof(abort_req), false);
+		if (error != 0)
+			return (error);
+	}
+	if (!linked) {
 		mvp->linked = false;
 		sc->station_linked = 0;
 		sc->station_aid = 0;
-		return (error);
+		return (0);
 	}
 
 	/* Tell firmware the association AID/DTIM parameters after BSS setup. */
@@ -360,7 +370,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	basic.tag = htole16(MT7902_STA_REC_BASIC);
 	basic.len = htole16(sizeof(basic));
 	basic.conn_type = htole32(MT7902_CONN_INFRA_AP);
-	basic.conn_state = MT7902_STA_CONN_CONNECT;
+	basic.conn_state = MT7902_STA_CONN_PORT_SECURE;
 	basic.qos = (ni->ni_flags & IEEE80211_NODE_QOS) != 0;
 	basic.aid = htole16(aid);
 	IEEE80211_ADDR_COPY(basic.peer_addr, peer);
@@ -404,7 +414,7 @@ mt7902_vap_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate,
 		return (EINVAL);
 	linked = nstate == IEEE80211_S_RUN;
 	if (linked != mvp->linked) {
-		if (linked && vap->iv_bss != NULL)
+		if (vap->iv_bss != NULL)
 			ni = ieee80211_ref_node(vap->iv_bss);
 		IEEE80211_UNLOCK(ic);
 		error = mt7902_link_update(vap, ni, linked);
