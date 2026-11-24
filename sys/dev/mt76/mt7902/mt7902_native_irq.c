@@ -114,7 +114,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 
 	mtx_lock(&sc->mtx);
 	sc->rx_data_count++;
-	sc->rx_last_len = dma_len;
+	sc->rx_last_len = (uint32_t)dma_len;
 	sc->rx_last_rxd[0] = rxd0;
 	sc->rx_last_rxd[1] = rxd1;
 	sc->rx_last_rxd[2] = rxd2;
@@ -177,7 +177,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	/* RCPI is 0.5 dB steps with a 220 offset, per Connac2 PRXV. */
 	noise = -95;
 	rssi = rcpi != 0 ? ((int)rcpi - 220) / 2 : noise;
-	m = m_get2(frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
+	m = m_get2((int)frame_len, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL)
 		goto drop;
 	m->m_len = (int)frame_len;
@@ -187,7 +187,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	bzero(&rxs, sizeof(rxs));
 	rxs.r_flags = IEEE80211_R_NF | IEEE80211_R_RSSI;
 	rxs.c_nf = noise;
-	rxs.c_rssi = rssi - noise;
+	rxs.c_rssi = (int8_t)(rssi - noise);
 	/*
 	 * mt7921_mac_fill_rx() reports a nonzero hardware cipher with no
 	 * CLM/CM exception as authenticated/decrypted data.  Tell net80211
