@@ -13,7 +13,8 @@ net80211 patterns; Linux `mt76` is used as a hardware/protocol reference.
   patch image, with FreeBSD `firmware_get()`/`firmware_put()` ownership.
 * Native busdma-backed WFDMA TX, firmware-download, MCU event, and ordinary RX
   rings. The MT7902-specific layout uses RX event ring 0, data RX ring 2,
-  MCU-WM TX ring 15, and firmware-download TX ring 16.
+  four access-category data TX rings 0-3, MCU-WM TX ring 15, and
+  firmware-download TX ring 16.
 * MSI/legacy interrupt setup, MCU event processing, sequence-matched response
   wakeups, PCIe MCU RX-wake handling, and native firmware download commands.
 * Firmware startup and WFSYS recovery, with process-context `hw_start`
@@ -25,10 +26,16 @@ net80211 patterns; Linux `mt76` is used as a hardware/protocol reference.
   and feeds FreeBSD `ieee80211_input_mimo_all()`. Beacon and probe-response
   frames can now reach the net80211 scan cache.
 * RX descriptor rearming that preserves descriptor-to-buffer ownership across
-  ring wrap, plus scan-end RX/drop counters and last-RXD diagnostics.
-* A basic WFDMA TX queue for already-encapsulated 802.11 frames. WPA2 CCMP is
-  configured for the net80211 software crypto path; hardware key offload is not
-  advertised.
+  ring wrap, plus scan-end RX/drop counters and last-RXD diagnostics. The
+  parser reports channel/RSSI and hardware-decryption/IV/MIC-strip metadata to
+  net80211. A monitor VAP requests control frames and receives FCS/TKIP-MIC
+  failure indications; ICV-error frames are still discarded.
+* Four Connac2 access-category TX rings mapped from FreeBSD WME ACs, a 32-byte
+  hardware TXP, descriptor/payload DMA pointer, and 12-bit TXP payload length.
+  Fixed-rate management/multicast frames use 1 Mbps CCK on 2.4 GHz or 6 Mbps
+  OFDM on 5 GHz; unicast data rate selection remains hardware-default and is
+  not yet validated. WPA2 CCMP is configured for net80211 software crypto;
+  hardware key offload is not advertised.
 * An optional, separate `ng_ubt_mt7902` USB subclass. It validates the
   MT7902 79xx Bluetooth firmware section map, sends WMT patch-download
   commands over the USB control pipe, and then inherits HCI/ACL/SCO and
@@ -67,20 +74,24 @@ That confirms PCI/MMIO, firmware transfer, MCU response handling, and the
 firmware-ready handshake; it does **not** yet establish that the radio can
 reliably scan, associate, or pass traffic.
 
-The RX implementation is intentionally a first usable stage, not a complete
-port of every mt76 RX feature. It accepts normal 802.11 RX packets and safely
-drops unsupported packet types, header-translated frames, and frames marked
-with FCS/ICV or RXD error flags. Hardware-decrypted CCMP/TKIP/GCMP metadata and
-stripped IV/MIC handling still need to be completed and checked against
-net80211's crypto path. AMPDU reordering, A-MSDU handling, full PHY/rate
-metadata, monitor-mode error-frame delivery, and the complete RX control/event
-taxonomy are not implemented.
+The RX implementation is a first-stage port, not a complete replacement for
+all mt76 RX features. It accepts normal native-header 802.11 frames and safely
+drops unsupported packet types, header-translated frames, A-MSDU payload
+formats, ICV errors, and other unsupported RXD error conditions. Hardware
+decryption/IV/MIC-strip metadata is passed to net80211, but protected traffic
+still needs end-to-end validation. Monitor mode receives frames marked with
+FCS and TKIP-MIC errors; ICV-error delivery is not implemented. AMPDU
+reordering, A-MSDU deaggregation, full PHY/rate metadata, and the complete RX
+control/event taxonomy remain outstanding.
 
-TX currently uses a basic fixed-rate legacy descriptor and polls descriptor
-ownership for completion. It does not yet implement the complete mt76 rate
-control, aggregation, TX status, retransmission, power-save, or queue-flow
-control machinery. Basic station/BSS association payloads and software
-encryption are present but are not yet validated end-to-end.
+TX currently uses a basic legacy descriptor and polls WFDMA descriptor
+ownership for completion. Four hardware queues are selected from FreeBSD WME
+access categories, but EDCA parameter programming, complete mt76 rate control,
+aggregation, TX status, retransmission, power-save, and queue-flow control are
+not implemented. The fixed basic rate used for management/multicast traffic
+and the hardware-default unicast rate both require over-the-air validation.
+Basic station/BSS association payloads and software encryption are present but
+are not yet validated end-to-end.
 
 Scanning currently uses FreeBSD's software scanner and the normal channel-switch
 and probe-request TX paths. Dedicated firmware hardware scan, scheduled scan,
