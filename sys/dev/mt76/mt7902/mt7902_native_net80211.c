@@ -1464,10 +1464,10 @@ mt7902_radio_stop(struct mt7902_softc *sc)
 	sc->radio_enabled = false;
 	mtx_unlock(&sc->mtx);
 	if (error != 0)
-		device_printf(sc->dev, "radio stop: MAC_INIT_CTRL disable failed: %d\\n",
+		device_printf(sc->dev, "radio stop: MAC_INIT_CTRL disable failed: %d\n",
 		    error);
 	else
-		device_printf(sc->dev, "radio stopped: MAC disabled\\n");
+		device_printf(sc->dev, "radio stopped: MAC disabled\n");
 	return (error);
 }
 
@@ -1490,18 +1490,18 @@ mt7902_parent(struct ieee80211com *ic)
 	}
 	if (!sc->hw_started) {
 		device_printf(sc->dev,
-		    "cannot start radio: firmware is stopped; set dev.mt7902_native.%d.hw_start=1\\n",
+		    "cannot start radio: firmware is stopped; set dev.mt7902_native.%d.hw_start=1\n",
 		    device_get_unit(sc->dev));
 		error = ENETDOWN;
 	} else if (ic->ic_curchan == NULL) {
 		device_printf(sc->dev,
-		    "cannot start radio: net80211 has no current channel\\n");
+		    "cannot start radio: net80211 has no current channel\n");
 		error = EINVAL;
 	} else {
 		error = mt7902_set_channel(sc, ic->ic_curchan);
 	}
 	if (error != 0) {
-		device_printf(sc->dev, "radio startup failed: %d; stopping VAPs\\n",
+		device_printf(sc->dev, "radio startup failed: %d; stopping VAPs\n",
 		    error);
 		IEEE80211_LOCK(ic);
 		TAILQ_FOREACH(vap, &ic->ic_vaps, iv_next)
