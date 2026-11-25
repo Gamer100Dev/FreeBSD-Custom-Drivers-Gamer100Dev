@@ -227,11 +227,34 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 	if (seq == 0)
 		seq = (++sc->mcu_seq) & 0x0f;
 	if (wait_response) {
+		sc->mcu_async_pending &= ~(1U << seq);
 		sc->mcu_wait_seq = seq;
 		sc->mcu_wait_cmd = cmd;
 		sc->mcu_waiting = 1;
 		sc->mcu_error = EINPROGRESS;
 		sc->mcu_response_len = 0;
+	} else {
+		/*
+		 * CE commands such as SET_RX_FILTER are submitted without waiting,
+		 * but firmware still returns an event response.  Keep the sequence
+		 * association so diagnostics can distinguish host submission from
+		 * firmware acceptance.
+		 */
+		sc->mcu_async_pending |= (1U << seq);
+		sc->mcu_async_command[seq] = command;
+		sc->mcu_async_mode[seq] = 0;
+		sc->mcu_async_bit_op[seq] = 0;
+		sc->mcu_async_flags[seq] = 0;
+		sc->mcu_async_bitmap[seq] = 0;
+		if (command == MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_RX_FILTER) &&
+		    payload != NULL && len >= 17) {
+			const uint8_t *filter = payload;
+
+			sc->mcu_async_mode[seq] = filter[4];
+			sc->mcu_async_flags[seq] = le32dec(filter + 8);
+			sc->mcu_async_bitmap[seq] = le32dec(filter + 12);
+			sc->mcu_async_bit_op[seq] = filter[16];
+		}
 	}
 	mtx_unlock(&sc->mtx);
 
@@ -278,6 +301,7 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 	if (error != 0) {
 		mtx_lock(&sc->mtx);
 		sc->mcu_waiting = 0;
+		sc->mcu_async_pending &= ~(1U << seq);
 		mtx_unlock(&sc->mtx);
 		return (error);
 	}
