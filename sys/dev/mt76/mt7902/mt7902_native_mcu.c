@@ -777,6 +777,10 @@ mt7902_fw_boot(struct mt7902_softc *sc)
 	uint32_t rx_filter;
 	int error, reset_error;
 
+	/* A firmware/WFSYS restart requires MAC_INIT_CTRL and SET_RX_PATH again. */
+	mtx_lock(&sc->mtx);
+	sc->radio_enabled = false;
+	mtx_unlock(&sc->mtx);
 	error = mt7902_fw_get(sc, MT7902_FW_PATCH, &sc->fw_patch);
 	if (error != 0)
 		goto fail;
