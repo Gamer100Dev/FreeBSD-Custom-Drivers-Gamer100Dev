@@ -18,6 +18,7 @@
 #include <machine/bus.h>
 
 #include "if_mt7902_native.h"
+#include "mt7902_native_ba.h"
 
 #include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
@@ -43,14 +44,7 @@
 #define MT7902_TXD6_TX_RATE_SHIFT	16
 #define MT7902_TXP_LAST		(1U << 15)
 #define MT7902_STA_REC_BASIC	0
-#define MT7902_STA_REC_BA		6
-#define MT7902_STA_REC_WTBL		13
-#define MT7902_WTBL_BA		8
-#define MT7902_WTBL_SET		2
-#define MT7902_BA_TYPE_ORIGINATOR	1
-#define MT7902_BA_TYPE_RECIPIENT	2
-#define MT7902_BA_TID_COUNT		16
-#define MT7902_MCU_UNI_DEV_INFO_UPDATE	0x01
+remove local BA constants#define MT7902_MCU_UNI_DEV_INFO_UPDATE	0x01
 #define MT7902_MCU_UNI_BSS_INFO_UPDATE	0x02
 #define MT7902_MCU_EXT_MAC_INIT_CTRL	0x46
 #define MT7902_MCU_EXT_SET_RX_PATH	0x4e
@@ -213,35 +207,6 @@ struct mt7902_wtbl_hdr_trans {
 	uint8_t reserved;
 } __packed;
 
-struct mt7902_wtbl_ba {
-	uint16_t tag;
-	uint16_t len;
-	uint8_t tid;
-	uint8_t ba_type;
-	uint8_t reserved0[2];
-	uint16_t ssn;
-	uint8_t ba_en;
-	uint8_t ba_winsize_idx;
-	uint16_t ba_winsize;
-	uint8_t peer_addr[IEEE80211_ADDR_LEN];
-	uint8_t rst_ba_tid;
-	uint8_t rst_ba_sel;
-	uint8_t rst_ba_sb;
-	uint8_t band_idx;
-	uint8_t reserved1[4];
-} __packed;
-
-struct mt7902_sta_rec_ba {
-	uint16_t tag;
-	uint16_t len;
-	uint8_t tid;
-	uint8_t ba_type;
-	uint8_t amsdu;
-	uint8_t ba_en;
-	uint16_t ssn;
-	uint16_t winsize;
-} __packed;
-
 struct mt7902_sta_rec_phy {
 	uint16_t tag;
 	uint16_t len;
@@ -273,8 +238,6 @@ CTASSERT(sizeof(struct mt7902_wtbl_req_hdr) == 8);
 CTASSERT(sizeof(struct mt7902_wtbl_generic) == 20);
 CTASSERT(sizeof(struct mt7902_wtbl_rx) == 12);
 CTASSERT(sizeof(struct mt7902_wtbl_hdr_trans) == 8);
-CTASSERT(sizeof(struct mt7902_wtbl_ba) == 28);
-CTASSERT(sizeof(struct mt7902_sta_rec_ba) == 12);
 
 struct mt7902_bss_basic {
 	uint16_t tag;
@@ -2290,7 +2253,7 @@ mt7902_wtbl_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
 	struct mt7902_sta_req_hdr hdr;
 	struct mt7902_mcu_tlv_hdr tlv;
 	struct mt7902_wtbl_req_hdr wtbl_req;
-	struct mt7902_wtbl_ba ba;
+	uint8_t ba[MT7902_BA_WTBL_LEN];
 	uint8_t request[sizeof(hdr) + sizeof(tlv) + sizeof(wtbl_req) +
 	    sizeof(ba)];
 	size_t offset;
@@ -2311,24 +2274,9 @@ mt7902_wtbl_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
 	wtbl_req.operation = MT7902_WTBL_SET;
 	wtbl_req.tlv_num = htole16(1);
 
-	bzero(&ba, sizeof(ba));
-	ba.tag = htole16(MT7902_WTBL_BA);
-	ba.len = htole16(sizeof(ba));
-	ba.tid = tid;
-	ba.ba_type = tx ? MT7902_BA_TYPE_ORIGINATOR :
-	    MT7902_BA_TYPE_RECIPIENT;
-	if (tx) {
-		ba.ssn = htole16(enable ? ssn : 0);
-		ba.ba_en = enable ? 1 : 0;
-		ba.ba_winsize = htole16(enable ? winsize : 0);
-	} else {
-		IEEE80211_ADDR_COPY(ba.peer_addr, ni->ni_macaddr);
-		ba.rst_ba_tid = tid;
-		ba.rst_ba_sel = 0; /* RST_BA_MAC_TID_MATCH */
-		ba.rst_ba_sb = 1;
-		ba.band_idx = 0;
-		ba.ba_winsize = htole16(enable ? winsize : 0);
-	}
+	if (mt7902_ba_encode_wtbl(ba, tid, ssn, winsize,
+	    ni->ni_macaddr, tx, enable) != 0)
+		return (EINVAL);
 
 	offset = 0;
 	memcpy(request + offset, &hdr, sizeof(hdr));
@@ -2337,7 +2285,7 @@ mt7902_wtbl_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
 	offset += sizeof(tlv);
 	memcpy(request + offset, &wtbl_req, sizeof(wtbl_req));
 	offset += sizeof(wtbl_req);
-	memcpy(request + offset, &ba, sizeof(ba));
+	memcpy(request + offset, ba, sizeof(ba));
 	return (mt7902_mcu_send_cmd(sc,
 	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
 	    request, sizeof(request), false));
@@ -2348,7 +2296,7 @@ mt7902_sta_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
     uint8_t tid, uint16_t ssn, uint16_t winsize, bool tx, bool enable)
 {
 	struct mt7902_sta_req_hdr hdr;
-	struct mt7902_sta_rec_ba ba;
+	uint8_t ba[MT7902_BA_STA_REC_LEN];
 	uint8_t request[sizeof(hdr) + sizeof(ba)];
 	int error;
 
@@ -2367,18 +2315,11 @@ mt7902_sta_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
 	hdr.wlan_idx_lo = MT7902_PEER_WCID;
 	hdr.tlv_num = htole16(1);
 	hdr.is_tlv_append = 1;
-	bzero(&ba, sizeof(ba));
-	ba.tag = htole16(MT7902_STA_REC_BA);
-	ba.len = htole16(sizeof(ba));
-	ba.tid = tid;
-	ba.ba_type = tx ? MT7902_BA_TYPE_ORIGINATOR :
-	    MT7902_BA_TYPE_RECIPIENT;
-	ba.amsdu = 0; /* no A-MSDU-in-A-MPDU TX/RX capability is advertised */
-	ba.ba_en = enable ? (uint8_t)(1U << tid) : 0;
-	ba.ssn = htole16(enable ? ssn : 0);
-	ba.winsize = htole16(winsize);
+	if (mt7902_ba_encode_sta_rec(ba, tid, ssn, winsize,
+	    tx, enable) != 0)
+		return (EINVAL);
 	memcpy(request, &hdr, sizeof(hdr));
-	memcpy(request + sizeof(hdr), &ba, sizeof(ba));
+	memcpy(request + sizeof(hdr), ba, sizeof(ba));
 
 	error = mt7902_mcu_send_cmd(sc,
 	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
