@@ -114,6 +114,15 @@ mt7902_nic_caps_parse(const uint8_t *data, size_t data_len,
 	}
 	if (!caps->has_phy || caps->phy.nss == 0)
 		return (-1);
+
+	/*
+	 * This native port targets FreeBSD net80211 802.11n/ac (Wi-Fi 5).
+	 * Do not expose the firmware's HE/6 GHz capabilities as usable
+	 * interfaces: this driver has no HE operation or 6 GHz channel plan.
+	 * Keep HT/VHT and the physical capability data needed for Wi-Fi 5.
+	 */
+	caps->phy.he = 0;
+	caps->has_6ghz = 0;
 	return (0);
 }
 
