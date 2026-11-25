@@ -479,16 +479,13 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		}
 	}
 	/*
-	 * mt7921_mac_fill_rx() reports a nonzero hardware cipher with no
-	 * CLM/CM exception as authenticated/decrypted data.  Tell net80211
-	 * that the hardware removed IV/MIC bytes so its software CCMP path
-	 * does not try to decrypt a second time.
+	 * Hardware key installation is not implemented in this native port.
+	 * Preserve the protected frame and let FreeBSD net80211's software
+	 * crypto path authenticate/decrypt it. A cipher indication in RXD1
+	 * alone is not proof that a key was installed or that IV/MIC bytes
+	 * were stripped, so never set RX_F_DECRYPTED/IV_STRIP here.
 	 */
 	sec_mode = (rxd1 >> 16) & 0x1f;
-	if (sec_mode != 0 && (rxd1 & ((1U << 23) | (1U << 24))) == 0)
-		rxs.c_pktflags |= IEEE80211_RX_F_DECRYPTED |
-		    IEEE80211_RX_F_IV_STRIP | IEEE80211_RX_F_MMIC_STRIP |
-		    IEEE80211_RX_F_MIC_STRIP;
 	if (channel != 0) {
 		rxs.r_flags |= IEEE80211_R_IEEE | IEEE80211_R_FREQ |
 		    IEEE80211_R_BAND;
