@@ -442,7 +442,7 @@ mt7902_vap_fw_update(struct mt7902_softc *sc, struct ieee80211vap *vap,
 			    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_DEV_INFO_UPDATE),
 			    &dev_req, sizeof(dev_req), NULL, &(size_t){0});
 			device_printf(sc->dev,
-			    "VAP firmware registration: WTBL WCID %u init failed: %d; BSS rollback=%d\\n",
+			    "VAP firmware registration: WTBL WCID %u init failed: %d; BSS rollback=%d\n",
 			    MT7902_BSS_WCID, error, rollback_error);
 			return (error);
 		}
