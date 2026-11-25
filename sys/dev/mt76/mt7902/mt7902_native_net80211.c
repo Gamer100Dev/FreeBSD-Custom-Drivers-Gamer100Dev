@@ -58,6 +58,8 @@
 #define MT7902_PHY_TYPE_OFDM		(1U << 3)
 #define MT7902_PHY_TYPE_HT		(1U << 4)
 #define MT7902_PHY_TYPE_VHT		(1U << 5)
+#define MT7902_VHT_OPMODE_BW_20_40	0
+#define MT7902_VHT_OPMODE_BW_80		1
 #define MT7902_VHT_OPMODE_RX_NSS_SHIFT	4
 #define MT7902_BSS_PHY_A		(1U << 0)
 #define MT7902_BSS_PHY_B		(1U << 1)
@@ -1362,7 +1364,12 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	state.len = htole16(sizeof(state));
 	state.state = MT7902_STA_STATE_ASSOC;
 	if (peer_vht) {
-		state.vht_opmode = (uint8_t)ni->ni_chw |
+		uint8_t vht_width;
+
+		/* VHT operating mode encodes 20/40 as 0 and 80 MHz as 1. */
+		vht_width = ni->ni_chw == NET80211_STA_RX_BW_80 ?
+		    MT7902_VHT_OPMODE_BW_80 : MT7902_VHT_OPMODE_BW_20_40;
+		state.vht_opmode = vht_width |
 		    ((uint8_t)(MIN(peer_rx_nss, MT7902_VHT_MAX_NSS) - 1) <<
 		    MT7902_VHT_OPMODE_RX_NSS_SHIFT);
 	}
