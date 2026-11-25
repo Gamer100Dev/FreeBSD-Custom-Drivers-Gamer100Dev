@@ -374,6 +374,12 @@ struct mt7902_softc {
 	uint8_t		mcu_seq;
 	uint8_t		mcu_wait_seq;
 	uint8_t		mcu_wait_cmd;
+	uint16_t	mcu_async_pending;
+	uint32_t	mcu_async_command[16];
+	uint32_t	mcu_async_flags[16];
+	uint32_t	mcu_async_bitmap[16];
+	uint8_t		mcu_async_mode[16];
+	uint8_t		mcu_async_bit_op[16];
 	uint8_t		mcu_response[256];
 	size_t		mcu_response_len;
 	int			mcu_error;
