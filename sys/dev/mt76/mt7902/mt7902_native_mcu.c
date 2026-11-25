@@ -13,6 +13,7 @@
 #include <sys/errno.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/systm.h>
 #include <dev/pci/pcivar.h>
@@ -615,17 +616,28 @@ static int mt7902_mac_init(struct mt7902_softc *);
 static int
 mt7902_mcu_get_nic_capability(struct mt7902_softc *sc)
 {
-	uint8_t response[sizeof(sc->mcu_response)];
+	uint8_t *response;
 	size_t response_len;
 	int error;
 
-	response_len = sizeof(response);
+	/*
+	 * Connac2 GET_NIC_CAPAB responses are larger than the usual short MCU
+	 * acknowledgements.  Allocate to the RX buffer limit: the event path
+	 * must not truncate a valid multi-TLV capability response.
+	 */
+	response = malloc(MT7902_RX_BUF_SIZE, M_DEVBUF, M_WAITOK | M_ZERO);
+	response_len = MT7902_RX_BUF_SIZE;
 	error = mt7902_mcu_send_response(sc, MT7902_MCU_CE_CMD(0x8a),
 	    NULL, 0, response, &response_len);
 	if (error != 0)
-		return (error);
-	if (mt7902_nic_caps_parse(response, response_len, &sc->nic_caps) != 0)
-		return (EPROTO);
+		goto out;
+	if (mt7902_nic_caps_parse(response, response_len, &sc->nic_caps) != 0) {
+		device_printf(sc->dev,
+		    "GET_NIC_CAPAB parse failed (response length %ju bytes)\n",
+		    (uintmax_t)response_len);
+		error = EPROTO;
+		goto out;
+	}
 
 	device_printf(sc->dev,
 	    "NIC capabilities: HT=%u VHT=%u HE=%u NSS=%u max_bw=%u "
@@ -637,7 +649,10 @@ mt7902_mcu_get_nic_capability(struct mt7902_softc *sc)
 	    sc->nic_caps.has_6ghz, sc->nic_caps.phy.tx_ldpc,
 	    sc->nic_caps.phy.rx_ldpc, sc->nic_caps.phy.tx_stbc,
 	    sc->nic_caps.phy.rx_stbc, sc->nic_caps.phy.hw_path);
-	return (0);
+	error = 0;
+out:
+	free(response, M_DEVBUF);
+	return (error);
 }
 
 int
