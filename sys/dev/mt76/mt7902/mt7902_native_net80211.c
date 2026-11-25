@@ -2273,7 +2273,7 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 		if (sc->nic_caps.phy.rx_stbc)
 			ic->ic_vht_cap.vht_cap_info |=
 			    MIN(sc->nic_caps.phy.rx_stbc, 7) <<
-			    IEEE80211_VHTCAP_RXSTBC_S;
+			    IEEE80211_VHTCAP_RXSTBC_MASK_S;
 		mcs_map = mt7902_vht_mcs_map(sc->nic_caps.phy.nss);
 		ic->ic_vht_cap.supp_mcs.rx_mcs_map = htole16(mcs_map);
 		ic->ic_vht_cap.supp_mcs.tx_mcs_map = htole16(mcs_map);
