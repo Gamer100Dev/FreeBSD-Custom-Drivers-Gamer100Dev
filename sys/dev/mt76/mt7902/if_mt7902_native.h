@@ -402,7 +402,7 @@ struct mt7902_softc {
 	uint8_t		mcu_seq;
 	uint8_t		mcu_wait_seq;
 	uint8_t		mcu_wait_cmd;
-	uint8_t		mcu_response[256];
+	uint8_t		mcu_response[MT7902_RX_BUF_SIZE];
 	size_t		mcu_response_len;
 	int			mcu_error;
 	int			mcu_waiting;
