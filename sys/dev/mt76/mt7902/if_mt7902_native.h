@@ -462,6 +462,7 @@ int mt7902_mcu_set_rxfilter(struct mt7902_softc *, uint32_t);
 int mt7902_mcu_abort_bss(struct mt7902_softc *);
 int mt7902_mcu_set_channel_domain(struct mt7902_softc *);
 int mt7902_mac_rx_route_init(struct mt7902_softc *);
+int mt7902_mac_wtbl_update(struct mt7902_softc *, unsigned int, uint32_t);
 void mt7902_irq_task(void *, int);
 void mt7902_event_task(void *, int);
 void mt7902_rx_task(void *, int);
