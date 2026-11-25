@@ -665,7 +665,75 @@ mt7902_mcu_init(struct mt7902_softc *sc)
 		device_printf(sc->dev, "WM firmware download failed: %d\n", error);
 		return (error);
 	}
+	error = mt7902_mcu_set_eeprom_buffer_mode(sc);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "EEPROM buffer-mode initialization failed: %d\n", error);
+		return (error);
+	}
+	error = mt7902_mac_init(sc);
+	if (error != 0)
+		return (error);
 	device_printf(sc->dev, "MT7902 WM firmware entered operational state\n");
+	return (0);
+}
+
+/*
+ * Match mt7921_mcu_set_eeprom(): switch the firmware's EEPROM view to the
+ * complete efuse image before the MAC is initialized.
+ */
+static int
+mt7902_mcu_set_eeprom_buffer_mode(struct mt7902_softc *sc)
+{
+	struct {
+		uint8_t buffer_mode;
+		uint8_t format;
+		uint16_t len;
+	} __packed req;
+
+	bzero(&req, sizeof(req));
+	req.buffer_mode = 0; /* EE_MODE_EFUSE */
+	req.format = 1;      /* EE_FORMAT_WHOLE */
+	return (mt7902_mcu_send_cmd(sc, MT7902_MCU_EXT_CMD(0x21),
+	    &req, sizeof(req), true));
+}
+
+/*
+ * Match the receive-critical part of mt7921_mac_init().  The MDP and both
+ * per-band DMA receive-length fields must be configured after firmware
+ * download; otherwise the MCU/event path can run while normal RX is blocked.
+ */
+static int
+mt7902_mac_init(struct mt7902_softc *sc)
+{
+	static const bus_size_t dma_dcr0[] = {
+		0x820e7000, /* MT_DMA_DCR0(0) */
+		0x820f7000  /* MT_DMA_DCR0(1) */
+	};
+	const uint32_t max_rx_mask = 0x0000fff8; /* GENMASK(15, 3) */
+	uint32_t value;
+	unsigned int band;
+
+	value = mt7902_read(sc, 0x820cd004); /* MT_MDP_DCR1 */
+	value = (value & ~max_rx_mask) | ((1536U << 3) & max_rx_mask);
+	mt7902_write(sc, 0x820cd004, value);
+
+	value = mt7902_read(sc, 0x820cd000); /* MT_MDP_DCR0 */
+	value |= (1U << 15) | (1U << 19); /* DAMSDU_EN | RX_HDR_TRANS_EN */
+	mt7902_write(sc, 0x820cd000, value);
+
+	for (band = 0; band < nitems(dma_dcr0); band++) {
+		value = mt7902_read(sc, dma_dcr0[band]);
+		value = (value & ~max_rx_mask) |
+		    ((1536U << 3) & max_rx_mask);
+		value &= ~(1U << 23); /* Disable RXD group 5, as in mt76. */
+		mt7902_write(sc, dma_dcr0[band], value);
+	}
+
+	device_printf(sc->dev,
+	    "MAC RX initialized: MDP_DCR1=%08x MDP_DCR0=%08x DMA_DCR0=%08x/%08x\n",
+	    mt7902_read(sc, 0x820cd004), mt7902_read(sc, 0x820cd000),
+	    mt7902_read(sc, dma_dcr0[0]), mt7902_read(sc, dma_dcr0[1]));
 	return (0);
 }
 
