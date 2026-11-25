@@ -3,16 +3,16 @@
 *.ko
 *.kld
 *.symbols
-.depend*
 *.d
-# Generated FreeBSD device/bus interface headers and options
-device_if.h
-bus_if.h
-pci_if.h
-usb_if.h
-usbdevs.h
-opt_*.h
-# Generated architecture links/directories in out-of-tree kmod builds
-machine
-x86
-i386
+
+# Generated kmod dependency and interface files in the MT7902 source directory
+/sys/dev/mt76/mt7902/.depend*
+/sys/dev/mt76/mt7902/device_if.h
+/sys/dev/mt76/mt7902/bus_if.h
+/sys/dev/mt76/mt7902/pci_if.h
+/sys/dev/mt76/mt7902/usb_if.h
+/sys/dev/mt76/mt7902/usbdevs.h
+/sys/dev/mt76/mt7902/opt_*.h
+/sys/dev/mt76/mt7902/machine
+/sys/dev/mt76/mt7902/x86
+/sys/dev/mt76/mt7902/i386
