@@ -215,7 +215,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	size_t offset, frame_len, hdr_len;
 	enum mt7902_rx_drop_reason drop_reason;
 	bool is_mgmt, monitor_active, rcpi_valid, monitor_only;
-	bool scanning, attached;
+	bool hdr_trans, scanning, attached;
 
 	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
 	fc = 0;
@@ -267,13 +267,21 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 */
 	monitor_only = (rxd1 & (1U << 25)) != 0;
 	/*
-	 * Reject header-translated Ethernet frames: this net80211 path expects
-	 * native 802.11 headers. HDR_TRANS_ERROR (RXD2 bit 25) is not a
-	 * standalone RX error; mt76 only interprets it in conjunction with
-	 * HDR_TRANS. Do not discard ordinary 802.11 frames when that bit is
-	 * independently set by the device.
+	 * Connac2 RXD1 bit 28 is BAND_IDX, not HDR_TRANS. This single-band
+	 * implementation only owns band 0; reject other bands explicitly
+	 * rather than misclassifying their frames as translated Ethernet.
+	 *
+	 * HDR_TRANS is RXD2 bit 13. FreeBSD net80211 consumes native 802.11
+	 * frames, so translated 802.3 frames remain unsupported until the
+	 * complete reverse-translation path (including address/fragment
+	 * reconstruction) is implemented.
 	 */
 	if ((rxd1 & (1U << 28)) != 0) {
+		drop_reason = MT7902_RX_DROP_BAD_CHANNEL;
+		goto drop;
+	}
+	hdr_trans = (rxd2 & (1U << 13)) != 0;
+	if (hdr_trans) {
 		drop_reason = MT7902_RX_DROP_HDR_TRANS;
 		goto drop;
 	}
@@ -289,7 +297,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_MIC;
 		goto drop;
 	}
-	if ((rxd2 & ((1U << 13) | (1U << 23) | (1U << 24))) != 0) {
+	if ((rxd2 & ((1U << 23) | (1U << 24))) != 0) {
 		drop_reason = MT7902_RX_DROP_RXD_ERROR;
 		goto drop;
 	}
