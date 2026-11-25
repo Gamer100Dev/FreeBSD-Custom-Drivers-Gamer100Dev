@@ -627,11 +627,11 @@ mt7902_scan_start(struct ieee80211com *ic)
 		filter_error = mt7902_mcu_set_rxfilter(sc, filter_flags);
 		if (filter_error != 0)
 			device_printf(sc->dev,
-			    "scan-start RX filter refresh failed: %d\\n",
+			    "scan-start RX filter refresh failed: %d\n",
 			    filter_error);
 	}
 	device_printf(sc->dev,
-	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\\n",
+	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\n",
 	    active ? "active" : "passive", scan_flags, ic->ic_nchans,
 	    active_channels, passive, filter_flags, debug);
 }
