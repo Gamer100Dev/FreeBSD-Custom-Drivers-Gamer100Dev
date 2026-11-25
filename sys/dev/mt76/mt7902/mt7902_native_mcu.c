@@ -602,6 +602,9 @@ mt7902_pci_power_on(struct mt7902_softc *sc)
 	return (error);
 }
 
+static int mt7902_mcu_set_eeprom_buffer_mode(struct mt7902_softc *);
+static int mt7902_mac_init(struct mt7902_softc *);
+
 int
 mt7902_mcu_init(struct mt7902_softc *sc)
 {
