@@ -741,6 +741,91 @@ mt7902_mac_init(struct mt7902_softc *sc)
 }
 
 /*
+ * Program the firmware regulatory channel domain before selecting the RX path.
+ * Linux mt7921_start() performs SET_CHAN_DOMAIN between MAC_INIT_CTRL and
+ * SET_RX_PATH.  The native FreeBSD port previously built a host-side channel
+ * list but never sent the corresponding channel table to WM firmware.
+ */
+int
+mt7902_mcu_set_channel_domain(struct mt7902_softc *sc)
+{
+	struct mt7902_chan_domain_hdr {
+		uint8_t alpha2[4];
+		uint8_t bw_2g;
+		uint8_t bw_5g;
+		uint8_t bw_6g;
+		uint8_t pad;
+		uint8_t n_2ch;
+		uint8_t n_5ch;
+		uint8_t n_6ch;
+		uint8_t pad2;
+	} __packed hdr;
+	struct mt7902_chan_domain_entry {
+		uint16_t hw_value;
+		uint16_t pad;
+		uint32_t flags;
+	} __packed entry;
+	struct ieee80211_channel *chan;
+	uint8_t *payload, *p;
+	size_t payload_len;
+	uint32_t flags;
+	int i, error;
+
+	bzero(&hdr, sizeof(hdr));
+	/* Use the firmware's world regulatory domain until a country is set. */
+	hdr.alpha2[0] = '0';
+	hdr.alpha2[1] = '0';
+	hdr.bw_2g = 0; /* 20/40 MHz */
+	hdr.bw_5g = 3; /* 20/40/80/160 MHz */
+	hdr.bw_6g = 3;
+
+	payload_len = sizeof(hdr) +
+	    (size_t)sc->ic.ic_nchans * sizeof(entry);
+	payload = malloc(payload_len, M_DEVBUF, M_WAITOK | M_ZERO);
+	if (payload == NULL)
+		return (ENOMEM);
+	p = payload + sizeof(hdr);
+
+	for (i = 0; i < sc->ic.ic_nchans; i++) {
+		chan = &sc->ic.ic_channels[i];
+		if (chan->ic_flags & IEEE80211_CHAN_DISABLED)
+			continue;
+		bzero(&entry, sizeof(entry));
+		entry.hw_value = htole16(chan->ic_ieee);
+		/*
+		 * Connac channel flags use cfg80211 values, not FreeBSD's
+		 * IEEE80211_CHAN_* bit positions.  Translate only the regulatory
+		 * restrictions needed by firmware.
+		 */
+		flags = 0;
+		if (chan->ic_flags & IEEE80211_CHAN_PASSIVE)
+			flags |= (1U << 1); /* IEEE80211_CHAN_NO_IR */
+		if (chan->ic_flags & IEEE80211_CHAN_DFS)
+			flags |= (1U << 3); /* IEEE80211_CHAN_RADAR */
+		entry.flags = htole32(flags);
+		memcpy(p, &entry, sizeof(entry));
+		p += sizeof(entry);
+		if (IEEE80211_IS_CHAN_2GHZ(chan))
+			hdr.n_2ch++;
+		else if (IEEE80211_IS_CHAN_5GHZ(chan))
+			hdr.n_5ch++;
+	}
+
+	memcpy(payload, &hdr, sizeof(hdr));
+	error = mt7902_mcu_send_cmd(sc, MT7902_MCU_CE_CMD(0x0f),
+	    payload, (size_t)(p - payload), false);
+	free(payload, M_DEVBUF);
+	if (error == 0)
+		device_printf(sc->dev,
+		    "firmware channel domain submitted: alpha2=00 2g=%u 5g=%u 6g=%u\n",
+		    hdr.n_2ch, hdr.n_5ch, hdr.n_6ch);
+	else
+		device_printf(sc->dev,
+		    "firmware channel domain submission failed: %d\n", error);
+	return (error);
+}
+
+/*
  * Configure the Connac2 receive filter before exposing the net80211 VAP.
  * This is the same SET_RX_FILTER command used by mt7921_configure_filter():
  * mode 1 replaces the filter flags, while bit_op/bit_map are reserved for
