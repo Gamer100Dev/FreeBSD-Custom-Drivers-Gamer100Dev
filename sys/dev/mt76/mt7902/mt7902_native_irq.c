@@ -24,6 +24,7 @@
 #include <net80211/ieee80211_proto.h>
 
 #define MT7902_RXD_SIZE	36
+#define MT7902_RX_BATCH	64
 #define MT7902_RXD_EID_OFFSET	28
 #define MT7902_RXD_SEQ_OFFSET	29
 #define MT7902_RXD_EVENT	0x06
@@ -506,7 +507,7 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 	ring = &sc->rx_data;
 	if (ring->desc == NULL)
 		return;
-	for (count = 0; count < ring->ndesc; count++) {
+	for (count = 0; count < MIN(ring->ndesc, MT7902_RX_BATCH); count++) {
 		idx = ring->tail;
 		desc = &ring->desc[idx];
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
@@ -542,6 +543,8 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 			break;
 		}
 	}
+	if (count == MT7902_RX_BATCH)
+		taskqueue_enqueue(sc->tq, &sc->rx_task);
 }
 
 /*
@@ -680,7 +683,7 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 	ring = &sc->rx_event;
 	if (ring->desc == NULL)
 		return;
-	for (count = 0; count < ring->ndesc; count++) {
+	for (count = 0; count < MIN(ring->ndesc, MT7902_RX_BATCH); count++) {
 		idx = ring->tail;
 		desc = &ring->desc[idx];
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
@@ -857,6 +860,8 @@ rearm:
 			break;
 		}
 	}
+	if (count == MT7902_RX_BATCH)
+		taskqueue_enqueue(sc->tq, &sc->event_task);
 }
 
 static void
@@ -987,7 +992,7 @@ mt7902_irq_task(void *arg, int pending __unused)
 		}
 	}
 	if (status & MT7902_INT_RX_DONE_WM)
-		mt7902_rx_event_poll(sc);
+		taskqueue_enqueue(sc->tq, &sc->event_task);
 	/*
 	 * MT7902 shares RX ring0 between WM events and TX status. Poll ring2
 	 * after either RX interrupt: some firmware revisions raise the WM
@@ -1004,6 +1009,14 @@ mt7902_irq_task(void *arg, int pending __unused)
 		taskqueue_enqueue(sc->tq, &sc->rx_task);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
 	    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
+}
+
+void
+mt7902_event_task(void *arg __unused, int pending __unused)
+{
+	struct mt7902_softc *sc = arg;
+
+	mt7902_rx_event_poll(sc);
 }
 
 void
