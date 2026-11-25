@@ -26,11 +26,13 @@ fi
 install -d "$SRCROOT/sys/dev/rtw88_native" \
     "$SRCROOT/sys/modules/rtw88_native" \
     "$SRCROOT/sys/dev/mt76/mt7902" \
-    "$SRCROOT/sys/modules/mt7902_native"
+    "$SRCROOT/sys/modules/mt7902_native" \
+    "$SRCROOT/sys/modules/ng_ubt_mt7902"
 cp -R "$REPO_ROOT/sys/dev/rtw88_native/." "$SRCROOT/sys/dev/rtw88_native/"
 cp -R "$REPO_ROOT/sys/modules/rtw88_native/." "$SRCROOT/sys/modules/rtw88_native/"
 cp -R "$REPO_ROOT/sys/dev/mt76/mt7902/." "$SRCROOT/sys/dev/mt76/mt7902/"
-cp -R "$REPO_ROOT/sys/modules/mt7902_native/." "$SRCROOT/sys/modules/mt7902_native/"
+cp -R "$REPO_ROOT/sys/modules/mt7902_native/." "$SRCROOT/sys/modules/mt7902_native/" \
+cp -R "$REPO_ROOT/sys/modules/ng_ubt_mt7902/." "$SRCROOT/sys/modules/ng_ubt_mt7902/"
 
 # Stamp the exact repository revision into RTW88 so dmesg makes stale
 # /usr/src overlays and stale local checkouts obvious.
@@ -64,11 +66,11 @@ if [ ! -s "$MT7902_MODULE" ]; then
     exit 1
 fi
 
-# Build the optional USB Bluetooth subclass from its separate Makefile.
-cd "$SRCROOT/sys/dev/mt76/mt7902"
-BT_OBJDIR="$(make -f Makefile.bt SRCTOP="$SRCROOT" -V .OBJDIR)"
-make -f Makefile.bt SRCTOP="$SRCROOT" clean
-make -f Makefile.bt SRCTOP="$SRCROOT"
+# Build the optional USB Bluetooth subclass from its own module directory.
+cd "$SRCROOT/sys/modules/ng_ubt_mt7902"
+BT_OBJDIR="$(make SRCTOP="$SRCROOT" -V .OBJDIR)"
+make SRCTOP="$SRCROOT" clean
+make SRCTOP="$SRCROOT"
 BT_MODULE="$BT_OBJDIR/ng_ubt_mt7902.ko"
 if [ ! -s "$BT_MODULE" ]; then
     echo "MT7902 Bluetooth build did not produce $BT_MODULE" >&2
