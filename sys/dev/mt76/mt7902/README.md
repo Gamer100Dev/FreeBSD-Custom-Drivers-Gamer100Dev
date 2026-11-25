@@ -32,20 +32,25 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   Association sends Connac2 BSS basic/QBSS and SET_BSS_ABORT /
   SET_BSS_CONNECTED commands, plus per-peer STA_REC BASIC/HT/VHT/PHY/RA/STATE
   and WTBL GENERIC/RX/HT/VHT/HDR_TRANS records. Legacy and HT MCS masks and
-  VHT RX/TX maps are taken from the negotiated FreeBSD node. Disconnect removes
-  the station and resets its WTBL entry. AP BSSID/AID/DTIM/QoS state is cached
-  so teardown still identifies the peer when net80211 has already dropped the
-  BSS node. HE and 6 GHz are intentionally disabled for this Wi-Fi 5 port.
+  VHT RX/TX maps are taken from the negotiated FreeBSD node. Firmware-backed
+  TX-originator and RX-recipient Block Ack sessions update WTBL_BA and
+  STA_REC_BA while FreeBSD retains the native BA state/reorder machinery.
+  BA commands are submitted asynchronously from net80211 callbacks to avoid
+  blocking the single RX/MCU-event worker. Disconnect removes the station and
+  resets its WTBL entry. HE and 6 GHz are intentionally disabled.
 * Negotiated legacy CCK/OFDM rate masks and AP basic rates are passed to the
   firmware. Fixed-rate management/multicast TX chooses the lowest AP basic
   rate when associated, with 1 Mbps CCK / 6 Mbps OFDM defaults for
   unassociated operation.
-* A first-stage Connac2 normal-RXD decoder. It bounds-checks optional RXD
-  groups, validates full native 802.11 header lengths, extracts channel/RCPI
-  metadata, copies the frame into an mbuf, and feeds FreeBSD
-  `ieee80211_input_mimo_all()`. Beacon and probe-response frames can reach
-  the net80211 scan cache. The parser passes hardware-decryption and IV/MIC
-  strip metadata to net80211.
+* A Connac2 RXD decoder with bounds-checked optional groups, channel/RCPI,
+  TSF and P-RXV legacy/HT/VHT rate metadata. Native 802.11 frames go directly
+  to `ieee80211_input_mimo_all()`. For associated unicast data with RXD group 4,
+  translated Ethernet headers are reconstructed into native 802.11 headers
+  using the peer/BSSID, frame-control, sequence, QoS and HT-control fields;
+  EtherType payloads regain RFC1042/bridge-tunnel LLC/SNAP. Translated
+  protected frames and translated A-MSDU payloads are rejected because they
+  require further crypto/aggregation validation. Hardware decryption/IV/MIC
+  stripping is not claimed.
 * RX descriptor rearming that rotates completed buffers into the reserved
   producer slot, preserving descriptor-to-buffer ownership across ring wrap.
   Scan-end RX/drop counters and last-RXD diagnostics are available. A monitor
@@ -63,6 +68,8 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   DMA pointer and 12-bit frame length separately from the 32-byte TXWI.
   Descriptor ownership is polled in process context; DMA sync state is kept
   across timeouts so an outstanding device DMA is not reused prematurely.
+  TXS final-rate and retry/ACK feedback is fed into FreeBSD net80211 rate
+  control for the associated peer; firmware RA still selects per-packet rates.
 * Native FreeBSD PCI `device_suspend`/`device_resume` methods. The driver
   suspends net80211 VAPs, stops WFDMA, reloads firmware on resume, and then
   restores the VAP state with `ieee80211_resume_all()`.
@@ -119,14 +126,15 @@ firmware-ready handshake. The recent code also builds in FreeBSD 15.1 CI.
 Neither result proves that scanning, association, traffic, suspend/resume, or
 Bluetooth operation works reliably over the air/on the device.
 
-The RX implementation is a first-stage port, not a complete replacement for
-all mt76 RX features. It accepts normal native-header 802.11 frames and
-safely drops unsupported packet types, header-translated frames, A-MSDU
-payload formats, and unsupported RXD error conditions. ICV-failed frames are
-sent only to radiotap monitor listeners; they are never sent to the station
-input path. Protected traffic needs end-to-end validation with the FreeBSD
-crypto path. AMPDU reordering, A-MSDU deaggregation, complete PHY/rate/TSFT
-metadata, and the full RX control/event taxonomy remain outstanding.
+The RX implementation is not yet a complete replacement for all mt76 RX
+features. It accepts native 802.11 frames and reconstructs associated unicast
+translated Ethernet data when RXD group 4 is present. Translated protected
+frames and translated A-MSDU frames remain rejected until their crypto and
+aggregation metadata are implemented. Native hardware-deaggregated A-MSDU
+subframes are passed through FreeBSD's A-MSDU receive path; HT Block Ack
+sessions use FreeBSD's software reorder state with matching Connac2 WTBL/STA
+records. ICV-failed frames are radiotap-only. All protected traffic and BA
+sessions still need over-the-air validation.
 
 TX uses basic legacy TXWI/TXP descriptors and four hardware queues with
 FreeBSD WME/EDCA programming. The driver keeps each packet/node pending until
@@ -134,11 +142,13 @@ the firmware's Connac2 TX_FREE notification returns its MSDU token, then
 completes the net80211 packet with the reported success/failure status.
 Outstanding packets are failed and drained only after WFDMA is stopped.
 TXS notification records are parsed for per-record WCID/PID/rate, ACK/RTS/queue
-timeouts, failure/retry counts, and transmitted MPDU bytes. TXS is currently
-diagnostic accounting rather than a rate-control input. Full mt76 rate control,
-AMPDU aggregation, hardware key offload, power-save buffering, and stronger
-queue backpressure are not implemented. Unicast data rate selection and all
-TX behavior still require over-the-air validation.
+timeouts, failure/retry counts, and transmitted MPDU bytes. Associated peer
+final-rate and retry/ACK feedback is passed to FreeBSD's rate-control interface;
+firmware RA selects packet rates. This is not yet full mt76 firmware rate-control
+parity. BA sessions are programmed in Connac2 and FreeBSD handles its native
+aggregation/reorder state, but aggregate TX/RX completion and sustained AMPDU
+traffic require hardware validation. Hardware key offload, power-save buffering,
+and stronger queue backpressure remain unimplemented.
 
 Scanning currently uses FreeBSD's software scanner and normal channel-switch
 and probe-request TX paths. The channel-switch command waits for firmware
@@ -193,10 +203,9 @@ pinned Linux implementation before calling the DMA port upstream-equivalent.
 The current four-ring layout is retained as a FreeBSD implementation choice
 until the descriptor/queue mapping is changed and validated on the device.
 
-Other outstanding feature differences include the first-stage RX decoder
-(no translated-frame reverse path, A-MSDU deaggregation or AMPDU reorder), no
-complete firmware Block Ack / aggregation integration, no full mt76 rate-
-control feedback, incomplete SAR/regulatory handling, and no validated runtime
-power management. HT/VHT capabilities are configured from firmware and peer
-negotiation data, but that is not yet proof of full Wi-Fi 5 throughput or
-aggregation support.
+Other outstanding feature differences include translated multicast/broadcast
+RX, translated protected RX, translated A-MSDU, full mt76 per-station rate
+control, complete hardware key management, power-save buffering, SAR/regulatory
+integration, autonomous firmware recovery and runtime power management. The
+Wi-Fi 5 HT/VHT/BA integration is code-connected but is not a claim of complete
+802.11n/ac interoperability until it passes physical-device testing.
