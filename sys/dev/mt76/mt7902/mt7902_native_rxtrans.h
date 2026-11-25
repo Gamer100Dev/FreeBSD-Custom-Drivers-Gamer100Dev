@@ -9,8 +9,10 @@
 #ifndef _MT7902_NATIVE_RXTRANS_H_
 #define _MT7902_NATIVE_RXTRANS_H_
 
+#ifndef _KERNEL
 #include <stddef.h>
 #include <stdint.h>
+#endif
 
 #define MT7902_RXTRANS_ETH_HDR_LEN 14U
 #define MT7902_RXTRANS_HDR_MAX     36U
@@ -21,6 +23,7 @@
 #define MT7902_RXTRANS_FC_TODS      0x0100U
 #define MT7902_RXTRANS_FC_FROMDS    0x0200U
 #define MT7902_RXTRANS_FC_ORDER     0x8000U
+#define MT7902_RXTRANS_FC_PROTECTED 0x4000U
 #define MT7902_RXTRANS_ETH_P_802_3_MIN 0x0600U
 #define MT7902_RXTRANS_ETH_P_AARP   0x80f3U
 #define MT7902_RXTRANS_ETH_P_IPX    0x8137U
@@ -62,7 +65,8 @@ mt7902_rxtrans_decode(const uint8_t *eth, size_t eth_len, uint16_t fc,
 	    out == NULL || eth_len < MT7902_RXTRANS_ETH_HDR_LEN)
 		return (-1);
 	if ((fc & MT7902_RXTRANS_FC_TYPE_MASK) !=
-	    MT7902_RXTRANS_FC_TYPE_DATA)
+	    MT7902_RXTRANS_FC_TYPE_DATA ||
+	    (fc & MT7902_RXTRANS_FC_PROTECTED) != 0)
 		return (-1);
 
 	qos_data = (fc & MT7902_RXTRANS_FC_SUBTYPE_QOS) != 0;
