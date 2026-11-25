@@ -361,10 +361,13 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 			goto drop;
 		}
 		qos_control = le16dec(data + offset + qos_offset);
-		if ((qos_control & IEEE80211_QOS_AMSDU) == 0) {
+		if ((qos_control & IEEE80211_QOS_AMSDU) == 0 ||
+		    frame_len < hdr_len + 2) {
 			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 			goto drop;
 		}
+		/* Connac2 leaves a two-byte gap after native A-MSDU headers. */
+		frame_len -= 2;
 	}
 	mtx_lock(&sc->mtx);
 	sc->rx_last_rxd4 = rxd4;
@@ -408,7 +411,12 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	}
 	m->m_len = (int)frame_len;
 	m->m_pkthdr.len = (int)frame_len;
-	memcpy(mtod(m, void *), data + offset, frame_len);
+	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
+		memcpy(mtod(m, void *), data + offset, hdr_len);
+		memcpy((uint8_t *)mtod(m, void *) + hdr_len,
+		    data + offset + hdr_len + 2, frame_len - hdr_len);
+	} else
+		memcpy(mtod(m, void *), data + offset, frame_len);
 
 	bzero(&rxs, sizeof(rxs));
 	rxs.r_flags = IEEE80211_R_NF;
