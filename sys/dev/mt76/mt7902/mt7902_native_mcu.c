@@ -905,6 +905,13 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 	int error, bitmap_error, debug;
 	bool scanning;
 
+	mtx_lock(&sc->mtx);
+	debug = sc->rx_debug;
+	scanning = sc->scan_active;
+	mtx_unlock(&sc->mtx);
+	if (debug > 0 || scanning)
+		mt7902_rxfilter_readback(sc, "before");
+
 	bzero(&req, sizeof(req));
 	req.mode = flags != 0 ? 1 : 2;
 	req.fif = htole32(flags);
