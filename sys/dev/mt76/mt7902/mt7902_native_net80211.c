@@ -1071,6 +1071,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 {
 	struct mt7902_softc *sc = vap->iv_ic->ic_softc;
 	struct mt7902_vap *mvp = (struct mt7902_vap *)vap;
+	struct ieee80211_node *old_ni;
 	struct mt7902_bss_update bss;
 	struct mt7902_sta_req_hdr hdr;
 	struct mt7902_sta_rec_basic basic;
@@ -1197,10 +1198,14 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	if (!linked) {
 		mvp->linked = false;
 		mtx_lock(&sc->mtx);
+		old_ni = sc->station_node;
+		sc->station_node = NULL;
 		sc->station_linked = 0;
 		sc->station_aid = 0;
 		sc->station_basic_rate = 0;
 		mtx_unlock(&sc->mtx);
+		if (old_ni != NULL)
+			ieee80211_free_node(old_ni);
 		error = mt7902_sta_disconnect(sc, peer, aid, qos);
 		bzero(mvp->peer_bssid, sizeof(mvp->peer_bssid));
 		mvp->peer_aid = 0;
@@ -1492,9 +1497,13 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mvp->peer_qos = qos;
 		mvp->peer_channel = peer_channel;
 		mtx_lock(&sc->mtx);
+		old_ni = sc->station_node;
+		sc->station_node = ieee80211_ref_node(ni);
 		sc->station_linked = 1;
 		sc->station_aid = aid;
 		mtx_unlock(&sc->mtx);
+		if (old_ni != NULL)
+			ieee80211_free_node(old_ni);
 	}
 	return (error);
 }
@@ -2358,8 +2367,16 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 void
 mt7902_net80211_detach(struct mt7902_softc *sc)
 {
+	struct ieee80211_node *ni;
+
 	if (sc == NULL || !sc->net80211_attached)
 		return;
+	mtx_lock(&sc->mtx);
+	ni = sc->station_node;
+	sc->station_node = NULL;
+	mtx_unlock(&sc->mtx);
+	if (ni != NULL)
+		ieee80211_free_node(ni);
 	ieee80211_ifdetach(&sc->ic);
 	sc->net80211_attached = 0;
 }
