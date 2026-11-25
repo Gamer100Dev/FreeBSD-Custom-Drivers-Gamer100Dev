@@ -961,6 +961,32 @@ mt7902_rxfilter_readback(struct mt7902_softc *sc, const char *stage)
 }
 
 /*
+ * Clear stale firmware BSS/beacon-filter state before an unassociated scan.
+ * This mirrors mt7921_mcu_set_bss_pm(false): SET_BSS_ABORT is sent before
+ * DROP_OTHER_BEACON is cleared so firmware no longer applies BSS-specific
+ * beacon filtering to the host scan path.
+ */
+int
+mt7902_mcu_abort_bss(struct mt7902_softc *sc)
+{
+	uint8_t req[4] = { MT7902_BSS_IDX, 0, 0, 0 };
+	bool linked;
+
+	if (sc == NULL)
+		return (EINVAL);
+
+	mtx_lock(&sc->mtx);
+	linked = sc->station_linked != 0;
+	mtx_unlock(&sc->mtx);
+	if (linked)
+		return (EBUSY);
+
+	return (mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_BSS_ABORT),
+	    req, sizeof(req), false));
+}
+
+/*
  * Configure the Connac2 receive filter before exposing the net80211 VAP.
  * This is the same SET_RX_FILTER command used by mt7921_configure_filter():
  * mode 1 replaces the filter flags, while bit_op/bit_map are reserved for
