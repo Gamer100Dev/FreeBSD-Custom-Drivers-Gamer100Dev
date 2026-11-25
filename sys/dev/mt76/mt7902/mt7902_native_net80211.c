@@ -205,14 +205,6 @@ struct mt7902_wtbl_hdr_trans {
 	uint8_t reserved;
 } __packed;
 
-struct mt7902_sta_wtbl {
-	struct mt7902_mcu_tlv_hdr tlv;
-	struct mt7902_wtbl_req_hdr request;
-	struct mt7902_wtbl_generic generic;
-	struct mt7902_wtbl_rx rx;
-	struct mt7902_wtbl_hdr_trans hdr_trans;
-} __packed;
-
 struct mt7902_sta_rec_phy {
 	uint16_t tag;
 	uint16_t len;
@@ -1330,8 +1322,9 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		vht.vht_rx_mcs_map = htole16(vht_rx_map);
 		vht.vht_tx_mcs_map = htole16(vht_tx_map);
 		peer_rx_nss = 0;
+		/* The peer's RX map describes how many streams it can receive. */
 		for (i = 0; i < MT7902_VHT_MAX_NSS; i++) {
-			if (((vht_tx_map >> (2 * i)) & 0x3) ==
+			if (((vht_rx_map >> (2 * i)) & 0x3) ==
 			    MT7902_VHT_MCS_NONE)
 				break;
 			peer_rx_nss++;
@@ -1383,8 +1376,11 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		wtbl_ht.len = htole16(sizeof(wtbl_ht));
 		wtbl_ht.ht = 1;
 		wtbl_ht.ldpc = (ni->ni_htcap & IEEE80211_HTCAP_LDPC) != 0;
-		wtbl_ht.ampdu_factor = ni->ni_htparam & 0x03;
-		wtbl_ht.ampdu_density = (ni->ni_htparam >> 2) & 0x07;
+		wtbl_ht.ampdu_factor = (ni->ni_htparam &
+		    IEEE80211_HTCAP_MAXRXAMPDU) >> IEEE80211_HTCAP_MAXRXAMPDU_S;
+		wtbl_ht.ampdu_density = (ni->ni_htparam &
+		    IEEE80211_HTCAP_MPDUDENSITY) >>
+		    IEEE80211_HTCAP_MPDUDENSITY_S;
 	}
 	if (peer_vht) {
 		wtbl_vht.tag = htole16(3); /* WTBL_VHT */
@@ -2256,7 +2252,8 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 		if (sc->nic_caps.phy.tx_stbc)
 			ic->ic_htcaps |= IEEE80211_HTCAP_TXSTBC;
 		if (sc->nic_caps.phy.rx_stbc)
-			ic->ic_htcaps |= IEEE80211_HTCAP_RXSTBC_1STREAM;
+			ic->ic_htcaps |= MIN(sc->nic_caps.phy.rx_stbc, 3) <<
+			    IEEE80211_HTCAP_RXSTBC_S;
 		if (sc->nic_caps.has_2ghz)
 			setbit(ic->ic_modecaps, IEEE80211_MODE_11NG);
 		if (sc->nic_caps.has_5ghz)
@@ -2264,7 +2261,7 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	}
 
 	if (sc->nic_caps.phy.vht && sc->nic_caps.has_5ghz &&
-	    sc->nic_caps.phy.ht) {
+	    sc->nic_caps.phy.ht && sc->nic_caps.phy.max_bw >= 2) {
 		uint16_t mcs_map;
 
 		ic->ic_flags_ext |= IEEE80211_FEXT_VHT;
@@ -2274,7 +2271,9 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 		if (sc->nic_caps.phy.tx_stbc)
 			ic->ic_vht_cap.vht_cap_info |= IEEE80211_VHTCAP_TXSTBC;
 		if (sc->nic_caps.phy.rx_stbc)
-			ic->ic_vht_cap.vht_cap_info |= IEEE80211_VHTCAP_RXSTBC_1;
+			ic->ic_vht_cap.vht_cap_info |=
+			    MIN(sc->nic_caps.phy.rx_stbc, 7) <<
+			    IEEE80211_VHTCAP_RXSTBC_S;
 		mcs_map = mt7902_vht_mcs_map(sc->nic_caps.phy.nss);
 		ic->ic_vht_cap.supp_mcs.rx_mcs_map = htole16(mcs_map);
 		ic->ic_vht_cap.supp_mcs.tx_mcs_map = htole16(mcs_map);
