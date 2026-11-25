@@ -171,3 +171,28 @@ standalone `sys/modules/mt7902_native` entry point, and the optional
 `ng_ubt_mt7902` Bluetooth module. These are compile checks only: CI does not
 load the modules or validate RF scanning, association, suspend/resume, or
 Bluetooth operation on physical hardware.
+
+## Explicit Linux parity differences still open
+
+The following are known port deltas, not claims of upstream equivalence:
+
+| Area | Linux MT7902 reference at `87b67aa8` | Current FreeBSD implementation |
+|---|---|---|
+| Data TX ring | One 2048-descriptor band-0 data ring; logical AC queues share it | Four physical AC rings, 256 descriptors each |
+| TX token table | 8192 tokens | 1024 pending slots (4 × 256) |
+| RX buffer size | 2048 bytes | 4096 bytes |
+| RX data ring | 1536 descriptors | 1536 descriptors |
+| RX event ring | MT7902-specific 512 descriptors | 512 descriptors |
+| MCU-WM queue | Hardware queue 15; no MCU-WA RX ring | Queue 15; no MCU-WA RX ring |
+| Firmware-download queue | Hardware queue 16 | Queue 16 |
+
+The TX ring/token layout and RX buffer size should be reconciled against the
+pinned Linux implementation before calling the DMA port upstream-equivalent.
+The current four-ring layout is retained as a FreeBSD implementation choice
+until the descriptor/queue mapping is changed and validated on the device.
+
+Other outstanding feature differences include the first-stage RX decoder
+(no A-MSDU deaggregation or AMPDU reorder), legacy-only rate/capability
+advertisement, no full mt76 rate-control feedback, incomplete SAR/regulatory
+handling, and no validated runtime power management. These are intentionally
+not advertised as implemented.
