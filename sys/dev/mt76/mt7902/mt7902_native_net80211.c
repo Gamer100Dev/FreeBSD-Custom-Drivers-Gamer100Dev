@@ -545,7 +545,7 @@ mt7902_chan_info_init(struct mt7902_softc *sc, struct ieee80211_channel *c,
 	uint32_t center_freq;
 	uint8_t nss;
 
-	center_freq = ieee80211_get_channel_center_freq(c);
+	center_freq = ieee80211_get_channel_center_freq1(c);
 	if (center_freq == 0)
 		center_freq = c->ic_freq;
 	nss = MIN(sc->nic_caps.phy.nss, 4);
