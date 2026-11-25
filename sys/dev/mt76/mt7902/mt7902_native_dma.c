@@ -272,6 +272,14 @@ mt7902_dma_init(struct mt7902_softc *sc)
 		mt7902_write(sc, MT7902_REG_WFDMA_DUMMY_CR,
 		    mt7902_read(sc, MT7902_REG_WFDMA_DUMMY_CR) |
 		    MT7902_WFDMA_NEED_REINIT);
+		/*
+		 * Match mt7921_pci_probe(): enable the PCIe MAC interrupt
+		 * forwarding gate before unmasking WFDMA sources.  WFDMA's
+		 * local INT_EN alone is insufficient when the PCIe MAC gate
+		 * is left masked; in particular RX ring2 completion may never
+		 * reach the host interrupt handler.
+		 */
+		mt7902_write(sc, MT7902_REG_PCIE_MAC_INT_ENABLE, 0xff);
 		/* MT76 enables the MCU command interrupt and PCIe RX wake source. */
 		mt7902_write(sc, MT7902_REG_MCU2HOST_SW_INT_ENA, 1U);
 		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
