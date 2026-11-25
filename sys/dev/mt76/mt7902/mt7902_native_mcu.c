@@ -818,6 +818,41 @@ mt7902_mac_rx_route_init(struct mt7902_softc *sc)
 }
 
 /*
+ * Update one Connac2 WTBL entry.  mt7921_mac_wtbl_update() uses this
+ * register operation to clear the per-entry admission counters and waits
+ * for the hardware BUSY bit to clear before the entry can be used.
+ */
+static int
+mt7902_mac_wtbl_update(struct mt7902_softc *sc, unsigned int idx,
+    uint32_t operation)
+{
+	uint32_t value;
+	unsigned int retry;
+
+	if (idx >= MT7902_WTBL_SIZE)
+		return (EINVAL);
+
+	value = mt7902_read(sc, MT7902_REG_WTBL_UPDATE);
+	value &= ~(MT7902_WTBL_UPDATE_WLAN_IDX_MASK |
+	    MT7902_WTBL_UPDATE_BUSY);
+	value |= idx & MT7902_WTBL_UPDATE_WLAN_IDX_MASK;
+	value |= operation;
+	mt7902_write(sc, MT7902_REG_WTBL_UPDATE, value);
+
+	for (retry = 0; retry < 500; retry++) {
+		if ((mt7902_read(sc, MT7902_REG_WTBL_UPDATE) &
+		    MT7902_WTBL_UPDATE_BUSY) == 0)
+			return (0);
+		DELAY(10);
+	}
+
+	device_printf(sc->dev,
+	    "WTBL update timed out: index=%u operation=%08x register=%08x\\n",
+	    idx, operation, mt7902_read(sc, MT7902_REG_WTBL_UPDATE));
+	return (ETIMEDOUT);
+}
+
+/*
  * Match the receive-critical part of mt7921_mac_init().  The MDP and both
  * per-band DMA receive-length fields must be configured after firmware
  * download; otherwise the MCU/event path can run while normal RX is blocked.
@@ -831,7 +866,7 @@ mt7902_mac_init(struct mt7902_softc *sc)
 	};
 	const uint32_t max_rx_mask = 0x0000fff8; /* GENMASK(15, 3) */
 	uint32_t value;
-	unsigned int band;
+	unsigned int band, idx;
 	int error;
 
 	value = mt7902_read(sc, 0x820cd004); /* MT_MDP_DCR1 */
@@ -855,6 +890,22 @@ mt7902_mac_init(struct mt7902_softc *sc)
 		mt7902_write(sc, dma_dcr0[band], value);
 	}
 
+	/*
+	 * Match upstream mt7921_mac_init(): initialize every WTBL entry's
+	 * admission counters before the firmware uses WCID 0 for management/
+	 * beacon traffic, WCID 19 for the station BSS, or WCID 1 for its peer.
+	 * The MT7902 exposes the 20-entry MT792x WTBL layout.
+	 */
+	for (idx = 0; idx < MT7902_WTBL_SIZE; idx++) {
+		error = mt7902_mac_wtbl_update(sc, idx,
+		    MT7902_WTBL_UPDATE_ADM_COUNT_CLEAR);
+		if (error != 0) {
+			device_printf(sc->dev,
+			    "WTBL initialization failed at WCID %u: %d\\n",
+			    idx, error);
+			return (error);
+		}
+	}
 	error = mt7902_mac_rx_route_init(sc);
 	if (error != 0)
 		return (error);
