@@ -285,8 +285,9 @@ mt7902_attach(device_t dev)
 		goto fail;
 	}
 	TASK_INIT(&sc->irq_task, 0, mt7902_irq_task, sc);
-	TASK_INIT(&sc->rx_task, 1, mt7902_rx_task, sc);
-	TASK_INIT(&sc->tx_task, 2, mt7902_tx_task, sc);
+	TASK_INIT(&sc->event_task, 1, mt7902_event_task, sc);
+	TASK_INIT(&sc->rx_task, 2, mt7902_rx_task, sc);
+	TASK_INIT(&sc->tx_task, 3, mt7902_tx_task, sc);
 	if (rman_get_size(sc->mem) < MT7902_REG_BAR_MIN) {
 		device_printf(dev, "BAR0 is too small (%ju bytes)\n",
 		    (uintmax_t)rman_get_size(sc->mem));
