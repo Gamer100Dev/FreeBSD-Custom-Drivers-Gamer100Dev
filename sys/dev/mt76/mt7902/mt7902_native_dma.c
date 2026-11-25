@@ -231,30 +231,37 @@ mt7902_dma_init(struct mt7902_softc *sc)
 	    2, true, MT7902_RX_BUF_SIZE)) != 0)
 		goto fail;
 	/*
-	 * Match the MT7902 branch of mt792x_dma_prefetch().  This chip does
-	 * not use the generic RX0-3 / TX0-6,15,16 prefetch layout: RX prefetch
-	 * is assigned only to slots 0/1, while the active TX prefetch windows
-	 * are slots 2-6 and 16/17.  TX ring0 has its own depth-only setting.
+	 * Match the MT7902-specific table in mt792x_dma_prefetch().  Unlike
+	 * the generic MT792x layout, MT7902 assigns prefetch windows to RX
+	 * rings 0-3 and TX rings 0-6, 15 and 16.  In particular RX ring 2
+	 * (the host 802.11 data ring) must have its own window at 0x688.
 	 */
-	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT, 0x4);
 	mt7902_write(sc, MT7902_REG_WFDMA_RX_BASE + 0x180,
-	    MT7902_PREFETCH(0x0000, 0x4));
+	    MT7902_PREFETCH(0x0000, 0x4)); /* RX ring 0 */
 	mt7902_write(sc, MT7902_REG_WFDMA_RX_BASE + 0x184,
-	    MT7902_PREFETCH(0x0040, 0x4));
+	    MT7902_PREFETCH(0x0040, 0x4)); /* RX ring 1 */
+	mt7902_write(sc, MT7902_REG_WFDMA_RX_BASE + 0x188,
+	    MT7902_PREFETCH(0x0080, 0x4)); /* RX ring 2 */
+	mt7902_write(sc, MT7902_REG_WFDMA_RX_BASE + 0x18c,
+	    MT7902_PREFETCH(0x00c0, 0x4)); /* RX ring 3 */
+	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT,
+	    MT7902_PREFETCH(0x0100, 0x4)); /* TX ring 0 */
+	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x4,
+	    MT7902_PREFETCH(0x0140, 0x4)); /* TX ring 1 */
 	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x8,
-	    MT7902_PREFETCH(0x01c0, 0x4));
+	    MT7902_PREFETCH(0x0180, 0x4)); /* TX ring 2 */
 	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0xc,
-	    MT7902_PREFETCH(0x0200, 0x4));
+	    MT7902_PREFETCH(0x01c0, 0x4)); /* TX ring 3 */
 	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x10,
-	    MT7902_PREFETCH(0x0240, 0x4));
+	    MT7902_PREFETCH(0x0200, 0x4)); /* TX ring 4 */
 	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x14,
-	    MT7902_PREFETCH(0x0280, 0x4));
+	    MT7902_PREFETCH(0x0240, 0x4)); /* TX ring 5 */
 	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x18,
-	    MT7902_PREFETCH(0x02c0, 0x4));
+	    MT7902_PREFETCH(0x0280, 0x4)); /* TX ring 6 */
+	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x3c,
+	    MT7902_PREFETCH(0x02c0, 0x4)); /* TX ring 15 */
 	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x40,
-	    MT7902_PREFETCH(0x0340, 0x4));
-	mt7902_write(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x44,
-	    MT7902_PREFETCH(0x0380, 0x4));
+	    MT7902_PREFETCH(0x0300, 0x4)); /* TX ring 16 */
 	mt7902_write(sc, MT7902_REG_WFDMA_RST_DTX_PTR, 0xffffffff);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_DELAY, 0);
 	cfg = MT7902_WFDMA_DMA_SIZE | MT7902_WFDMA_TX_WB |
@@ -302,6 +309,21 @@ mt7902_dma_init(struct mt7902_softc *sc)
 		    le32toh(sc->rx_event.desc[0].control),
 		    (uint32_t)sc->rx_event.buf[0].paddr,
 		    (uint32_t)sc->tx_mcu.buf[0].paddr);
+		device_printf(sc->dev,
+		    "WFDMA prefetch RX0-3=%08x/%08x/%08x/%08x TX0-6=%08x/%08x/%08x/%08x/%08x/%08x/%08x TX15-16=%08x/%08x\n",
+		    mt7902_read(sc, MT7902_REG_WFDMA_RX_BASE + 0x180),
+		    mt7902_read(sc, MT7902_REG_WFDMA_RX_BASE + 0x184),
+		    mt7902_read(sc, MT7902_REG_WFDMA_RX_BASE + 0x188),
+		    mt7902_read(sc, MT7902_REG_WFDMA_RX_BASE + 0x18c),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x4),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x8),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0xc),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x10),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x14),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x18),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x3c),
+		    mt7902_read(sc, MT7902_REG_WFDMA_TX_RING0_EXT + 0x40));
 	}
 	return (error);
 
