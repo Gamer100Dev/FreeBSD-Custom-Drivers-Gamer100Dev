@@ -49,6 +49,29 @@ static void test_unknown_tlv_is_skipped(void)
 	assert(caps.has_phy && !caps.has_macaddr);
 }
 
+
+static void test_large_response_phy_after_256_bytes(void)
+{
+	uint8_t data[512] = { 0 };
+	uint8_t unknown[8] = { 0 };
+	uint8_t phy[12] = { 1, 1, 1, 2, 1, 0, 1, 1, 0, 0, 3, 0 };
+	struct mt7902_nic_caps caps;
+	unsigned int i;
+
+	/*
+	 * Sixteen unknown elements place the required PHY element after byte
+	 * 256. The actual MT7902 GET_NIC_CAPAB response is 512 bytes.
+	 */
+	data[0] = 17;
+	for (i = 0; i < 16; i++)
+		put_tlv(data + 4 + i * 16, 0x100 + i, unknown,
+		    sizeof(unknown));
+	put_tlv(data + 4 + 16 * 16, MT7902_NIC_CAP_PHY, phy, sizeof(phy));
+	assert(mt7902_nic_caps_parse(data, 280, &caps) == 0);
+	assert(caps.has_phy && caps.phy.ht == 1 && caps.phy.vht == 1);
+	assert(caps.phy.nss == 1);
+}
+
 static void test_vht_mcs_map(void)
 {
 	assert(mt7902_vht_mcs_map(0) == 0xffff);
@@ -75,6 +98,7 @@ int main(void)
 {
 	test_parse_phy_and_optional_tlvs();
 	test_unknown_tlv_is_skipped();
+	test_large_response_phy_after_256_bytes();
 	test_reject_malformed_responses();
 	test_vht_mcs_map();
 	puts("MT7902 NIC capability TLV tests: PASS");
