@@ -35,6 +35,9 @@
 
 #define MT7902_PCI_VENDOR	0x14c3
 #define MT7902_PCI_DEVICE	0x7902
+/* Firmware station identifiers shared by TXS and net80211 paths. */
+#define MT7902_PEER_WCID	1
+#define MT7902_BSS_WCID	19
 #define MT7902_BAR		PCIR_BAR(0)
 #define MT7902_REG_BAR_MIN	0x100000
 #define MT7902_REG_CHIP_ID	0x70010200
