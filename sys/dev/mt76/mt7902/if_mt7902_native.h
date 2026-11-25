@@ -31,6 +31,8 @@
 #include <netinet/ip.h>
 #include <net80211/ieee80211_var.h>
 
+#include "mt7902_native_caps.h"
+
 #define MT7902_PCI_VENDOR	0x14c3
 #define MT7902_PCI_DEVICE	0x7902
 #define MT7902_BAR		PCIR_BAR(0)
@@ -399,6 +401,7 @@ struct mt7902_softc {
 	uint16_t		station_aid;
 	uint16_t		station_basic_rate;
 	uint8_t		macaddr[IEEE80211_ADDR_LEN];
+	struct mt7902_nic_caps nic_caps;
 	uint8_t		current_channel;
 	uint8_t		current_band;
 	uint16_t		pci_vendor;
