@@ -596,11 +596,9 @@ mt7902_set_channel_cb(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc;
 	struct ieee80211_channel *c;
-	bool scanning;
-	int error, debug;
-
 	uint8_t previous_channel, previous_band;
 	bool scanning;
+	int error, debug;
 
 	sc = ic->ic_softc;
 	c = ic->ic_curchan;
@@ -780,6 +778,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint16_t last_event_len, txs_last_wcid, txs_last_rate;
 	uint16_t txs_last_fail_count, txs_last_retry_count;
 	uint8_t last_event_type, txs_last_pid, txs_last_status;
+	uint8_t mib_channel, mib_band;
 	uint64_t drop_reason[MT7902_RX_DROP_REASON_COUNT];
 	uint64_t frame_type[4], mgmt_subtype[16], channel_frames[256];
 	uint64_t event_type_count[16], irq_bits[32];
@@ -876,9 +875,10 @@ mt7902_scan_end(struct ieee80211com *ic)
 	chan_last_flags = sc->chan_last_flags;
 	chan_last_result = sc->chan_last_result;
 	chan_last_scan = sc->chan_last_scan;
+	mib_channel = sc->current_channel;
+	mib_band = sc->current_band;
 	mtx_unlock(&sc->mtx);
-	mt7902_rx_mib_sample(sc, "scan-end", sc->current_channel,
-	    sc->current_band);
+	mt7902_rx_mib_sample(sc, "scan-end", mib_channel, mib_band);
 	data_hw_idx = mt7902_read(sc, sc->rx_data.reg_base + 0x0c);
 	event_hw_idx = mt7902_read(sc, sc->rx_event.reg_base + 0x0c);
 	data_tail_ctl = sc->rx_data.desc != NULL ?
