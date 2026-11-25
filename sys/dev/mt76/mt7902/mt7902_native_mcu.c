@@ -788,8 +788,11 @@ mt7902_mcu_set_channel_domain(struct mt7902_softc *sc)
 
 	for (i = 0; i < sc->ic.ic_nchans; i++) {
 		chan = &sc->ic.ic_channels[i];
-		if (chan->ic_flags & IEEE80211_CHAN_DISABLED)
-			continue;
+		/*
+		 * ic_channels is populated from FreeBSD's supported-channel
+		 * helpers; unlike cfg80211, native net80211 has no DISABLED
+		 * flag for entries in this array.
+		 */
 		bzero(&entry, sizeof(entry));
 		entry.hw_value = htole16(chan->ic_ieee);
 		/*
