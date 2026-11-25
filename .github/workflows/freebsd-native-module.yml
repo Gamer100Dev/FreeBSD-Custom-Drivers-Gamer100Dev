@@ -48,20 +48,10 @@ jobs:
             cmake --build build --verbose
             test -f build/if_rtw88_native.ko
             file build/if_rtw88_native.ko
-            MT7902_DIR="$PWD/sys/dev/mt76/mt7902"
-            make -C "$MT7902_DIR" SRCTOP=/usr/src clean
-            MT7902_OBJDIR=$(make -C "$MT7902_DIR" SRCTOP=/usr/src -V .OBJDIR)
-            make -C "$MT7902_DIR" SRCTOP=/usr/src
-            test -s "$MT7902_OBJDIR/if_mt7902_native.ko"
-            file "$MT7902_OBJDIR/if_mt7902_native.ko"
-            MOD_DIR="$PWD/sys/modules/mt7902_native"
-            make -C "$MOD_DIR" SRCTOP=/usr/src clean
-            MOD_OBJDIR=$(make -C "$MOD_DIR" SRCTOP=/usr/src -V .OBJDIR)
-            make -C "$MOD_DIR" SRCTOP=/usr/src
-            test -s "$MOD_OBJDIR/if_mt7902_native.ko"
-            file "$MOD_OBJDIR/if_mt7902_native.ko"
-            make -C "$MT7902_DIR" -f Makefile.bt SRCTOP=/usr/src clean
-            BT_OBJDIR=$(make -C "$MT7902_DIR" -f Makefile.bt SRCTOP=/usr/src -V .OBJDIR)
-            make -C "$MT7902_DIR" -f Makefile.bt SRCTOP=/usr/src
-            test -s "$BT_OBJDIR/ng_ubt_mt7902.ko"
-            file "$BT_OBJDIR/ng_ubt_mt7902.ko"
+            SRCROOT=/usr/src OUTDIR="$PWD/build-native" sh tools/build-native-module.sh
+            test -s build-native/if_rtw88_native.ko
+            test -s build-native/if_mt7902_native.ko
+            test -s build-native/ng_ubt_mt7902.ko
+            file build-native/if_rtw88_native.ko
+            file build-native/if_mt7902_native.ko
+            file build-native/ng_ubt_mt7902.ko
