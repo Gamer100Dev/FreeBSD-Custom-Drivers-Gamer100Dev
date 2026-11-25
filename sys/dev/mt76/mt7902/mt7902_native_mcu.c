@@ -739,7 +739,12 @@ mt7902_mac_init(struct mt7902_softc *sc)
 	mt7902_write(sc, 0x820cd004, value);
 
 	value = mt7902_read(sc, 0x820cd000); /* MT_MDP_DCR0 */
-	value |= (1U << 15) | (1U << 19); /* DAMSDU_EN | RX_HDR_TRANS_EN */
+	/*
+	 * The host RX parser consumes native 802.11 frames and does not
+	 * implement hardware-deaggregated A-MSDUs.  Match mt7921_mac_init():
+	 * disable both DAMSDU and RX header translation.
+	 */
+	value &= ~((1U << 15) | (1U << 19));
 	mt7902_write(sc, 0x820cd000, value);
 
 	for (band = 0; band < nitems(dma_dcr0); band++) {
