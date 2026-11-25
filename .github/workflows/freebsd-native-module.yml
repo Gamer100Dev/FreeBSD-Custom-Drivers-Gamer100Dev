@@ -25,6 +25,7 @@ on:
       - "sys/modules/rtw88_native/**"
       - "sys/modules/mt7902_native/**"
       - "sys/modules/ng_ubt_mt7902/**"
+      - "tests/mt7902_*.c"
       - "upstream/**"
       - ".gitignore"
       - ".github/workflows/freebsd-native-module.yml"
