@@ -92,6 +92,33 @@ test_wifi5_prxv_decode(void)
 }
 
 static void
+test_amsdu_descriptor_metadata(void)
+{
+	struct mt7902_rx_amsdu amsdu;
+
+	assert(mt7902_rxdesc_decode_amsdu(
+	    MT7902_RXD4_PAYLOAD_NONE, 1, 512, 26, &amsdu) == 0);
+	assert(!amsdu.present && !amsdu.more && amsdu.frame_len == 512);
+
+	assert(mt7902_rxdesc_decode_amsdu(
+	    MT7902_RXD4_PAYLOAD_AMSDU_FIRST, 1, 512, 26, &amsdu) == 0);
+	assert(amsdu.present && amsdu.more && amsdu.frame_len == 510);
+	assert(mt7902_rxdesc_decode_amsdu(
+	    MT7902_RXD4_PAYLOAD_AMSDU_MIDDLE, 1, 512, 26, &amsdu) == 0);
+	assert(amsdu.present && amsdu.more && amsdu.frame_len == 510);
+	assert(mt7902_rxdesc_decode_amsdu(
+	    MT7902_RXD4_PAYLOAD_AMSDU_LAST, 1, 512, 26, &amsdu) == 0);
+	assert(amsdu.present && !amsdu.more && amsdu.frame_len == 510);
+
+	assert(mt7902_rxdesc_decode_amsdu(
+	    MT7902_RXD4_PAYLOAD_AMSDU_FIRST, 0, 512, 26, &amsdu) != 0);
+	assert(mt7902_rxdesc_decode_amsdu(
+	    MT7902_RXD4_PAYLOAD_AMSDU_LAST, 1, 27, 26, &amsdu) != 0);
+	assert(mt7902_rxdesc_decode_amsdu(0, 1, 25, 26, &amsdu) != 0);
+	assert(mt7902_rxdesc_decode_amsdu(0, 1, 64, 26, NULL) != 0);
+}
+
+static void
 test_header_offset_bounds(void)
 {
 	struct mt7902_rxdesc_layout layout;
@@ -119,6 +146,7 @@ main(void)
 	test_truncated_groups();
 	test_group2_offset_and_truncation();
 	test_wifi5_prxv_decode();
+	test_amsdu_descriptor_metadata();
 	test_header_offset_bounds();
 	test_descriptor_bit_semantics();
 	puts("MT7902 RX descriptor layout tests: PASS");
