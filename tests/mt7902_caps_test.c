@@ -49,6 +49,15 @@ static void test_unknown_tlv_is_skipped(void)
 	assert(caps.has_phy && !caps.has_macaddr);
 }
 
+static void test_vht_mcs_map(void)
+{
+	assert(mt7902_vht_mcs_map(0) == 0xffff);
+	assert(mt7902_vht_mcs_map(1) == 0xfffe);
+	assert(mt7902_vht_mcs_map(2) == 0xfffa);
+	assert(mt7902_vht_mcs_map(8) == 0xaaaa);
+	assert(mt7902_vht_mcs_map(9) == 0xaaaa);
+}
+
 static void test_reject_malformed_responses(void)
 {
 	uint8_t data[24] = { 0 }, short_phy[11] = { 0 };
@@ -67,6 +76,7 @@ int main(void)
 	test_parse_phy_and_optional_tlvs();
 	test_unknown_tlv_is_skipped();
 	test_reject_malformed_responses();
+	test_vht_mcs_map();
 	puts("MT7902 NIC capability TLV tests: PASS");
 	return (0);
 }
