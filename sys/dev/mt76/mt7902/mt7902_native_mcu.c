@@ -612,6 +612,34 @@ mt7902_pci_power_on(struct mt7902_softc *sc)
 static int mt7902_mcu_set_eeprom_buffer_mode(struct mt7902_softc *);
 static int mt7902_mac_init(struct mt7902_softc *);
 
+static int
+mt7902_mcu_get_nic_capability(struct mt7902_softc *sc)
+{
+	uint8_t response[sizeof(sc->mcu_response)];
+	size_t response_len;
+	int error;
+
+	response_len = sizeof(response);
+	error = mt7902_mcu_send_response(sc, MT7902_MCU_CE_CMD(0x8a),
+	    NULL, 0, response, &response_len);
+	if (error != 0)
+		return (error);
+	if (mt7902_nic_caps_parse(response, response_len, &sc->nic_caps) != 0)
+		return (EPROTO);
+
+	device_printf(sc->dev,
+	    "NIC capabilities: HT=%u VHT=%u HE=%u NSS=%u max_bw=%u "
+	    "2GHz=%u 5GHz=%u 6GHz=%u LDPC(tx/rx)=%u/%u STBC(tx/rx)=%u/%u "
+	    "hw_path=%02x\n",
+	    sc->nic_caps.phy.ht, sc->nic_caps.phy.vht, sc->nic_caps.phy.he,
+	    sc->nic_caps.phy.nss, sc->nic_caps.phy.max_bw,
+	    sc->nic_caps.has_2ghz, sc->nic_caps.has_5ghz,
+	    sc->nic_caps.has_6ghz, sc->nic_caps.phy.tx_ldpc,
+	    sc->nic_caps.phy.rx_ldpc, sc->nic_caps.phy.tx_stbc,
+	    sc->nic_caps.phy.rx_stbc, sc->nic_caps.phy.hw_path);
+	return (0);
+}
+
 int
 mt7902_mcu_init(struct mt7902_softc *sc)
 {
@@ -681,6 +709,13 @@ mt7902_mcu_init(struct mt7902_softc *sc)
 	if (error != 0) {
 		device_printf(sc->dev,
 		    "EEPROM buffer-mode initialization failed: %d\n", error);
+		return (error);
+	}
+	error = mt7902_mcu_get_nic_capability(sc);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "GET_NIC_CAPAB failed or returned malformed data: %d\n",
+		    error);
 		return (error);
 	}
 	error = mt7902_mac_init(sc);
