@@ -2468,9 +2468,10 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	ic->ic_rxstream = MIN(sc->nic_caps.phy.nss, 4);
 
 	/*
-	 * Advertise HT/VHT only when reported by firmware. Keep AMPDU-TX and
-	 * A-MSDU-TX software capability bits clear until the complete
-	 * aggregation/Block Ack data path is integrated.
+	 * Advertise HT/VHT only when reported by firmware. HT A-MPDU is
+	 * enabled because TX/RX Block Ack sessions are tied to Connac2 WTBL
+	 * and STA_REC records and FreeBSD's native reorder engine. A-MSDU-in-
+	 * A-MPDU and A-MSDU TX offload remain disabled.
 	 */
 	if (sc->nic_caps.phy.ht &&
 	    (sc->nic_caps.has_2ghz || sc->nic_caps.has_5ghz)) {
