@@ -283,6 +283,8 @@ struct mt7902_softc {
 	bus_dma_tag_t		ring_dmat;
 	uint32_t		chip_id;
 	struct ieee80211com	ic;
+	/* Referenced association node for asynchronous TXS feedback. */
+	struct ieee80211_node *station_node;
 	struct mt7902_rx_radiotap_header rx_tap;
 	struct mt7902_tx_radiotap_header tx_tap;
 	struct task		irq_task;
