@@ -71,8 +71,6 @@
 #define MT7902_STA_STATE_ASSOC	2
 #define MT7902_STA_STATE_NONE	0
 #define MT7902_BSS_IDX		0
-#define MT7902_BSS_WCID		19
-#define MT7902_PEER_WCID	1
 #define MT7902_CONN_INFRA_STA	((1U << 0) | (1U << 16))
 #define MT7902_CONN_INFRA_AP	((1U << 1) | (1U << 16))
 
