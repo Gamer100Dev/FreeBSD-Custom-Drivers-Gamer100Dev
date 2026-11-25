@@ -534,6 +534,38 @@ struct mt7902_chan_info {
 CTASSERT(sizeof(struct mt7902_chan_info) == 76);
 
 /*
+ * Fill the Connac2 channel tuple from the selected net80211 channel. The
+ * primary channel and center channel differ for HT40/VHT80; reporting the
+ * primary channel in both fields configures the wrong RF segment.
+ */
+static void
+mt7902_chan_info_init(struct mt7902_softc *sc, struct ieee80211_channel *c,
+    struct mt7902_chan_info *req)
+{
+	uint32_t center_freq;
+	uint8_t nss;
+
+	center_freq = ieee80211_get_channel_center_freq(c);
+	if (center_freq == 0)
+		center_freq = c->ic_freq;
+	nss = MIN(sc->nic_caps.phy.nss, 4);
+	if (nss == 0)
+		nss = 1;
+
+	bzero(req, sizeof(*req));
+	req->control_ch = c->ic_ieee;
+	req->center_ch = ieee80211_mhz2ieee(center_freq,
+	    IEEE80211_IS_CHAN_2GHZ(c) ? IEEE80211_CHAN_2GHZ :
+	    IEEE80211_CHAN_5GHZ);
+	req->bw = IEEE80211_IS_CHAN_VHT80(c) ? 2 :
+	    (IEEE80211_IS_CHAN_HT40(c) ? 1 : 0);
+	req->tx_streams = nss;
+	req->rx_streams = nss;
+	req->band_idx = 0;
+	req->channel_band = IEEE80211_IS_CHAN_2GHZ(c) ? 0 : 1;
+}
+
+/*
  * Linux mt7921_start() enables the firmware MAC and selects the RX path
  * before the first CHANNEL_SWITCH.  Firmware boot and BSS registration alone
  * do not start the radio: without MAC_INIT_CTRL the MCU will acknowledge
@@ -581,14 +613,8 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 		return (error);
 	}
 
-	bzero(&path_req, sizeof(path_req));
-	path_req.control_ch = c->ic_ieee;
-	path_req.center_ch = c->ic_ieee;
-	path_req.tx_streams = 1;
-	path_req.rx_streams = 1;
+	mt7902_chan_info_init(sc, c, &path_req);
 	path_req.switch_reason = 0; /* CH_SWITCH_NORMAL */
-	path_req.band_idx = 0;
-	path_req.channel_band = IEEE80211_IS_CHAN_2GHZ(c) ? 0 : 1;
 	error = mt7902_mcu_send_cmd(sc,
 	    MT7902_MCU_EXT_CMD(MT7902_MCU_EXT_SET_RX_PATH),
 	    &path_req, sizeof(path_req), true);
@@ -619,15 +645,10 @@ mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	error = mt7902_radio_start(sc, c);
 	if (error != 0)
 		return (error);
-	bzero(&req, sizeof(req));
-	req.control_ch = c->ic_ieee;
-	req.center_ch = c->ic_ieee;
-	req.tx_streams = 1;
-	req.rx_streams = 1;
+	mt7902_chan_info_init(sc, c, &req);
 	mtx_lock(&sc->mtx);
 	req.switch_reason = sc->scan_active ? 9 : 0;
 	mtx_unlock(&sc->mtx);
-	req.channel_band = IEEE80211_IS_CHAN_2GHZ(c) ? 0 : 1;
 	/* Match mt7921_mcu_set_chan_info(): wait for the firmware's channel
 	 * switch acknowledgement before the software scanner advances.
 	 */
