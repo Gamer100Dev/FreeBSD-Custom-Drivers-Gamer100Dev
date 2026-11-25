@@ -144,6 +144,31 @@ test_header_offset_bounds(void)
 }
 
 static void
+test_rxd2_error_semantics_and_observed_scan_descriptor(void)
+{
+	/*
+	 * Captured from the user's scan log:
+	 * RXD0=10000117 RXD1=80003bff RXD2=42000c4f
+	 * RXD3=02022423 RXD4=c0000000.
+	 *
+	 * Bit 25 is HDR_TRANS_ERROR, but HDR_TRANS (bit 13) is clear. Linux
+	 * mt76 treats this as a native frame, not an RX drop.
+	 */
+	uint32_t rxd2 = 0x42000c4fU;
+
+	assert((rxd2 & MT7902_RXD2_HDR_TRANS) == 0);
+	assert((rxd2 & MT7902_RXD2_HDR_TRANS_ERR) != 0);
+	assert(!mt7902_rxdesc_has_fatal_error(rxd2));
+	assert(!mt7902_rxdesc_hdr_trans_failed(rxd2));
+
+	assert(mt7902_rxdesc_has_fatal_error(MT7902_RXD2_AMSDU_ERR));
+	assert(mt7902_rxdesc_has_fatal_error(MT7902_RXD2_MAX_LEN_ERROR));
+	assert(mt7902_rxdesc_hdr_trans_failed(
+	    MT7902_RXD2_HDR_TRANS | MT7902_RXD2_HDR_TRANS_ERR));
+	assert(!mt7902_rxdesc_hdr_trans_failed(MT7902_RXD2_HDR_TRANS));
+}
+
+static void
 test_descriptor_bit_semantics(void)
 {
 	assert(MT7902_RXD1_BAND_IDX == (1U << 28));
@@ -165,6 +190,7 @@ main(void)
 	test_amsdu_descriptor_metadata();
 	test_header_offset_bounds();
 	test_descriptor_bit_semantics();
+	test_rxd2_error_semantics_and_observed_scan_descriptor();
 	puts("MT7902 RX descriptor layout tests: PASS");
 	return (0);
 }
