@@ -425,6 +425,27 @@ mt7902_vap_fw_update(struct mt7902_softc *sc, struct ieee80211vap *vap,
 			    error, rollback_error);
 			return (error);
 		}
+		/*
+		 * Linux mt7921_add_interface() clears the reserved per-VAP WTBL
+		 * entry after registering the BSS. WCID 19 is this MT7902 station
+		 * interface entry; WCID 0 is reserved for beacon/management RX.
+		 */
+		error = mt7902_mac_wtbl_update(sc, MT7902_BSS_WCID,
+		    MT7902_WTBL_UPDATE_ADM_COUNT_CLEAR);
+		if (error != 0) {
+			bss_req.basic.active = 0;
+			rollback_error = mt7902_mcu_send_response(sc,
+			    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_BSS_INFO_UPDATE),
+			    &bss_req, sizeof(bss_req), NULL, &(size_t){0});
+			dev_req.tlv.active = 0;
+			(void)mt7902_mcu_send_response(sc,
+			    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_DEV_INFO_UPDATE),
+			    &dev_req, sizeof(dev_req), NULL, &(size_t){0});
+			device_printf(sc->dev,
+			    "VAP firmware registration: WTBL WCID %u init failed: %d; BSS rollback=%d\\n",
+			    MT7902_BSS_WCID, error, rollback_error);
+			return (error);
+		}
 		device_printf(sc->dev,
 		    "VAP firmware registered: DEV_INFO_UPDATE+BSS_INFO_UPDATE omac=0 bss=0 wcid=%u mode=%s\n",
 		    MT7902_BSS_WCID,
