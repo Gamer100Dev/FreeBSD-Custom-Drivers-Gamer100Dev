@@ -468,7 +468,8 @@ mt7902_getradiocaps(struct ieee80211com *ic, int maxchans, int *nchans,
 	sc = ic->ic_softc;
 	ht2 = sc->nic_caps.has_2ghz && sc->nic_caps.phy.ht;
 	ht5 = sc->nic_caps.has_5ghz && sc->nic_caps.phy.ht;
-	vht5 = ht5 && sc->nic_caps.phy.vht;
+	vht5 = ht5 && sc->nic_caps.phy.vht &&
+	    sc->nic_caps.phy.max_bw >= 2;
 
 	bzero(bands2, sizeof(bands2));
 	bzero(bands5, sizeof(bands5));
