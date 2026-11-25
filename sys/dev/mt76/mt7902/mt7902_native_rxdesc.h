@@ -28,6 +28,26 @@
 #define MT7902_RXD2_MAX_LEN_ERROR  (1U << 24)
 #define MT7902_RXD2_HDR_TRANS_ERR  (1U << 25)
 
+/*
+ * Connac2 RXD2 bit 25 is a header-translation failure indicator, not a
+ * generic receive error. Linux mt76 examines it only when HDR_TRANS is set:
+ * native 802.11 frames can legitimately carry this bit without being bad.
+ */
+static inline int
+mt7902_rxdesc_has_fatal_error(uint32_t rxd2)
+{
+	return ((rxd2 & (MT7902_RXD2_AMSDU_ERR |
+	    MT7902_RXD2_MAX_LEN_ERROR)) != 0);
+}
+
+static inline int
+mt7902_rxdesc_hdr_trans_failed(uint32_t rxd2)
+{
+	return ((rxd2 & (MT7902_RXD2_HDR_TRANS |
+	    MT7902_RXD2_HDR_TRANS_ERR)) ==
+	    (MT7902_RXD2_HDR_TRANS | MT7902_RXD2_HDR_TRANS_ERR));
+}
+
 #define MT7902_PRXV_RATE_MASK       0x0000007fU
 #define MT7902_PRXV_NSTS_MASK       0x00000380U
 #define MT7902_PRXV_LDPC             (1U << 11)
