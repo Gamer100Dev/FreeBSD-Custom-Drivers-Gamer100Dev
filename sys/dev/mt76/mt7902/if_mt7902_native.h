@@ -436,6 +436,7 @@ int mt7902_mcu_read_mac(struct mt7902_softc *);
 int mt7902_mcu_set_rxfilter(struct mt7902_softc *, uint32_t);
 int mt7902_mcu_set_channel_domain(struct mt7902_softc *);
 void mt7902_irq_task(void *, int);
+void mt7902_event_task(void *, int);
 void mt7902_rx_task(void *, int);
 int mt7902_net80211_attach(struct mt7902_softc *);
 void mt7902_net80211_detach(struct mt7902_softc *);
