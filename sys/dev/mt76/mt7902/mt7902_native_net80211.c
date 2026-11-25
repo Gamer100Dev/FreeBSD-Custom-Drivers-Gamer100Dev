@@ -525,7 +525,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
 	bool active;
-	int i, passive, active_channels, debug;
+	int i, passive, active_channels, debug, filter_error;
 	uint32_t scan_flags, filter_flags;
 
 	active = ic->ic_scan != NULL &&
@@ -611,10 +611,27 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->chan_last_result = 0;
 	sc->chan_last_scan = false;
 	debug = sc->rx_debug;
-	filter_flags = sc->rx_filter_flags;
+	/*
+	 * Reassert the complete Connac2 receive policy at each scan boundary.
+	 * Like rtw88's configure-filter path, keep the desired policy explicit
+	 * rather than assuming the firmware retained an earlier interface-time
+	 * setting.  MT76's SET_RX_FILTER command is asynchronous, so this only
+	 * confirms host submission; RX counters remain the hardware-side check.
+	 */
+	filter_flags = MT7902_RX_FILTER_ENABLE | MT7902_RX_FILTER_OTHER_BSS;
+	if (sc->monitor_active)
+		filter_flags |= MT7902_RX_FILTER_CONTROL |
+		    MT7902_RX_FILTER_FCSFAIL;
 	mtx_unlock(&sc->mtx);
+	if (sc->hw_started) {
+		filter_error = mt7902_mcu_set_rxfilter(sc, filter_flags);
+		if (filter_error != 0)
+			device_printf(sc->dev,
+			    "scan-start RX filter refresh failed: %d\\n",
+			    filter_error);
+	}
 	device_printf(sc->dev,
-	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\n",
+	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\\n",
 	    active ? "active" : "passive", scan_flags, ic->ic_nchans,
 	    active_channels, passive, filter_flags, debug);
 }
