@@ -279,11 +279,12 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 	error = mt7902_tx_submit(sc, ring, packet, packet_len);
 	free(packet, M_DEVBUF);
 	if (error != 0) {
-		mtx_lock(&sc->mtx);
-		sc->mcu_waiting = 0;
-		mtx_unlock(&sc->mtx);
-		if (wait_response)
+		if (wait_response) {
+			mtx_lock(&sc->mtx);
+			sc->mcu_waiting = 0;
+			mtx_unlock(&sc->mtx);
 			mtx_unlock(&sc->mcu_mtx);
+		}
 		return (error);
 	}
 	if (!wait_response)
