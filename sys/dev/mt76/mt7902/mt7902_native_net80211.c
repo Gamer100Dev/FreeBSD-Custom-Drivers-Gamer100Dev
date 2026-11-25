@@ -748,8 +748,8 @@ static void
 mt7902_scan_start(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
-	bool active;
-	int i, passive, active_channels, debug, filter_error;
+	bool active, linked;
+	int i, passive, active_channels, debug, filter_error, abort_error;
 	uint32_t scan_flags, filter_flags;
 
 	active = ic->ic_scan != NULL &&
@@ -835,6 +835,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->chan_last_result = 0;
 	sc->chan_last_scan = false;
 	debug = sc->rx_debug;
+	linked = sc->station_linked != 0;
 	/*
 	 * Reassert the complete Connac2 receive policy at each scan boundary.
 	 * Like rtw88's configure-filter path, keep the desired policy explicit
@@ -847,6 +848,19 @@ mt7902_scan_start(struct ieee80211com *ic)
 		filter_flags |= MT7902_RX_FILTER_CONTROL |
 		    MT7902_RX_FILTER_FCSFAIL;
 	mtx_unlock(&sc->mtx);
+	if (sc->hw_started && !linked) {
+		/*
+		 * An unassociated STA must leave any stale firmware BSS/beacon
+		 * filtering state before it can receive other-BSS beacons.
+		 * SET_BSS_ABORT is the host-side equivalent of the upstream
+		 * set_bss_pm(false) call used when beacon filtering is disabled.
+		 */
+		abort_error = mt7902_mcu_abort_bss(sc);
+		if (abort_error != 0)
+			device_printf(sc->dev,
+			    "scan-start SET_BSS_ABORT submission failed: %d\\n",
+			    abort_error);
+	}
 	if (sc->hw_started) {
 		filter_error = mt7902_mcu_set_rxfilter(sc, filter_flags);
 		if (filter_error != 0)
