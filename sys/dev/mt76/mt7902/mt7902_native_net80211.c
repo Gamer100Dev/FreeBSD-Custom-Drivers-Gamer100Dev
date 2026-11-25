@@ -355,7 +355,8 @@ mt7902_vap_fw_update(struct mt7902_softc *sc, struct ieee80211vap *vap,
 	bss_req.basic.hw_bss_idx = 0;
 	bss_req.basic.band_idx = 0;
 	bss_req.basic.conn_type = htole32(conn_type);
-	bss_req.basic.conn_state = !enable; /* Match MT76: active STA BSS starts DISCONNECT. */
+	/* Match mt76_connac_mcu_uni_add_dev(): BSS conn_state starts CONNECT. */
+	bss_req.basic.conn_state = 1;
 	bss_req.basic.wmm_idx = 0;
 	bss_req.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
 	bss_req.basic.sta_idx = htole16(MT7902_BSS_WCID);
