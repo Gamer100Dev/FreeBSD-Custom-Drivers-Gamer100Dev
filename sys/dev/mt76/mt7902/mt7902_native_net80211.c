@@ -569,23 +569,22 @@ mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 }
 
 /*
- * Read the same RX MIB counters accumulated by mt792x_mac_update_mib_stats:
- * SDR5 counts successfully received MPDUs; SDR3[31:16] counts FCS errors.
- * Sampling immediately before each channel change attributes the completed
- * dwell interval to the channel that was active before the switch.
+ * Read the RX MIB counters used by mt792x_mac_update_mib_stats(). This is a
+ * single-PHY device: upstream reads MIB bank 0 for both 2.4 and 5 GHz.
+ * SDR5 counts received MPDUs; SDR3[31:16] counts FCS errors. Sample before
+ * each channel change to attribute the completed dwell to the prior channel.
  */
 static void
 mt7902_rx_mib_sample(struct mt7902_softc *sc, const char *stage,
     uint8_t channel, uint8_t band)
 {
 	uint32_t mpdu, fcs;
-	unsigned int mib_band;
 
-	mib_band = band == 5 ? 1 : 0;
-	mpdu = mt7902_read(sc, MT7902_REG_MIB_SDR5(mib_band));
-	fcs = mt7902_read(sc, MT7902_REG_MIB_SDR3(mib_band));
+	/* MT7921-style single PHY: MIB bank 0 covers both RF bands. */
+	mpdu = mt7902_read(sc, MT7902_REG_MIB_SDR5(0));
+	fcs = mt7902_read(sc, MT7902_REG_MIB_SDR3(0));
 	device_printf(sc->dev,
-	    "RX MIB stage=%s channel=%u band=%u mpdu=%u fcs_error=%u raw_sdr3=%08x raw_sdr5=%08x\n",
+	    "RX MIB stage=%s channel=%u channel_band=%u mib_bank=0 mpdu=%u fcs_error=%u raw_sdr3=%08x raw_sdr5=%08x\n",
 	    stage, channel, band, mpdu,
 	    (fcs & MT7902_MIB_SDR3_FCS_ERR_MASK) >>
 	    MT7902_MIB_SDR3_FCS_ERR_SHIFT, fcs, mpdu);
@@ -749,7 +748,6 @@ mt7902_scan_start(struct ieee80211com *ic)
 	}
 	/* Drain pre-scan hardware counters before the first channel dwell. */
 	mt7902_rx_mib_sample(sc, "scan-baseline", 0, 0);
-	mt7902_rx_mib_sample(sc, "scan-baseline", 0, 5);
 	device_printf(sc->dev,
 	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\n",
 	    active ? "active" : "passive", scan_flags, ic->ic_nchans,
