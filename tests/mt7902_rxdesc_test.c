@@ -11,6 +11,7 @@ test_base_layout(void)
 	struct mt7902_rxdesc_layout layout;
 
 	assert(mt7902_rxdesc_get_layout(0, 0, 80, &layout) == 0);
+	assert(layout.group2_offset == 0);
 	assert(layout.group3_offset == 0);
 	assert(layout.group5_rcpi_offset == 0);
 	assert(layout.frame_offset == 24);
@@ -27,6 +28,7 @@ test_all_optional_groups(void)
 	    MT7902_RXD1_GROUP_5;
 	assert(mt7902_rxdesc_get_layout(groups, 2U << 14, 160,
 	    &layout) == 0);
+	assert(layout.group2_offset == 56);
 	assert(layout.group3_offset == 64);
 	assert(layout.group5_rcpi_offset == 96);
 	assert(layout.frame_offset == 148);
@@ -44,6 +46,19 @@ test_truncated_groups(void)
 	assert(mt7902_rxdesc_get_layout(MT7902_RXD1_GROUP_3 |
 	    MT7902_RXD1_GROUP_5, 0, 103, &layout) != 0);
 	assert(mt7902_rxdesc_get_layout(MT7902_RXD1_GROUP_5, 0, 160,
+	    &layout) != 0);
+}
+
+static void
+test_group2_offset_and_truncation(void)
+{
+	struct mt7902_rxdesc_layout layout;
+
+	assert(mt7902_rxdesc_get_layout(MT7902_RXD1_GROUP_2, 0, 40,
+	    &layout) == 0);
+	assert(layout.group2_offset == 24);
+	assert(layout.frame_offset == 32);
+	assert(mt7902_rxdesc_get_layout(MT7902_RXD1_GROUP_2, 0, 31,
 	    &layout) != 0);
 }
 
@@ -73,6 +88,7 @@ main(void)
 	test_base_layout();
 	test_all_optional_groups();
 	test_truncated_groups();
+	test_group2_offset_and_truncation();
 	test_header_offset_bounds();
 	test_descriptor_bit_semantics();
 	puts("MT7902 RX descriptor layout tests: PASS");
