@@ -142,6 +142,9 @@ enum mt7902_rx_drop_reason {
 #define MT7902_RX_FILTER_BIT_SET	(1U << 0)
 #define MT7902_RX_FILTER_BIT_CLEAR	(1U << 1)
 #define MT7902_RFCR_DROP_OTHER_BEACON	(1U << 11)
+/* Connac2 RMAC receive-filter registers (mt792x_regs.h). */
+#define MT7902_REG_WF_RFCR(_band)	((_band) ? 0x820f5000 : 0x820e5000)
+#define MT7902_REG_WF_RFCR1(_band)	(MT7902_REG_WF_RFCR(_band) + 0x004)
 #define MT7902_MCU_CMD_QUERY	0x01
 #define MT7902_MCU_SEQ_MAX	15
 #define MT7902_MCU_EXT_CID		0xed
