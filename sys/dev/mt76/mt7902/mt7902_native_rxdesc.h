@@ -18,11 +18,18 @@
 #define MT7902_RXD1_BAND_IDX       (1U << 28)
 #define MT7902_RXD2_HDR_TRANS      (1U << 13)
 #define MT7902_RXD2_HDR_OFFSET     (3U << 14)
+#define MT7902_RXD2_NON_AMPDU      (1U << 30)
+#define MT7902_RXD4_PAYLOAD_FORMAT (3U << 0)
+#define MT7902_RXD4_PAYLOAD_NONE   0U
+#define MT7902_RXD4_PAYLOAD_AMSDU_FIRST 1U
+#define MT7902_RXD4_PAYLOAD_AMSDU_MIDDLE 2U
+#define MT7902_RXD4_PAYLOAD_AMSDU_LAST 3U
 #define MT7902_RXD2_AMSDU_ERR      (1U << 23)
 #define MT7902_RXD2_MAX_LEN_ERROR  (1U << 24)
 #define MT7902_RXD2_HDR_TRANS_ERR  (1U << 25)
 
 struct mt7902_rxdesc_layout {
+	size_t group2_offset;
 	size_t group3_offset;
 	size_t group5_rcpi_offset;
 	size_t frame_offset;
@@ -47,6 +54,7 @@ mt7902_rxdesc_get_layout(uint32_t rxd1, uint32_t rxd2, size_t dma_len,
 	if (layout == NULL || dma_len < MT7902_RXD_BASE_SIZE)
 		return (-1);
 
+	layout->group2_offset = 0;
 	layout->group3_offset = 0;
 	layout->group5_rcpi_offset = 0;
 	offset = MT7902_RXD_BASE_SIZE;
@@ -64,6 +72,7 @@ mt7902_rxdesc_get_layout(uint32_t rxd1, uint32_t rxd2, size_t dma_len,
 	if ((rxd1 & MT7902_RXD1_GROUP_2) != 0) {
 		if (dma_len - offset < 8)
 			return (-1);
+		layout->group2_offset = offset;
 		offset += 8;
 	}
 	if ((rxd1 & MT7902_RXD1_GROUP_5) != 0 &&
