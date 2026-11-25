@@ -765,7 +765,7 @@ mt7902_mac_init(struct mt7902_softc *sc)
 
 	device_printf(sc->dev,
 	    "MAC RX initialized: MDP_DCR1=%08x DCR0=%08x "
-	    "BNRCFR0=%08x/%08x BNRCFR1=%08x/%08x DMA_DCR0=%08x/%08x\\n",
+	    "BNRCFR0=%08x/%08x BNRCFR1=%08x/%08x DMA_DCR0=%08x/%08x\n",
 	    mt7902_read(sc, 0x820cd004), mt7902_read(sc, 0x820cd000),
 	    mt7902_read(sc, mdp_bnrcfr0[0]), mt7902_read(sc, mdp_bnrcfr0[1]),
 	    mt7902_read(sc, mdp_bnrcfr1[0]), mt7902_read(sc, mdp_bnrcfr1[1]),
