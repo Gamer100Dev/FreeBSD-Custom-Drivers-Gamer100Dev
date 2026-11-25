@@ -10,6 +10,7 @@
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
+#include <sys/priority.h>
 #include <sys/malloc.h>
 #include <sys/rman.h>
 #include <sys/systm.h>
