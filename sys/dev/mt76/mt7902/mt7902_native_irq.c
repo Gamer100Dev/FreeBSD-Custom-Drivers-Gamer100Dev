@@ -20,6 +20,7 @@
 
 #include "if_mt7902_native.h"
 #include "mt7902_native_rxdesc.h"
+#include "mt7902_native_rxtrans.h"
 
 #include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
@@ -211,6 +212,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	struct ieee80211_node *ni;
 	struct mt7902_rx_phy rxphy;
 	struct mt7902_rx_amsdu rx_amsdu;
+	struct mt7902_rx_translated rxtrans;
 	struct mbuf *m;
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
@@ -227,6 +229,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
 	bzero(&rxphy, sizeof(rxphy));
 	bzero(&rx_amsdu, sizeof(rx_amsdu));
+	bzero(&rxtrans, sizeof(rxtrans));
 	phy_valid = false;
 	qos_control = 0;
 	qos_offset = 0;
@@ -279,22 +282,17 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	 */
 	monitor_only = (rxd1 & (1U << 25)) != 0;
 	/*
-	 * Connac2 RXD1 bit 28 is BAND_IDX, not HDR_TRANS. This single-band
-	 * implementation only owns band 0; reject other bands explicitly
-	 * rather than misclassifying their frames as translated Ethernet.
-	 *
-	 * HDR_TRANS is RXD2 bit 13. FreeBSD net80211 consumes native 802.11
-	 * frames, so translated 802.3 frames remain unsupported until the
-	 * complete reverse-translation path (including address/fragment
-	 * reconstruction) is implemented.
+	 * Connac2 RXD1 bit 28 is BAND_IDX, not HDR_TRANS. This driver currently
+	 * owns band 0 only. Header-translated unicast data is reconstructed from
+	 * RXD group 4 and the active station node below.
 	 */
-	if ((rxd1 & (1U << 28)) != 0) {
+	if ((rxd1 & MT7902_RXD1_BAND_IDX) != 0) {
 		drop_reason = MT7902_RX_DROP_BAD_CHANNEL;
 		goto drop;
 	}
-	hdr_trans = (rxd2 & (1U << 13)) != 0;
-	if (hdr_trans) {
-		drop_reason = MT7902_RX_DROP_HDR_TRANS;
+	hdr_trans = (rxd2 & MT7902_RXD2_HDR_TRANS) != 0;
+	if (hdr_trans && (rxd1 & MT7902_RXD1_GROUP_4) == 0) {
+		drop_reason = MT7902_RX_DROP_GROUP_TRUNCATED;
 		goto drop;
 	}
 	if (monitor_only && !monitor_active) {
@@ -335,48 +333,90 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		}
 	}
 	frame_len = dma_len - offset;
-	if (frame_len < sizeof(*wh)) {
-		drop_reason = MT7902_RX_DROP_SHORT_FRAME;
-		goto drop;
-	}
+	qos_control = 0;
+	if (hdr_trans) {
+		uint32_t rxd6, rxd8, rxd9;
+		size_t eth_len;
+		struct ieee80211_node *station;
 
-	wh = (const struct ieee80211_frame_min *)(const void *)(data + offset);
-	fc = le16dec(&wh->i_fc[0]);
-	hdr_len = mt7902_rx_80211_hdrlen(fc);
-	if (hdr_len == 0 || frame_len < hdr_len) {
-		drop_reason = MT7902_RX_DROP_BAD_HEADER;
-		goto drop;
+		/* Reverse translation is defined for unicast-to-me data frames. */
+		if (((rxd3 >> 16) & 0x3) != 1 ||
+		    frame_len < MT7902_RXTRANS_ETH_HDR_LEN ||
+		    (rxd4 & MT7902_RXD4_PAYLOAD_FORMAT) !=
+		    MT7902_RXD4_PAYLOAD_NONE) {
+			drop_reason = MT7902_RX_DROP_HDR_TRANS;
+			goto drop;
+		}
+		rxd6 = le32dec(data + rx_layout.group4_offset);
+		rxd8 = le32dec(data + rx_layout.group4_offset + 8);
+		rxd9 = le32dec(data + rx_layout.group4_offset + 12);
+		fc = rxd6 & 0xffff;
+		mtx_lock(&sc->mtx);
+		station = sc->station_node != NULL ?
+		    ieee80211_ref_node(sc->station_node) : NULL;
+		mtx_unlock(&sc->mtx);
+		if (station == NULL) {
+			drop_reason = MT7902_RX_DROP_HDR_TRANS;
+			goto drop;
+		}
+		eth_len = frame_len;
+		if (mt7902_rxtrans_decode(data + offset, eth_len, fc,
+		    (uint16_t)rxd8, (uint16_t)(rxd8 >> 16), rxd9,
+		    sc->ic.ic_macaddr, station->ni_macaddr, station->ni_bssid,
+		    &rxtrans) != 0) {
+			ieee80211_free_node(station);
+			drop_reason = MT7902_RX_DROP_HDR_TRANS;
+			goto drop;
+		}
+		ieee80211_free_node(station);
+		frame_len = rxtrans.frame_len;
+		hdr_len = rxtrans.header_len;
+		qos_control = rxtrans.qos_control;
+		qos_data = rxtrans.qos_data != 0;
+	} else {
+		if (frame_len < sizeof(*wh)) {
+			drop_reason = MT7902_RX_DROP_SHORT_FRAME;
+			goto drop;
+		}
+		wh = (const struct ieee80211_frame_min *)(const void *)(data + offset);
+		fc = le16dec(&wh->i_fc[0]);
+		hdr_len = mt7902_rx_80211_hdrlen(fc);
+		if (hdr_len == 0 || frame_len < hdr_len) {
+			drop_reason = MT7902_RX_DROP_BAD_HEADER;
+			goto drop;
+		}
+		frame_type = (fc >> 2) & 0x3;
+		subtype = (fc >> 4) & 0x0f;
+		qos_data = frame_type == 2 && (subtype & 0x08) != 0;
+		if (mt7902_rxdesc_decode_amsdu(rxd4, qos_data, frame_len,
+		    hdr_len, &rx_amsdu) != 0) {
+			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
+			goto drop;
+		}
+		if (qos_data) {
+			/* QoS control follows Addr4 on four-address data frames. */
+			qos_offset = sizeof(struct ieee80211_frame);
+			if ((fc & 0x0300) == 0x0300)
+				qos_offset += IEEE80211_ADDR_LEN;
+			if (frame_len < qos_offset + sizeof(qos_control)) {
+				drop_reason = MT7902_RX_DROP_BAD_HEADER;
+				goto drop;
+			}
+			qos_control = le16dec(data + offset + qos_offset);
+		}
+		if (rx_amsdu.present) {
+			/* One native-header A-MSDU subframe is returned per RXD. */
+			if (!qos_data ||
+			    (qos_control & IEEE80211_QOS_AMSDU) == 0) {
+				drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
+				goto drop;
+			}
+			frame_len = rx_amsdu.frame_len;
+		}
 	}
 	is_mgmt = (fc & 0x000c) == 0;
 	subtype = (fc >> 4) & 0x0f;
 	frame_type = (fc >> 2) & 0x3;
-	qos_data = frame_type == 2 && (subtype & 0x08) != 0;
-	if (mt7902_rxdesc_decode_amsdu(rxd4, qos_data, frame_len, hdr_len,
-	    &rx_amsdu) != 0) {
-		drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
-		goto drop;
-	}
-	qos_control = 0;
-	qos_offset = 0;
-	if (qos_data) {
-		/* QoS control follows Addr4 on four-address data frames. */
-		qos_offset = sizeof(struct ieee80211_frame);
-		if ((fc & 0x0300) == 0x0300)
-			qos_offset += IEEE80211_ADDR_LEN;
-		if (frame_len < qos_offset + sizeof(qos_control)) {
-			drop_reason = MT7902_RX_DROP_BAD_HEADER;
-			goto drop;
-		}
-		qos_control = le16dec(data + offset + qos_offset);
-	}
-	if (rx_amsdu.present) {
-		/* The firmware reports one native-header A-MSDU subframe per RXD. */
-		if (!qos_data || (qos_control & IEEE80211_QOS_AMSDU) == 0) {
-			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
-			goto drop;
-		}
-		frame_len = rx_amsdu.frame_len;
-	}
 	mtx_lock(&sc->mtx);
 	sc->rx_last_rxd4 = rxd4;
 	sc->rx_last_fc = fc;
@@ -419,7 +459,16 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	}
 	m->m_len = (int)frame_len;
 	m->m_pkthdr.len = (int)frame_len;
-	if (rx_amsdu.present) {
+	if (hdr_trans) {
+		uint8_t *dst;
+
+		dst = mtod(m, uint8_t *);
+		memcpy(dst, rxtrans.header, rxtrans.header_len);
+		memcpy(dst + rxtrans.header_len, rxtrans.llc, rxtrans.llc_len);
+		memcpy(dst + rxtrans.header_len + rxtrans.llc_len,
+		    data + offset + rxtrans.payload_offset,
+		    rxtrans.payload_len);
+	} else if (rx_amsdu.present) {
 		memcpy(mtod(m, void *), data + offset, hdr_len);
 		memcpy((uint8_t *)mtod(m, void *) + hdr_len,
 		    data + offset + hdr_len + 2, frame_len - hdr_len);
