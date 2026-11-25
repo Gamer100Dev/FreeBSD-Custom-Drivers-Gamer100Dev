@@ -833,29 +833,6 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 				    sc->mcu_response_len);
 				sc->mcu_waiting = 0;
 				cv_broadcast(&sc->mcu_cv);
-			} else if ((sc->mcu_async_pending & (1U << seq)) != 0) {
-				uint32_t async_cmd, async_flags, async_bitmap;
-				uint8_t async_mode, async_bit_op;
-
-				async_cmd = sc->mcu_async_command[seq];
-				async_flags = sc->mcu_async_flags[seq];
-				async_bitmap = sc->mcu_async_bitmap[seq];
-				async_mode = sc->mcu_async_mode[seq];
-				async_bit_op = sc->mcu_async_bit_op[seq];
-				sc->mcu_async_pending &= ~(1U << seq);
-				if (async_cmd ==
-				    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_RX_FILTER)) {
-					device_printf(sc->dev,
-					    "MCU ASYNC response cmd=%05x seq=%u eid=%02x len=%u status=%02x filter_mode=%u fif=%08x bitmap=%08x bit_op=%u\n",
-					    async_cmd, seq, eid, le16toh(mcu_len),
-					    data[MT7902_RXD_SIZE - 4], async_mode,
-					    async_flags, async_bitmap, async_bit_op);
-				} else {
-					device_printf(sc->dev,
-					    "MCU ASYNC response cmd=%05x seq=%u eid=%02x len=%u status=%02x\n",
-					    async_cmd, seq, eid, le16toh(mcu_len),
-					    data[MT7902_RXD_SIZE - 4]);
-				}
 			}
 			mtx_unlock(&sc->mtx);
 			break;
