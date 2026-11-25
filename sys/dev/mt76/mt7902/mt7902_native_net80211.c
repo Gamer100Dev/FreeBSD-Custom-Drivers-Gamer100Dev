@@ -855,10 +855,9 @@ mt7902_scan_start(struct ieee80211com *ic)
 		 * set_bss_pm(false) call used when beacon filtering is disabled.
 		 */
 		abort_error = mt7902_mcu_abort_bss(sc);
-		if (abort_error != 0)
-			device_printf(sc->dev,
-			    "scan-start SET_BSS_ABORT submission failed: %d\n",
-			    abort_error);
+		device_printf(sc->dev,
+		    "scan-start SET_BSS_ABORT %s (host TX submission status=%d)\n",
+		    abort_error == 0 ? "submitted" : "failed", abort_error);
 	}
 	if (sc->hw_started) {
 		filter_error = mt7902_mcu_set_rxfilter(sc, filter_flags);
