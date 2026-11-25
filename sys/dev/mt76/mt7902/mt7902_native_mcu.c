@@ -822,7 +822,7 @@ mt7902_mac_rx_route_init(struct mt7902_softc *sc)
  * register operation to clear the per-entry admission counters and waits
  * for the hardware BUSY bit to clear before the entry can be used.
  */
-static int
+int
 mt7902_mac_wtbl_update(struct mt7902_softc *sc, unsigned int idx,
     uint32_t operation)
 {
@@ -847,7 +847,7 @@ mt7902_mac_wtbl_update(struct mt7902_softc *sc, unsigned int idx,
 	}
 
 	device_printf(sc->dev,
-	    "WTBL update timed out: index=%u operation=%08x register=%08x\\n",
+	    "WTBL update timed out: index=%u operation=%08x register=%08x\n",
 	    idx, operation, mt7902_read(sc, MT7902_REG_WTBL_UPDATE));
 	return (ETIMEDOUT);
 }
@@ -901,7 +901,7 @@ mt7902_mac_init(struct mt7902_softc *sc)
 		    MT7902_WTBL_UPDATE_ADM_COUNT_CLEAR);
 		if (error != 0) {
 			device_printf(sc->dev,
-			    "WTBL initialization failed at WCID %u: %d\\n",
+			    "WTBL initialization failed at WCID %u: %d\n",
 			    idx, error);
 			return (error);
 		}
