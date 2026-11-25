@@ -19,6 +19,7 @@
 #include <dev/pci/pcivar.h>
 
 #include "if_mt7902_native.h"
+#include "mt7902_native_rxdesc.h"
 
 #include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
@@ -216,6 +217,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	enum mt7902_rx_drop_reason drop_reason;
 	bool is_mgmt, monitor_active, rcpi_valid, monitor_only;
 	bool hdr_trans, scanning, attached;
+	struct mt7902_rxdesc_layout rx_layout;
 
 	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
 	fc = 0;
@@ -307,42 +309,23 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		goto drop;
 	}
 
-	offset = 24;
-	if (rxd1 & (1U << 14))
-		offset += 16;             /* RXD GROUP_4 */
-	if (rxd1 & (1U << 11))
-		offset += 16;             /* RXD GROUP_1 */
-	if (rxd1 & (1U << 12))
-		offset += 8;              /* RXD GROUP_2 */
+	if (mt7902_rxdesc_get_layout(rxd1, rxd2, dma_len,
+	    &rx_layout) != 0) {
+		drop_reason = MT7902_RX_DROP_GROUP_TRUNCATED;
+		goto drop;
+	}
+	offset = rx_layout.frame_offset;
 
 	rcpi = 0;
 	rcpi_valid = false;
-	if (rxd1 & (1U << 13)) {
-		if (offset > dma_len || dma_len - offset < 8) {
-			drop_reason = MT7902_RX_DROP_GROUP_TRUNCATED;
-			goto drop;
-		}
-		rcpi_word = le32dec(data + offset + 4);
+	if ((rxd1 & MT7902_RXD1_GROUP_3) != 0) {
+		rcpi_word = le32dec(data + rx_layout.group3_offset + 4);
 		rcpi = rcpi_word & 0xff;  /* PRXV RCPI0 */
 		rcpi_valid = true;
-		offset += 8;              /* RXD GROUP_3 */
-		if (rxd1 & (1U << 15)) {
-			if (offset > dma_len || dma_len - offset < 72) {
-				drop_reason = MT7902_RX_DROP_GROUP_TRUNCATED;
-				goto drop;
-			}
-			offset += 24;         /* GROUP_5 prefix */
-			rcpi_word = le32dec(data + offset);
+		if ((rxd1 & MT7902_RXD1_GROUP_5) != 0) {
+			rcpi_word = le32dec(data + rx_layout.group5_rcpi_offset);
 			rcpi = rcpi_word & 0xff;
-			rcpi_valid = true;
-			offset += 48;         /* GROUP_5 RX vector */
 		}
-	}
-	/* RXD2 HDR_OFFSET is measured in 16-bit words. */
-	offset += 2 * ((rxd2 >> 14) & 0x3);
-	if (offset >= dma_len) {
-		drop_reason = MT7902_RX_DROP_BAD_OFFSET;
-		goto drop;
 	}
 	frame_len = dma_len - offset;
 	if (frame_len < sizeof(*wh)) {
