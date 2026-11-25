@@ -206,20 +206,27 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 {
 	struct ieee80211_rx_stats rxs;
 	const struct ieee80211_frame_min *wh;
+	struct ieee80211_node *ni;
+	struct mt7902_rx_phy rxphy;
 	struct mbuf *m;
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
 	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag, tap_channel;
-	uint8_t frame_type;
-	uint16_t tap_freq, tap_chan_flags;
+	uint8_t frame_type, payload_format;
+	uint16_t tap_freq, tap_chan_flags, qos_control;
 	int rssi, noise, debug;
-	size_t offset, frame_len, hdr_len;
+	size_t offset, frame_len, hdr_len, qos_offset;
 	enum mt7902_rx_drop_reason drop_reason;
 	bool is_mgmt, monitor_active, rcpi_valid, monitor_only;
-	bool hdr_trans, scanning, attached;
+	bool hdr_trans, scanning, attached, phy_valid, qos_data;
 	struct mt7902_rxdesc_layout rx_layout;
 
 	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
+	bzero(&rxphy, sizeof(rxphy));
+	phy_valid = false;
+	payload_format = 0;
+	qos_control = 0;
+	qos_offset = 0;
 	fc = 0;
 	offset = frame_len = hdr_len = 0;
 	pkt_type = pkt_flag = channel = rcpi = subtype = tap_channel = 0;
@@ -299,15 +306,11 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_MIC;
 		goto drop;
 	}
-	if ((rxd2 & ((1U << 23) | (1U << 24))) != 0) {
+	if ((rxd2 & ((1U << 23) | (1U << 24) | (1U << 25))) != 0) {
 		drop_reason = MT7902_RX_DROP_RXD_ERROR;
 		goto drop;
 	}
-	/* RXD4 payload format != 0 describes a deaggregated A-MSDU. */
-	if ((rxd4 & 0x3) != 0) {
-		drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
-		goto drop;
-	}
+	payload_format = rxd4 & MT7902_RXD4_PAYLOAD_FORMAT;
 
 	if (mt7902_rxdesc_get_layout(rxd1, rxd2, dma_len,
 	    &rx_layout) != 0) {
@@ -319,6 +322,8 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rcpi = 0;
 	rcpi_valid = false;
 	if ((rxd1 & MT7902_RXD1_GROUP_3) != 0) {
+		phy_valid = mt7902_rxdesc_decode_phy(
+		    le32dec(data + rx_layout.group3_offset), &rxphy) == 0;
 		rcpi_word = le32dec(data + rx_layout.group3_offset + 4);
 		rcpi = rcpi_word & 0xff;  /* PRXV RCPI0 */
 		rcpi_valid = true;
@@ -343,6 +348,24 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	is_mgmt = (fc & 0x000c) == 0;
 	subtype = (fc >> 4) & 0x0f;
 	frame_type = (fc >> 2) & 0x3;
+	qos_data = frame_type == 2 && (subtype & 0x08) != 0;
+	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
+		/* The firmware reports one native-header A-MSDU subframe per RXD. */
+		qos_offset = sizeof(struct ieee80211_frame);
+		if ((fc & (IEEE80211_FC1_DIR_TODS |
+		    IEEE80211_FC1_DIR_FROMDS)) ==
+		    (IEEE80211_FC1_DIR_TODS | IEEE80211_FC1_DIR_FROMDS))
+			qos_offset += IEEE80211_ADDR_LEN;
+		if (!qos_data || frame_len < qos_offset + sizeof(qos_control)) {
+			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
+			goto drop;
+		}
+		qos_control = le16dec(data + offset + qos_offset);
+		if ((qos_control & IEEE80211_QOS_AMSDU) == 0) {
+			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
+			goto drop;
+		}
+	}
 	mtx_lock(&sc->mtx);
 	sc->rx_last_rxd4 = rxd4;
 	sc->rx_last_fc = fc;
@@ -398,6 +421,57 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_FCSCRC;
 	if (rxd1 & (1U << 26))
 		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_MMIC;
+	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
+		rxs.c_pktflags |= IEEE80211_RX_F_AMSDU;
+		if (payload_format != MT7902_RXD4_PAYLOAD_AMSDU_LAST)
+			rxs.c_pktflags |= IEEE80211_RX_F_AMSDU_MORE;
+	}
+	if ((rxd1 & MT7902_RXD1_GROUP_2) != 0) {
+		rxs.r_flags |= IEEE80211_R_TSF32 | IEEE80211_R_TSF_START;
+		rxs.c_rx_tsf = le32dec(data + rx_layout.group2_offset);
+	}
+	if (phy_valid) {
+		static const uint8_t cck_rates[] = { 2, 4, 11, 22 };
+		static const uint8_t ofdm_rates[] = {
+			12, 18, 24, 36, 48, 72, 96, 108
+		};
+
+		rxs.c_width = rxphy.bandwidth + 1;
+		rxs.c_vhtnss = rxphy.nss;
+		if (rxphy.gi != 0)
+			rxs.c_pktflags |= IEEE80211_RX_F_SHORTGI;
+		if (rxphy.stbc != 0)
+			rxs.c_pktflags |= IEEE80211_RX_F_STBC;
+		if (rxphy.ldpc)
+			rxs.c_pktflags |= IEEE80211_RX_F_LDPC;
+		switch (rxphy.mode) {
+		case MT7902_PHY_CCK:
+			rxs.c_pktflags |= IEEE80211_RX_F_CCK;
+			rxs.c_phytype = IEEE80211_RX_FP_11B;
+			rxs.c_rate = cck_rates[rxphy.rate_idx];
+			break;
+		case MT7902_PHY_OFDM:
+			rxs.c_pktflags |= IEEE80211_RX_F_OFDM;
+			rxs.c_phytype = channel <= 14 ? IEEE80211_RX_FP_11G :
+			    IEEE80211_RX_FP_11A;
+			rxs.c_rate = ofdm_rates[rxphy.rate_idx];
+			break;
+		case MT7902_PHY_HT:
+		case MT7902_PHY_HT_GF:
+			rxs.c_pktflags |= IEEE80211_RX_F_HT;
+			rxs.c_phytype = channel <= 14 ? IEEE80211_RX_FP_11NG :
+			    IEEE80211_RX_FP_11NA;
+			rxs.c_rate = IEEE80211_RATE_MCS | rxphy.rate_idx;
+			break;
+		case MT7902_PHY_VHT:
+			rxs.c_pktflags |= IEEE80211_RX_F_VHT;
+			rxs.c_phytype = IEEE80211_RX_FP_11NA;
+			rxs.c_rate = rxphy.rate_idx;
+			break;
+		default:
+			break;
+		}
+	}
 	/*
 	 * mt7921_mac_fill_rx() reports a nonzero hardware cipher with no
 	 * CLM/CM exception as authenticated/decrypted data.  Tell net80211
@@ -452,6 +526,16 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		m_freem(m);
 		drop_reason = MT7902_RX_DROP_RX_PARAMS;
 		goto drop;
+	}
+	/* FreeBSD net80211 performs software BA reordering for HT peers. */
+	if (qos_data) {
+		ni = ieee80211_find_rxnode(&sc->ic,
+		    (const struct ieee80211_frame_min *)mtod(m, const void *));
+		if (ni != NULL) {
+			if (ni->ni_flags & IEEE80211_NODE_HT)
+				m->m_flags |= M_AMPDU;
+			ieee80211_free_node(ni);
+		}
 	}
 	if (monitor_only) {
 		mtx_lock(&sc->mtx);
