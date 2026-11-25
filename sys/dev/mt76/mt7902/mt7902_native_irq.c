@@ -213,7 +213,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
 	uint8_t channel, rcpi, subtype, pkt_type, pkt_flag, tap_channel;
-	uint8_t frame_type, payload_format;
+	uint8_t frame_type;
 	uint16_t tap_freq, tap_chan_flags, qos_control;
 	int rssi, noise, debug;
 	size_t offset, frame_len, hdr_len, qos_offset;
@@ -226,7 +226,6 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	bzero(&rxphy, sizeof(rxphy));
 	bzero(&rx_amsdu, sizeof(rx_amsdu));
 	phy_valid = false;
-	payload_format = 0;
 	qos_control = 0;
 	qos_offset = 0;
 	fc = 0;
@@ -312,7 +311,6 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_RXD_ERROR;
 		goto drop;
 	}
-	payload_format = rxd4 & MT7902_RXD4_PAYLOAD_FORMAT;
 
 	if (mt7902_rxdesc_get_layout(rxd1, rxd2, dma_len,
 	    &rx_layout) != 0) {
