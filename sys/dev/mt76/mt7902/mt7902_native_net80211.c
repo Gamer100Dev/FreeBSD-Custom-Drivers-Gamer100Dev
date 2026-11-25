@@ -502,6 +502,18 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 		return (error);
 	}
 
+	/*
+	 * Keep WM firmware's regulatory/channel table in sync with the
+	 * FreeBSD net80211 channel list before selecting the RX path.
+	 */
+	error = mt7902_mcu_set_channel_domain(sc);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "radio start: SET_CHAN_DOMAIN submission failed: %d\n",
+		    error);
+		return (error);
+	}
+
 	bzero(&path_req, sizeof(path_req));
 	path_req.control_ch = c->ic_ieee;
 	path_req.center_ch = c->ic_ieee;
