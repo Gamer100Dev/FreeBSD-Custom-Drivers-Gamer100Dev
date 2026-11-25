@@ -606,19 +606,6 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	}
 
 	/*
-	 * MAC_INIT_CTRL may reset MDP's per-frame routing policy. Reassert
-	 * host delivery after enabling the MAC; doing this only during firmware
-	 * boot is too early because radio_start() enables MAC later.
-	 */
-	error = mt7902_mac_rx_route_init(sc);
-	if (error != 0) {
-		device_printf(sc->dev,
-		    "radio start: could not route management/control RX to host: %d\n",
-		    error);
-		return (error);
-	}
-
-	/*
 	 * Keep WM firmware's regulatory/channel table in sync with the
 	 * FreeBSD net80211 channel list before selecting the RX path.
 	 */
@@ -641,6 +628,19 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 		device_printf(sc->dev,
 		    "radio start: SET_RX_PATH failed on channel %u: %d\n",
 		    c->ic_ieee, error);
+		return (error);
+	}
+
+	/*
+	 * Apply the host RX policy after the final firmware radio-path
+	 * command. This catches any MDP state reset by MAC_INIT_CTRL or
+	 * SET_RX_PATH before net80211 begins its first scan.
+	 */
+	error = mt7902_mac_rx_route_init(sc);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "radio start: receive policy reinitialization failed: %d\n",
+		    error);
 		return (error);
 	}
 
