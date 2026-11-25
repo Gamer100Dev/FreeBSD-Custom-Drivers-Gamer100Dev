@@ -163,3 +163,11 @@ results, authentication/association, DHCP and sustained traffic, protected
 traffic, monitor capture, recovery after suspend/resume, disconnect/reconnect,
 module unload, and Bluetooth separately on hardware. Preserve the working
 RTW88 interface while testing MT7902 as a separate VAP.
+
+## Continuous integration
+
+The FreeBSD 15.1 workflow compile-checks the in-tree Wi-Fi Makefile, the
+standalone `sys/modules/mt7902_native` entry point, and the optional
+`ng_ubt_mt7902` Bluetooth module. These are compile checks only: CI does not
+load the modules or validate RF scanning, association, suspend/resume, or
+Bluetooth operation on physical hardware.
