@@ -761,12 +761,13 @@ mt7902_mcu_set_eeprom_buffer_mode(struct mt7902_softc *sc)
 }
 
 /*
- * Match the receive-critical part of mt7921_mac_init().  The MDP and both
- * per-band DMA receive-length fields must be configured after firmware
- * download; otherwise the MCU/event path can run while normal RX is blocked.
+ * Route Connac2 management, control, bypass and hardware-dropped RX frames
+ * to the host interface. MAC_INIT_CTRL can reinitialize MDP routing after
+ * the initial firmware boot, so this operation is also called immediately
+ * after the radio MAC is enabled.
  */
-static int
-mt7902_mac_init(struct mt7902_softc *sc)
+int
+mt7902_mac_rx_route_init(struct mt7902_softc *sc)
 {
 	static const bus_size_t mdp_bnrcfr0[] = {
 		0x820cd070, /* MT_MDP_BNRCFR0(0) */
@@ -776,22 +777,51 @@ mt7902_mac_init(struct mt7902_softc *sc)
 		0x820cd074, /* MT_MDP_BNRCFR1(0) */
 		0x820cd174  /* MT_MDP_BNRCFR1(1) */
 	};
-	static const bus_size_t dma_dcr0[] = {
-		0x820e7000, /* MT_DMA_DCR0(0) */
-		0x820f7000  /* MT_DMA_DCR0(1) */
-	};
-	/*
-	 * Connac2 MDP routing fields.  MT_MDP_TO_HIF is encoded as zero;
-	 * clear the fields so management/control and hardware-dropped frames
-	 * are forwarded to the host rather than consumed by WM firmware.
-	 */
-	const uint32_t max_rx_mask = 0x0000fff8; /* GENMASK(15, 3) */
 	const uint32_t bnrcfr0_route_mask =
 	    (3U << 4) | (3U << 6) | (3U << 8);
 	const uint32_t bnrcfr1_route_mask =
 	    (3U << 22) | (3U << 27) | (3U << 29);
+	uint32_t bnrcfr0[2], bnrcfr1[2], value;
+	unsigned int band;
+
+	if (sc == NULL || sc->mem == NULL)
+		return (EINVAL);
+
+	for (band = 0; band < nitems(mdp_bnrcfr0); band++) {
+		/* MT_MDP_TO_HIF is encoded as zero in these routing fields. */
+		value = mt7902_read(sc, mdp_bnrcfr0[band]);
+		value &= ~bnrcfr0_route_mask;
+		mt7902_write(sc, mdp_bnrcfr0[band], value);
+		bnrcfr0[band] = mt7902_read(sc, mdp_bnrcfr0[band]);
+
+		value = mt7902_read(sc, mdp_bnrcfr1[band]);
+		value &= ~bnrcfr1_route_mask;
+		mt7902_write(sc, mdp_bnrcfr1[band], value);
+		bnrcfr1[band] = mt7902_read(sc, mdp_bnrcfr1[band]);
+	}
+
+	device_printf(sc->dev,
+	    "MAC RX host routing: BNRCFR0=%08x/%08x BNRCFR1=%08x/%08x\n",
+	    bnrcfr0[0], bnrcfr0[1], bnrcfr1[0], bnrcfr1[1]);
+	return (0);
+}
+
+/*
+ * Match the receive-critical part of mt7921_mac_init().  The MDP and both
+ * per-band DMA receive-length fields must be configured after firmware
+ * download; otherwise the MCU/event path can run while normal RX is blocked.
+ */
+static int
+mt7902_mac_init(struct mt7902_softc *sc)
+{
+	static const bus_size_t dma_dcr0[] = {
+		0x820e7000, /* MT_DMA_DCR0(0) */
+		0x820f7000  /* MT_DMA_DCR0(1) */
+	};
+	const uint32_t max_rx_mask = 0x0000fff8; /* GENMASK(15, 3) */
 	uint32_t value;
 	unsigned int band;
+	int error;
 
 	value = mt7902_read(sc, 0x820cd004); /* MT_MDP_DCR1 */
 	value = (value & ~max_rx_mask) | ((1536U << 3) & max_rx_mask);
@@ -800,26 +830,13 @@ mt7902_mac_init(struct mt7902_softc *sc)
 	value = mt7902_read(sc, 0x820cd000); /* MT_MDP_DCR0 */
 	/*
 	 * Match upstream mt7921_mac_init(): enable hardware A-MSDU
-	 * de-aggregation and RX header translation.  Per-station WTBL
+	 * de-aggregation and RX header translation. Per-station WTBL
 	 * no_rx_trans controls whether the station's frames are translated.
 	 */
 	value |= (1U << 15) | (1U << 19);
 	mt7902_write(sc, 0x820cd000, value);
 
 	for (band = 0; band < nitems(dma_dcr0); band++) {
-		/*
-		 * The Connac2 routing fields encode MT_MDP_TO_HIF as zero.
-		 * Explicitly select host delivery for management/control and
-		 * hardware-dropped frames consumed by the net80211 receive path.
-		 */
-		value = mt7902_read(sc, mdp_bnrcfr0[band]);
-		value &= ~bnrcfr0_route_mask;
-		mt7902_write(sc, mdp_bnrcfr0[band], value);
-
-		value = mt7902_read(sc, mdp_bnrcfr1[band]);
-		value &= ~bnrcfr1_route_mask;
-		mt7902_write(sc, mdp_bnrcfr1[band], value);
-
 		value = mt7902_read(sc, dma_dcr0[band]);
 		value = (value & ~max_rx_mask) |
 		    ((1536U << 3) & max_rx_mask);
@@ -827,12 +844,13 @@ mt7902_mac_init(struct mt7902_softc *sc)
 		mt7902_write(sc, dma_dcr0[band], value);
 	}
 
+	error = mt7902_mac_rx_route_init(sc);
+	if (error != 0)
+		return (error);
 	device_printf(sc->dev,
 	    "MAC RX initialized: MDP_DCR1=%08x DCR0=%08x "
-	    "BNRCFR0=%08x/%08x BNRCFR1=%08x/%08x DMA_DCR0=%08x/%08x\n",
+	    "DMA_DCR0=%08x/%08x\n",
 	    mt7902_read(sc, 0x820cd004), mt7902_read(sc, 0x820cd000),
-	    mt7902_read(sc, mdp_bnrcfr0[0]), mt7902_read(sc, mdp_bnrcfr0[1]),
-	    mt7902_read(sc, mdp_bnrcfr1[0]), mt7902_read(sc, mdp_bnrcfr1[1]),
 	    mt7902_read(sc, dma_dcr0[0]), mt7902_read(sc, dma_dcr0[1]));
 	return (0);
 }
