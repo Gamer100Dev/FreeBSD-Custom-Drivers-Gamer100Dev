@@ -286,6 +286,8 @@ struct mt7902_softc {
 	struct task		irq_task;
 	struct task		rx_task;
 	struct task		tx_task;
+	/* Dedicated worker thread; do not share the global taskqueue_thread. */
+	struct taskqueue	*tq;
 	struct mtx		irq_mtx;
 	struct cv		mcu_cv;
 	struct mt7902_ring	tx_data[MT7902_TX_DATA_QUEUES];
