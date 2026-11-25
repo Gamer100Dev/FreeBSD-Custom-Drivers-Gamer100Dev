@@ -74,7 +74,6 @@
 #define MT7902_STA_CONN_DISCONNECT	0
 #define MT7902_STA_STATE_ASSOC	2
 #define MT7902_STA_STATE_NONE	0
-#define MT7902_BSS_IDX		0
 #define MT7902_CONN_INFRA_STA	((1U << 0) | (1U << 16))
 #define MT7902_CONN_INFRA_AP	((1U << 1) | (1U << 16))
 
@@ -858,7 +857,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 		abort_error = mt7902_mcu_abort_bss(sc);
 		if (abort_error != 0)
 			device_printf(sc->dev,
-			    "scan-start SET_BSS_ABORT submission failed: %d\\n",
+			    "scan-start SET_BSS_ABORT submission failed: %d\n",
 			    abort_error);
 	}
 	if (sc->hw_started) {
