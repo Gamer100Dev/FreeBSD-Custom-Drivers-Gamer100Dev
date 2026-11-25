@@ -28,6 +28,60 @@
 #define MT7902_RXD2_MAX_LEN_ERROR  (1U << 24)
 #define MT7902_RXD2_HDR_TRANS_ERR  (1U << 25)
 
+#define MT7902_PRXV_RATE_MASK       0x0000007fU
+#define MT7902_PRXV_NSTS_MASK       0x00000380U
+#define MT7902_PRXV_LDPC             (1U << 11)
+#define MT7902_PRXV_BW_MASK         0x00007000U
+#define MT7902_PRXV_GI_MASK         0x00018000U
+#define MT7902_PRXV_STBC_MASK       0x00c00000U
+#define MT7902_PRXV_MODE_MASK       0x0f000000U
+
+#define MT7902_PHY_CCK              0U
+#define MT7902_PHY_OFDM             1U
+#define MT7902_PHY_HT               2U
+#define MT7902_PHY_HT_GF            3U
+#define MT7902_PHY_VHT              4U
+
+struct mt7902_rx_phy {
+	uint8_t rate_idx;
+	uint8_t nss;
+	uint8_t mode;
+	uint8_t bandwidth;
+	uint8_t gi;
+	uint8_t stbc;
+	uint8_t ldpc;
+};
+
+/*
+ * Decode the Connac2 P-RXV first dword. This intentionally accepts only
+ * legacy/HT/VHT and 20/40/80 MHz: HE and wider channels are outside this
+ * FreeBSD Wi-Fi 5 implementation.
+ */
+static inline int
+mt7902_rxdesc_decode_phy(uint32_t rxv0, struct mt7902_rx_phy *phy)
+{
+	if (phy == NULL)
+		return (-1);
+	phy->rate_idx = rxv0 & MT7902_PRXV_RATE_MASK;
+	phy->nss = ((rxv0 & MT7902_PRXV_NSTS_MASK) >> 7) + 1;
+	phy->ldpc = (rxv0 & MT7902_PRXV_LDPC) != 0;
+	phy->bandwidth = (rxv0 & MT7902_PRXV_BW_MASK) >> 12;
+	phy->gi = (rxv0 & MT7902_PRXV_GI_MASK) >> 15;
+	phy->stbc = (rxv0 & MT7902_PRXV_STBC_MASK) >> 22;
+	phy->mode = (rxv0 & MT7902_PRXV_MODE_MASK) >> 24;
+	if (phy->mode > MT7902_PHY_VHT || phy->bandwidth > 2)
+		return (-1);
+	if ((phy->mode == MT7902_PHY_CCK && phy->rate_idx > 3) ||
+	    (phy->mode == MT7902_PHY_OFDM && phy->rate_idx > 7) ||
+	    ((phy->mode == MT7902_PHY_HT ||
+	    phy->mode == MT7902_PHY_HT_GF) && phy->rate_idx > 31) ||
+	    (phy->mode == MT7902_PHY_VHT && phy->rate_idx > 9))
+		return (-1);
+	if (phy->stbc != 0 && phy->nss > 1)
+		phy->nss >>= 1;
+	return (0);
+}
+
 struct mt7902_rxdesc_layout {
 	size_t group2_offset;
 	size_t group3_offset;
