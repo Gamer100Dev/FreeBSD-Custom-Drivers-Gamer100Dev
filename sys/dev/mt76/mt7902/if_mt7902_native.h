@@ -288,6 +288,15 @@ struct mt7902_softc {
 	struct ieee80211com	ic;
 	/* Referenced association node for asynchronous TXS feedback. */
 	struct ieee80211_node *station_node;
+	/* Default net80211 HT callbacks wrapped by firmware-backed BA handlers. */
+	int (*ht_addba_response)(struct ieee80211_node *,
+	    struct ieee80211_tx_ampdu *, int, int, int);
+	void (*ht_addba_stop)(struct ieee80211_node *,
+	    struct ieee80211_tx_ampdu *);
+	int (*ht_ampdu_rx_start)(struct ieee80211_node *,
+	    struct ieee80211_rx_ampdu *, int, int, int);
+	void (*ht_ampdu_rx_stop)(struct ieee80211_node *,
+	    struct ieee80211_rx_ampdu *);
 	struct mt7902_rx_radiotap_header rx_tap;
 	struct mt7902_tx_radiotap_header tx_tap;
 	struct task		irq_task;
