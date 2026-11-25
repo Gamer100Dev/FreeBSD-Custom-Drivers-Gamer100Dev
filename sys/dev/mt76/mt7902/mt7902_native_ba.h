@@ -9,9 +9,11 @@
 #ifndef _MT7902_NATIVE_BA_H_
 #define _MT7902_NATIVE_BA_H_
 
+#ifndef _KERNEL
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#endif
 
 #define MT7902_BA_TID_COUNT       16U
 #define MT7902_BA_WTBL_TAG        8U
