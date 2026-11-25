@@ -9,6 +9,9 @@ on:
       - "sys/dev/rtw88_native/**"
       - "sys/dev/mt76/mt7902/**"
       - "sys/modules/rtw88_native/**"
+      - "sys/modules/mt7902_native/**"
+      - "upstream/**"
+      - ".gitignore"
       - ".github/workflows/freebsd-native-module.yml"
   pull_request:
     paths:
@@ -18,6 +21,9 @@ on:
       - "sys/dev/rtw88_native/**"
       - "sys/dev/mt76/mt7902/**"
       - "sys/modules/rtw88_native/**"
+      - "sys/modules/mt7902_native/**"
+      - "upstream/**"
+      - ".gitignore"
       - ".github/workflows/freebsd-native-module.yml"
   workflow_dispatch:
 
@@ -48,3 +54,14 @@ jobs:
             make -C "$MT7902_DIR" SRCTOP=/usr/src
             test -s "$MT7902_OBJDIR/if_mt7902_native.ko"
             file "$MT7902_OBJDIR/if_mt7902_native.ko"
+            MOD_DIR="$PWD/sys/modules/mt7902_native"
+            make -C "$MOD_DIR" SRCTOP=/usr/src clean
+            MOD_OBJDIR=$(make -C "$MOD_DIR" SRCTOP=/usr/src -V .OBJDIR)
+            make -C "$MOD_DIR" SRCTOP=/usr/src
+            test -s "$MOD_OBJDIR/if_mt7902_native.ko"
+            file "$MOD_OBJDIR/if_mt7902_native.ko"
+            make -C "$MT7902_DIR" -f Makefile.bt SRCTOP=/usr/src clean
+            BT_OBJDIR=$(make -C "$MT7902_DIR" -f Makefile.bt SRCTOP=/usr/src -V .OBJDIR)
+            make -C "$MT7902_DIR" -f Makefile.bt SRCTOP=/usr/src
+            test -s "$BT_OBJDIR/ng_ubt_mt7902.ko"
+            file "$BT_OBJDIR/ng_ubt_mt7902.ko"

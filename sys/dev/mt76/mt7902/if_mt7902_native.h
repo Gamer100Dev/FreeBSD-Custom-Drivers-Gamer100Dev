@@ -269,6 +269,7 @@ struct mt7902_softc {
 	device_t		dev;
 	struct mtx		mtx;
 	struct mtx		reg_mtx;
+	struct mtx		mcu_mtx;
 	struct resource		*mem;
 	int			mem_rid;
 	struct resource		*irq;

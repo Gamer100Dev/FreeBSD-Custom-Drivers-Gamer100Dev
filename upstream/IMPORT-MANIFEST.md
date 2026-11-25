@@ -1,15 +1,14 @@
 # Vendored source manifest
 
-## Working source tree
+## Native FreeBSD implementation
 
-The FreeBSD stable/15 source has been copied into native repository-root paths so it can be browsed and edited directly:
-
-- `sys/contrib/dev/rtw88/` — complete RTW88 driver directory
-- `sys/modules/rtw88/Makefile` — driver module build integration
-- `sys/compat/linuxkpi/common/src/linux_usb.c` — LinuxKPI USB implementation
-- `sys/compat/linuxkpi/common/include/linux/usb.h` — LinuxKPI USB API header
-
-The full FreeBSD snapshot is also retained under `vendor/freebsd-stable-15/`.
+- Wi-Fi: `sys/dev/mt76/mt7902/`
+- Wi-Fi module entry point: `sys/modules/mt7902_native/`
+- Optional Bluetooth USB subclass: `sys/dev/mt76/mt7902/ng_ubt_mt7902.c`
+- The MT7902 Wi-Fi driver uses native FreeBSD PCI, busdma, firmware, taskqueue,
+  mutex/condition-variable, and net80211 APIs. It does not depend on LinuxKPI
+  or mac80211 at runtime.
+- Linux source is a hardware-protocol and behavioural reference only.
 
 ## FreeBSD upstream baseline
 
@@ -17,31 +16,35 @@ The full FreeBSD snapshot is also retained under `vendor/freebsd-stable-15/`.
 - Branch: `stable/15`
 - Snapshot commit: `55b89b7b529f1c37a749adadb11aba4f8e9e51ca`
 
-## Linux comparison baseline
+## Linux MT76 / MT7902 comparison baseline
 
-### MT76 / MT7902 reference
+Canonical upstream: https://github.com/torvalds/linux
+Driver directory: `drivers/net/wireless/mediatek/mt76/`
 
-- Upstream: https://github.com/openwrt/mt76
-- Clone: `vendor/mt76/` (upstream Linux driver source; reference only)
-- Clone revision: `41d5d1dd63111870ef74a5b9645416d98979a145`
-- Native FreeBSD implementation: `sys/dev/mt76/mt7902/`
-- FreeBSD module: `sys/modules/mt7902_native/`
-- Status: PCI resource-layer foundation only; firmware boot, WFDMA, net80211,
-  Wi-Fi operation, and Bluetooth vendor firmware initialization are pending.
+The audit baseline is pinned to Linux commit
+`87b67aa8eb32cf89dab4c6df88d65e07fec46592` (2026-10-07), the latest
+MT7921 PCI-path commit found during this update. Compare shared MT792x DMA
+and Connac2 code at the same tree revision before importing behaviour.
 
-### RTW88 comparison baseline
+Relevant files include `mt7921/pci.c`, `mt792x_dma.c`, `mt7921/mac.c`,
+`mt792x_mac.c`, `mt7921/mcu.c`, `mt76_connac_mcu.c`, and
+`mt76_connac_mac.c`.
 
-- Upstream: https://github.com/torvalds/linux
-- Snapshot commit: `c44104f3642da720164042623e4832836aefdd8e`
-- Imported path: `vendor/linux-master/drivers/net/wireless/realtek/rtw88/`
-- This is a focused RTW88 reference subset for USB, RTL8822B/RTL8822BU, and shared core code, not the complete Linux directory.
+The old `vendor/mt76/` snapshot at
+`41d5d1dd63111870ef74a5b9645416d98979a145` is historical reference only.
+It predates MT7902 upstream enablement and must not be the sole authority.
 
-## Important status
+## Other vendored references
 
-- Source code is physically committed to this repository; the native paths above contain real `.c`, `.h`, and Makefile content.
-- Original source headers and copyright notices are retained.
-- RTW88 firmware is not vendored; the MT7902 firmware payloads are separately
-  included under `firmware/mediatek/` with their license and checksums.
-- Your previous experimental changes to RTW88 USB and LinuxKPI USB are not yet ported into this clean upstream baseline.
-- The import is not a working-driver claim. Build and hardware validation are still required.
-- Refresh snapshots only with an explicit upstream commit SHA and a reviewed diff.
+- RTW88: Linux upstream commit
+  `c44104f3642da720164042623e4832836aefdd8e`, focused reference subset at
+  `vendor/linux-master/drivers/net/wireless/realtek/rtw88/`.
+- Firmware payloads are separate from driver source and retain their own
+  license and checksum records under `firmware/mediatek/`.
+
+## Validation status
+
+A successful FreeBSD 15.1 build is necessary but not sufficient. It does not
+prove over-the-air scan, association, throughput, suspend/resume, or Bluetooth
+operation. The RX path remains a documented first-stage implementation and
+must not be described as full mt76 feature parity.

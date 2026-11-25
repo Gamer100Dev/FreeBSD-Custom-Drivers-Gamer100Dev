@@ -222,6 +222,9 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 		return (EMSGSIZE);
 	packet = malloc(packet_len, M_DEVBUF, M_WAITOK | M_ZERO);
 	txd = (uint32_t *)packet;
+	/* The firmware has one response mailbox; serialize response waiters. */
+	if (wait_response)
+		mtx_lock(&sc->mcu_mtx);
 	mtx_lock(&sc->mtx);
 	seq = (++sc->mcu_seq) & 0x0f;
 	if (seq == 0)
@@ -279,6 +282,8 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 		mtx_lock(&sc->mtx);
 		sc->mcu_waiting = 0;
 		mtx_unlock(&sc->mtx);
+		if (wait_response)
+			mtx_unlock(&sc->mcu_mtx);
 		return (error);
 	}
 	if (!wait_response)
@@ -329,6 +334,7 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 	    le32dec(sc->mcu_response + 4) != 0))
 		error = EIO;
 	mtx_unlock(&sc->mtx);
+	mtx_unlock(&sc->mcu_mtx);
 	return (error);
 }
 
@@ -654,10 +660,12 @@ mt7902_mcu_init(struct mt7902_softc *sc)
 	}
 	error = mt7902_wait(sc, MT7902_REG_CONN_ON_MISC,
 	    MCU_FW_STATE_PWR_ON, MCU_FW_STATE_PWR_ON, 1000000);
-	if (error != 0)
+	if (error != 0) {
 		device_printf(sc->dev,
 		    "firmware power-on state not ready before patch (misc 0x%08x, %d)\n",
 		    mt7902_read(sc, MT7902_REG_CONN_ON_MISC), error);
+		return (error);
+	}
 	error = mt7902_mcu_load_patch(sc);
 	if (error != 0) {
 		device_printf(sc->dev, "MCU patch download failed: %d\n", error);
@@ -1049,9 +1057,11 @@ mt7902_fw_boot(struct mt7902_softc *sc)
 		rx_filter |= MT7902_RX_FILTER_CONTROL | MT7902_RX_FILTER_FCSFAIL;
 	mtx_unlock(&sc->mtx);
 	error = mt7902_mcu_set_rxfilter(sc, rx_filter);
-	if (error != 0)
+	if (error != 0) {
 		device_printf(sc->dev, "could not program MCU RX filter: %d\n",
 		    error);
+		goto fail;
+	}
 	error = mt7902_mcu_read_mac(sc);
 	if (error != 0) {
 		device_printf(sc->dev, "could not read a valid MAC address: %d\n",

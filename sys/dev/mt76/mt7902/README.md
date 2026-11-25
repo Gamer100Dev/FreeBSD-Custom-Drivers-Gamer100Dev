@@ -15,8 +15,9 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   rings. The MT7902-specific layout uses RX event ring 0, data RX ring 2,
   four access-category data TX rings 0-3, MCU-WM TX ring 15, and
   firmware-download TX ring 16.
-* MSI/legacy interrupt setup, MCU event processing, sequence-matched response
-  wakeups, PCIe MCU RX-wake handling, and native firmware download commands.
+* MSI/legacy interrupt setup, MCU event processing, serialized
+  response-bearing MCU transactions (the firmware exposes one response
+  mailbox), sequence-matched response wakeups, PCIe MCU RX-wake handling, and native firmware download commands.
   RX ring 0 is shared by MCU events and TX-status notifications; the receive
   worker dispatches by RXD packet type, so short 16-byte TXS headers are not
   mistaken for truncated MCU responses. Data ring 2 is polled after either
@@ -77,7 +78,14 @@ Build the Wi-Fi module on FreeBSD with:
 make -C sys/dev/mt76/mt7902 SRCTOP=/usr/src
 ```
 
-The repository's FreeBSD CI job builds this module against FreeBSD 15.1.
+The standalone module entry point is also supported:
+
+```sh
+make -C sys/modules/mt7902_native SRCTOP=/usr/src
+```
+
+The repository's FreeBSD CI job builds both Wi-Fi entry points and the optional
+Bluetooth module against FreeBSD 15.1.
 The Bluetooth module is built separately:
 
 ```sh

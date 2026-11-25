@@ -242,6 +242,8 @@ mt7902_attach(device_t dev)
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK,
 	    MTX_DEF);
 	mtx_init(&sc->reg_mtx, "mt7902 register remap", NULL, MTX_DEF);
+	mtx_init(&sc->mcu_mtx, "mt7902 MCU command serialization", NULL,
+	    MTX_DEF);
 	cv_init(&sc->mcu_cv, "mt7902 MCU response");
 
 	/* Enable memory decoding and bus mastering before mapping the BAR. */
@@ -345,11 +347,13 @@ mt7902_detach(device_t dev)
 	if (sc->mem != NULL)
 		bus_release_resource(dev, SYS_RES_MEMORY, sc->mem_rid, sc->mem);
 	if (mtx_initialized(&sc->mtx))
+		cv_destroy(&sc->mcu_cv);
+	if (mtx_initialized(&sc->mtx))
 		mtx_destroy(&sc->mtx);
+	if (mtx_initialized(&sc->mcu_mtx))
+		mtx_destroy(&sc->mcu_mtx);
 	if (mtx_initialized(&sc->reg_mtx))
 		mtx_destroy(&sc->reg_mtx);
-	if (mtx_initialized(&sc->mtx))
-		cv_destroy(&sc->mcu_cv);
 	sc->attached = false;
 	return (0);
 }

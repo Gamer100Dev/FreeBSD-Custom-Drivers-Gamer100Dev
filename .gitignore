@@ -1,0 +1,18 @@
+# FreeBSD kernel-module build products
+*.o
+*.ko
+*.kld
+*.symbols
+.depend*
+*.d
+# Generated FreeBSD device/bus interface headers and options
+device_if.h
+bus_if.h
+pci_if.h
+usb_if.h
+usbdevs.h
+opt_*.h
+# Generated architecture links/directories in out-of-tree kmod builds
+machine
+x86
+i386
