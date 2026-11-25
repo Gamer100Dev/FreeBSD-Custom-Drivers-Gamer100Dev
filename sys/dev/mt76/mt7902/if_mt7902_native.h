@@ -404,6 +404,7 @@ struct mt7902_softc {
 	uint16_t		pci_vendor;
 	uint16_t		pci_device;
 	bool			scan_active;
+	bool			irq_quiescing;
 	bool			radio_enabled;
 	bool			monitor_active;
 	bool			suspended;
