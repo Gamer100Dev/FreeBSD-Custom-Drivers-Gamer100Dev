@@ -126,4 +126,28 @@ mt7902_nic_caps_parse(const uint8_t *data, size_t data_len,
 	return (0);
 }
 
+/*
+ * Build an IEEE 802.11ac RX/TX MCS map from the number of operational
+ * spatial streams. 0 means no VHT streams; 3 in each two-bit field means
+ * that NSS is not supported. The result is host byte order; callers encode
+ * it for firmware or net80211 as appropriate.
+ */
+#define MT7902_VHT_MAX_NSS 8U
+#define MT7902_VHT_MCS_0_9 2U
+#define MT7902_VHT_MCS_NONE 3U
+static inline uint16_t
+mt7902_vht_mcs_map(unsigned int nss)
+{
+	uint16_t map;
+	unsigned int i;
+
+	if (nss > MT7902_VHT_MAX_NSS)
+		nss = MT7902_VHT_MAX_NSS;
+	map = 0;
+	for (i = 0; i < MT7902_VHT_MAX_NSS; i++)
+		map |= (uint16_t)((i < nss ? MT7902_VHT_MCS_0_9 :
+		    MT7902_VHT_MCS_NONE) << (2 * i));
+	return (map);
+}
+
 #endif /* _MT7902_NATIVE_CAPS_H_ */
