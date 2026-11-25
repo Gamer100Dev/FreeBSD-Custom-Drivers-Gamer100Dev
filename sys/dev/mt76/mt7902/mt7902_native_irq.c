@@ -307,8 +307,24 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_MIC;
 		goto drop;
 	}
-	if ((rxd2 & ((1U << 23) | (1U << 24) | (1U << 25))) != 0) {
+	/*
+	 * AMSDU_ERR and MAX_LEN_ERROR are unconditional RX failures.
+	 * HDR_TRANS_ERROR is different: Connac2 sets it for translation
+	 * fallback metadata and mt76 handles it only with HDR_TRANS. Do not
+	 * discard native 802.11 frames just because bit 25 is set.
+	 */
+	if (mt7902_rxdesc_has_fatal_error(rxd2)) {
 		drop_reason = MT7902_RX_DROP_RXD_ERROR;
+		goto drop;
+	}
+	if (mt7902_rxdesc_hdr_trans_failed(rxd2)) {
+		/*
+		 * The translated fallback format contains a two-byte length
+		 * field that this Ethernet-to-802.11 reconstruction path does
+		 * not yet consume. Reject only this translated-fallback case;
+		 * native management/data frames remain eligible for net80211.
+		 */
+		drop_reason = MT7902_RX_DROP_HDR_TRANS;
 		goto drop;
 	}
 
