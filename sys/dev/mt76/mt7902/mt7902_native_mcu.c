@@ -787,6 +787,17 @@ mt7902_mac_rx_route_init(struct mt7902_softc *sc)
 	if (sc == NULL || sc->mem == NULL)
 		return (EINVAL);
 
+	/*
+	 * MAC_INIT_CTRL / SET_RX_PATH can reinitialize MAC receive state.
+	 * Keep the hardware de-aggregation and RX header-translation enables
+	 * in sync with upstream mt7921_mac_init() whenever host routing is
+	 * reasserted after radio start.
+	 */
+	value = mt7902_read(sc, 0x820cd000); /* MT_MDP_DCR0 */
+	value |= (1U << 15) | (1U << 19);
+	mt7902_write(sc, 0x820cd000, value);
+	value = mt7902_read(sc, 0x820cd000);
+
 	for (band = 0; band < nitems(mdp_bnrcfr0); band++) {
 		/* MT_MDP_TO_HIF is encoded as zero in these routing fields. */
 		value = mt7902_read(sc, mdp_bnrcfr0[band]);
@@ -801,8 +812,8 @@ mt7902_mac_rx_route_init(struct mt7902_softc *sc)
 	}
 
 	device_printf(sc->dev,
-	    "MAC RX host routing: BNRCFR0=%08x/%08x BNRCFR1=%08x/%08x\n",
-	    bnrcfr0[0], bnrcfr0[1], bnrcfr1[0], bnrcfr1[1]);
+	    "MAC RX policy: DCR0=%08x BNRCFR0=%08x/%08x BNRCFR1=%08x/%08x\n",
+	    value, bnrcfr0[0], bnrcfr0[1], bnrcfr1[0], bnrcfr1[1]);
 	return (0);
 }
 
