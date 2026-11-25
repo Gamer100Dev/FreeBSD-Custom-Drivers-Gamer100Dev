@@ -23,6 +23,7 @@
 
 #include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
+#include <net80211/ieee80211_ratectl.h>
 
 #define MT7902_RXD_SIZE	36
 #define MT7902_RX_BATCH	64
@@ -738,6 +739,108 @@ mt7902_rx_tx_free(struct mt7902_softc *sc, const uint8_t *data, size_t len)
 	mtx_unlock(&sc->mtx);
 }
 
+#define MT7902_TXS0_ACK_ERROR_MASK (7U << 16)
+#define MT7902_TX_RATE_IDX_MASK       0x3fU
+#define MT7902_TX_RATE_NSS_MASK       (7U << 10)
+#define MT7902_TX_RATE_MODE_MASK      (0x0fU << 6)
+#define MT7902_TX_RATE_STBC           (1U << 13)
+
+/*
+ * Feed Connac2 TXS results to FreeBSD net80211. Firmware still performs
+ * packet-by-packet fallback using the peer's negotiated RA mask; this path
+ * publishes the observed final rate and lets the selected net80211 ratectl
+ * consume ACK/retry outcomes for its node statistics/adaptive state.
+ */
+static void
+mt7902_txs_rate_update(struct mt7902_softc *sc, uint16_t wcid,
+    uint32_t txs0, uint16_t fail_count, uint16_t retry_count,
+    uint32_t tx_bytes)
+{
+	static const uint8_t cck_rates[] = { 2, 4, 11, 22 };
+	static const uint8_t ofdm_rates[] = {
+		12, 18, 24, 36, 48, 72, 96, 108
+	};
+	struct ieee80211_ratectl_tx_status status;
+	struct ieee80211_node *ni;
+	uint32_t tx_rate;
+	uint8_t mode, idx, nss, retries;
+	int final_rate;
+	bool have_final_rate;
+
+	if (wcid != MT7902_PEER_WCID)
+		return;
+
+	mtx_lock(&sc->mtx);
+	ni = sc->station_node != NULL ?
+	    ieee80211_ref_node(sc->station_node) : NULL;
+	mtx_unlock(&sc->mtx);
+	if (ni == NULL)
+		return;
+
+	tx_rate = txs0 & 0x3fffU;
+	idx = tx_rate & MT7902_TX_RATE_IDX_MASK;
+	mode = (tx_rate & MT7902_TX_RATE_MODE_MASK) >> 6;
+	nss = ((tx_rate & MT7902_TX_RATE_NSS_MASK) >> 10) + 1;
+	if ((tx_rate & MT7902_TX_RATE_STBC) != 0 && nss > 1)
+		nss >>= 1;
+
+	bzero(&status, sizeof(status));
+	status.flags = IEEE80211_RATECTL_STATUS_LONG_RETRY;
+	status.pktlen = (int)MIN(tx_bytes, (uint32_t)INT_MAX);
+	retries = (uint8_t)MIN((uint32_t)retry_count, (uint32_t)UINT8_MAX);
+	if (fail_count != 0 && retries != UINT8_MAX)
+		retries++;
+	status.long_retries = retries;
+	status.status = (txs0 & MT7902_TXS0_ACK_ERROR_MASK) == 0 ?
+	    IEEE80211_RATECTL_TX_SUCCESS : IEEE80211_RATECTL_TX_FAIL_LONG;
+	final_rate = 0;
+	have_final_rate = false;
+
+	switch (mode) {
+	case MT7902_PHY_CCK:
+		if (idx >= nitems(cck_rates))
+			break;
+		ieee80211_node_set_txrate_dot11rate(ni, cck_rates[idx]);
+		final_rate = cck_rates[idx];
+		have_final_rate = true;
+		break;
+	case MT7902_PHY_OFDM:
+		if (idx >= nitems(ofdm_rates))
+			break;
+		ieee80211_node_set_txrate_dot11rate(ni, ofdm_rates[idx]);
+		final_rate = ofdm_rates[idx];
+		have_final_rate = true;
+		break;
+	case MT7902_PHY_HT:
+	case MT7902_PHY_HT_GF:
+		if (idx > 31 || (ni->ni_flags & IEEE80211_NODE_HT) == 0)
+			break;
+		ieee80211_node_set_txrate_ht_mcsrate(ni, idx);
+		final_rate = IEEE80211_RATE_MCS | idx;
+		have_final_rate = true;
+		break;
+	case MT7902_PHY_VHT:
+		if (idx > 9 || nss == 0 ||
+		    (ni->ni_flags & IEEE80211_NODE_VHT) == 0)
+			break;
+		ieee80211_node_set_txrate_vht_rate(ni, nss, idx);
+		/*
+		 * FreeBSD's generic ratectl final_rate field has no NSS component.
+		 * Publish the VHT rate in ni_txrate, but do not mislabel it as HT.
+		 */
+		break;
+	default:
+		break;
+	}
+
+	if (have_final_rate) {
+		status.flags |= IEEE80211_RATECTL_STATUS_FINAL_RATE;
+		status.final_rate = final_rate;
+	}
+	ieee80211_ratectl_tx_complete(ni, &status);
+	ieee80211_free_node(ni);
+}
+
 /*
  * RX ring 0 is shared by MCU events and TX status notifications on MT7902.
  * Dispatch by RXD0 packet type just as mt7921_queue_rx_skb() does. In
@@ -857,6 +960,9 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 				sc->rx_event_txs_last_fail_count = txs_fail_count;
 				sc->rx_event_txs_last_retry_count = txs_retry_count;
 				mtx_unlock(&sc->mtx);
+				mt7902_txs_rate_update(sc, txs_wcid, txs0,
+				    txs_fail_count, txs_retry_count,
+				    txs5 & 0x7fffffU);
 			}
 			mtx_lock(&sc->mtx);
 			sc->rx_event_txs_count++;
