@@ -923,8 +923,11 @@ mt7902_irq_setup(struct mt7902_softc *sc)
 void
 mt7902_irq_teardown(struct mt7902_softc *sc)
 {
-	if (sc->mem != NULL)
+	if (sc->mem != NULL) {
 		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN, 0);
+		/* Keep the PCIe MAC forwarding gate symmetric with DMA startup. */
+		mt7902_write(sc, MT7902_REG_PCIE_MAC_INT_ENABLE, 0);
+	}
 	if (sc->irq_cookie != NULL) {
 		bus_teardown_intr(sc->dev, sc->irq, sc->irq_cookie);
 		sc->irq_cookie = NULL;
