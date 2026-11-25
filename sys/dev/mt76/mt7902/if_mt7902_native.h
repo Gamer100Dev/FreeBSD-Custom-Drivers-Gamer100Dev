@@ -284,6 +284,7 @@ struct mt7902_softc {
 	struct mt7902_rx_radiotap_header rx_tap;
 	struct mt7902_tx_radiotap_header tx_tap;
 	struct task		irq_task;
+	struct task		event_task;
 	struct task		rx_task;
 	struct task		tx_task;
 	/* Dedicated worker thread; do not share the global taskqueue_thread. */
