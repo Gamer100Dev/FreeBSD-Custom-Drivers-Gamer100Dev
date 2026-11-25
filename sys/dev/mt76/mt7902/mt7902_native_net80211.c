@@ -614,6 +614,8 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	}
 
 	mt7902_chan_info_init(sc, c, &path_req);
+	/* SET_RX_PATH takes an RX antenna mask; CHANNEL_SWITCH takes a count. */
+	path_req.rx_streams = (1U << path_req.rx_streams) - 1;
 	path_req.switch_reason = 0; /* CH_SWITCH_NORMAL */
 	error = mt7902_mcu_send_cmd(sc,
 	    MT7902_MCU_EXT_CMD(MT7902_MCU_EXT_SET_RX_PATH),
