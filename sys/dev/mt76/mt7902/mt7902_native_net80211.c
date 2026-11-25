@@ -21,6 +21,7 @@
 
 #include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
+#include <net80211/ieee80211_ht.h>
 
 #define MT7902_TXWI_LEN		32
 #define MT7902_TXP_LEN		32
@@ -42,6 +43,13 @@
 #define MT7902_TXD6_TX_RATE_SHIFT	16
 #define MT7902_TXP_LAST		(1U << 15)
 #define MT7902_STA_REC_BASIC	0
+#define MT7902_STA_REC_BA		6
+#define MT7902_STA_REC_WTBL		13
+#define MT7902_WTBL_BA		8
+#define MT7902_WTBL_SET		2
+#define MT7902_BA_TYPE_ORIGINATOR	1
+#define MT7902_BA_TYPE_RECIPIENT	2
+#define MT7902_BA_TID_COUNT		16
 #define MT7902_MCU_UNI_DEV_INFO_UPDATE	0x01
 #define MT7902_MCU_UNI_BSS_INFO_UPDATE	0x02
 #define MT7902_MCU_EXT_MAC_INIT_CTRL	0x46
@@ -205,6 +213,35 @@ struct mt7902_wtbl_hdr_trans {
 	uint8_t reserved;
 } __packed;
 
+struct mt7902_wtbl_ba {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t tid;
+	uint8_t ba_type;
+	uint8_t reserved0[2];
+	uint16_t ssn;
+	uint8_t ba_en;
+	uint8_t ba_winsize_idx;
+	uint16_t ba_winsize;
+	uint8_t peer_addr[IEEE80211_ADDR_LEN];
+	uint8_t rst_ba_tid;
+	uint8_t rst_ba_sel;
+	uint8_t rst_ba_sb;
+	uint8_t band_idx;
+	uint8_t reserved1[4];
+} __packed;
+
+struct mt7902_sta_rec_ba {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t tid;
+	uint8_t ba_type;
+	uint8_t amsdu;
+	uint8_t ba_en;
+	uint16_t ssn;
+	uint16_t winsize;
+} __packed;
+
 struct mt7902_sta_rec_phy {
 	uint16_t tag;
 	uint16_t len;
@@ -236,6 +273,8 @@ CTASSERT(sizeof(struct mt7902_wtbl_req_hdr) == 8);
 CTASSERT(sizeof(struct mt7902_wtbl_generic) == 20);
 CTASSERT(sizeof(struct mt7902_wtbl_rx) == 12);
 CTASSERT(sizeof(struct mt7902_wtbl_hdr_trans) == 8);
+CTASSERT(sizeof(struct mt7902_wtbl_ba) == 28);
+CTASSERT(sizeof(struct mt7902_sta_rec_ba) == 12);
 
 struct mt7902_bss_basic {
 	uint16_t tag;
@@ -2236,6 +2275,222 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	return (0);
 }
 
+/*
+ * Connac2 requires two ordered updates for a Block Ack session: the WTBL
+ * BA entry first, then STA_REC_BA. These are submitted without waiting for
+ * an MCU response because ADDBA/DELBA callbacks may execute on the driver's
+ * only event/RX worker; a synchronous wait there would deadlock RX event
+ * processing. Submission errors are still propagated to the net80211
+ * callback, but firmware acknowledgement is asynchronous.
+ */
+static int
+mt7902_wtbl_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
+    uint8_t tid, uint16_t ssn, uint16_t winsize, bool tx, bool enable)
+{
+	struct mt7902_sta_req_hdr hdr;
+	struct mt7902_mcu_tlv_hdr tlv;
+	struct mt7902_wtbl_req_hdr wtbl_req;
+	struct mt7902_wtbl_ba ba;
+	uint8_t request[sizeof(hdr) + sizeof(tlv) + sizeof(wtbl_req) +
+	    sizeof(ba)];
+	size_t offset;
+
+	if (ni == NULL || tid >= MT7902_BA_TID_COUNT)
+		return (EINVAL);
+	bzero(&hdr, sizeof(hdr));
+	hdr.bss_idx = MT7902_BSS_IDX;
+	hdr.wlan_idx_lo = MT7902_PEER_WCID;
+	hdr.tlv_num = htole16(1);
+	hdr.is_tlv_append = 1;
+
+	bzero(&tlv, sizeof(tlv));
+	tlv.tag = htole16(MT7902_STA_REC_WTBL);
+	tlv.len = htole16(sizeof(tlv) + sizeof(wtbl_req) + sizeof(ba));
+	bzero(&wtbl_req, sizeof(wtbl_req));
+	wtbl_req.wlan_idx_lo = MT7902_PEER_WCID;
+	wtbl_req.operation = MT7902_WTBL_SET;
+	wtbl_req.tlv_num = htole16(1);
+
+	bzero(&ba, sizeof(ba));
+	ba.tag = htole16(MT7902_WTBL_BA);
+	ba.len = htole16(sizeof(ba));
+	ba.tid = tid;
+	ba.ba_type = tx ? MT7902_BA_TYPE_ORIGINATOR :
+	    MT7902_BA_TYPE_RECIPIENT;
+	if (tx) {
+		ba.ssn = htole16(enable ? ssn : 0);
+		ba.ba_en = enable ? 1 : 0;
+		ba.ba_winsize = htole16(enable ? winsize : 0);
+	} else {
+		IEEE80211_ADDR_COPY(ba.peer_addr, ni->ni_macaddr);
+		ba.rst_ba_tid = tid;
+		ba.rst_ba_sel = 0; /* RST_BA_MAC_TID_MATCH */
+		ba.rst_ba_sb = 1;
+		ba.band_idx = 0;
+		ba.ba_winsize = htole16(enable ? winsize : 0);
+	}
+
+	offset = 0;
+	memcpy(request + offset, &hdr, sizeof(hdr));
+	offset += sizeof(hdr);
+	memcpy(request + offset, &tlv, sizeof(tlv));
+	offset += sizeof(tlv);
+	memcpy(request + offset, &wtbl_req, sizeof(wtbl_req));
+	offset += sizeof(wtbl_req);
+	memcpy(request + offset, &ba, sizeof(ba));
+	return (mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
+	    request, sizeof(request), false));
+}
+
+static int
+mt7902_sta_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
+    uint8_t tid, uint16_t ssn, uint16_t winsize, bool tx, bool enable)
+{
+	struct mt7902_sta_req_hdr hdr;
+	struct mt7902_sta_rec_ba ba;
+	uint8_t request[sizeof(hdr) + sizeof(ba)];
+	int error;
+
+	if (ni == NULL || tid >= MT7902_BA_TID_COUNT)
+		return (EINVAL);
+	winsize = enable ? MIN(winsize, IEEE80211_AGGR_BAWMAX) : 0;
+	if (enable && winsize == 0)
+		winsize = IEEE80211_AGGR_BAWMAX;
+
+	error = mt7902_wtbl_ba_update(sc, ni, tid, ssn, winsize, tx, enable);
+	if (error != 0)
+		return (error);
+
+	bzero(&hdr, sizeof(hdr));
+	hdr.bss_idx = MT7902_BSS_IDX;
+	hdr.wlan_idx_lo = MT7902_PEER_WCID;
+	hdr.tlv_num = htole16(1);
+	hdr.is_tlv_append = 1;
+	bzero(&ba, sizeof(ba));
+	ba.tag = htole16(MT7902_STA_REC_BA);
+	ba.len = htole16(sizeof(ba));
+	ba.tid = tid;
+	ba.ba_type = tx ? MT7902_BA_TYPE_ORIGINATOR :
+	    MT7902_BA_TYPE_RECIPIENT;
+	ba.amsdu = 0; /* no A-MSDU-in-A-MPDU TX/RX capability is advertised */
+	ba.ba_en = enable ? (uint8_t)(1U << tid) : 0;
+	ba.ssn = htole16(enable ? ssn : 0);
+	ba.winsize = htole16(winsize);
+	memcpy(request, &hdr, sizeof(hdr));
+	memcpy(request + sizeof(hdr), &ba, sizeof(ba));
+
+	error = mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
+	    request, sizeof(request), false);
+	if (error != 0 && enable)
+		(void)mt7902_wtbl_ba_update(sc, ni, tid, 0, 0, tx, false);
+	return (error);
+}
+
+static int
+mt7902_addba_response(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap,
+    int status, int baparamset, int batimeout)
+{
+	struct ieee80211com *ic;
+	struct mt7902_softc *sc;
+	uint16_t winsize;
+	int error;
+
+	ic = ni->ni_ic;
+	sc = ic->ic_softc;
+	if (status == IEEE80211_STATUS_SUCCESS) {
+		winsize = _IEEE80211_MASKSHIFT(baparamset,
+		    IEEE80211_BAPS_BUFSIZ);
+		if (winsize == 0)
+			winsize = IEEE80211_AGGR_BAWMAX;
+		winsize = MIN(winsize, IEEE80211_AGGR_BAWMAX);
+		if (tap->txa_tid >= MT7902_BA_TID_COUNT)
+			return (EINVAL);
+		error = mt7902_sta_ba_update(sc, ni, tap->txa_tid,
+		    tap->txa_start, winsize, true, true);
+		if (error != 0) {
+			(void)sc->ht_addba_response(ni, tap,
+			    IEEE80211_STATUS_UNSPECIFIED, baparamset, batimeout);
+			return (error);
+		}
+	}
+	return (sc->ht_addba_response(ni, tap, status, baparamset,
+	    batimeout));
+}
+
+static void
+mt7902_addba_stop(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap)
+{
+	struct mt7902_softc *sc = ni->ni_ic->ic_softc;
+
+	if (tap->txa_tid < MT7902_BA_TID_COUNT)
+		(void)mt7902_sta_ba_update(sc, ni, tap->txa_tid, 0, 0,
+		    true, false);
+	sc->ht_addba_stop(ni, tap);
+}
+
+static int
+mt7902_ampdu_rx_start(struct ieee80211_node *ni,
+    struct ieee80211_rx_ampdu *rap, int baparamset, int batimeout,
+    int baseqctl)
+{
+	struct mt7902_softc *sc;
+	uint16_t ssn, winsize;
+	int tid, error;
+
+	sc = ni->ni_ic->ic_softc;
+	tid = (int)(rap - ni->ni_rx_ampdu);
+	if (tid < 0 || tid >= MT7902_BA_TID_COUNT)
+		return (EINVAL);
+	ssn = _IEEE80211_MASKSHIFT(baseqctl, IEEE80211_BASEQ_START);
+	winsize = _IEEE80211_MASKSHIFT(baparamset, IEEE80211_BAPS_BUFSIZ);
+	if (winsize == 0)
+		winsize = IEEE80211_AGGR_BAWMAX;
+	winsize = MIN(winsize, IEEE80211_AGGR_BAWMAX);
+
+	error = sc->ht_ampdu_rx_start(ni, rap, baparamset, batimeout,
+	    baseqctl);
+	if (error != 0)
+		return (error);
+	error = mt7902_sta_ba_update(sc, ni, (uint8_t)tid, ssn, winsize,
+	    false, true);
+	if (error != 0) {
+		sc->ht_ampdu_rx_stop(ni, rap);
+		/*
+		 * net80211 15.1 currently ignores this callback's return value
+		 * when building the ADDBA response. Send a DELBA best-effort so
+		 * the peer does not continue sending aggregates for an unprogrammed
+		 * firmware reorder context.
+		 */
+		{
+			uint16_t args[4] = {
+				(uint16_t)tid, IEEE80211_DELBAPS_INIT,
+				IEEE80211_REASON_UNSPECIFIED, 0
+			};
+			(void)ni->ni_ic->ic_send_action(ni,
+			    IEEE80211_ACTION_CAT_BA,
+			    IEEE80211_ACTION_BA_DELBA, args);
+		}
+	}
+	return (error);
+}
+
+static void
+mt7902_ampdu_rx_stop(struct ieee80211_node *ni,
+    struct ieee80211_rx_ampdu *rap)
+{
+	struct mt7902_softc *sc;
+	int tid;
+
+	sc = ni->ni_ic->ic_softc;
+	tid = (int)(rap - ni->ni_rx_ampdu);
+	if (tid >= 0 && tid < MT7902_BA_TID_COUNT)
+		(void)mt7902_sta_ba_update(sc, ni, (uint8_t)tid, 0, 0,
+		    false, false);
+	sc->ht_ampdu_rx_stop(ni, rap);
+}
+
 int
 mt7902_net80211_attach(struct mt7902_softc *sc)
 {
@@ -2276,7 +2531,7 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	 */
 	if (sc->nic_caps.phy.ht &&
 	    (sc->nic_caps.has_2ghz || sc->nic_caps.has_5ghz)) {
-		ic->ic_htcaps = IEEE80211_HTC_HT |
+		ic->ic_htcaps = IEEE80211_HTC_HT | IEEE80211_HTC_AMPDU |
 		    IEEE80211_HTCAP_SMPS_OFF |
 		    IEEE80211_HTCAP_SHORTGI20 |
 		    IEEE80211_HTCAP_MAXAMSDU_3839;
@@ -2344,6 +2599,15 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	ic->ic_raw_xmit = mt7902_raw_xmit;
 	ic->ic_wme.wme_update = mt7902_wme_update;
 	ic->ic_transmit = mt7902_transmit;
+	/* Preserve the net80211 reorder/state machine; wrap BA setup in firmware. */
+	sc->ht_addba_response = ic->ic_addba_response;
+	sc->ht_addba_stop = ic->ic_addba_stop;
+	sc->ht_ampdu_rx_start = ic->ic_ampdu_rx_start;
+	sc->ht_ampdu_rx_stop = ic->ic_ampdu_rx_stop;
+	ic->ic_addba_response = mt7902_addba_response;
+	ic->ic_addba_stop = mt7902_addba_stop;
+	ic->ic_ampdu_rx_start = mt7902_ampdu_rx_start;
+	ic->ic_ampdu_rx_stop = mt7902_ampdu_rx_stop;
 	ieee80211_set_software_ciphers(ic, IEEE80211_CRYPTO_AES_CCM);
 	mbufq_init(&sc->txq, MT7902_TX_RING_SIZE);
 	sc->net80211_attached = 1;
@@ -2375,6 +2639,16 @@ mt7902_net80211_detach(struct mt7902_softc *sc)
 	mtx_unlock(&sc->mtx);
 	if (ni != NULL)
 		ieee80211_free_node(ni);
+	if (sc->ht_addba_response != NULL) {
+		sc->ic.ic_addba_response = sc->ht_addba_response;
+		sc->ic.ic_addba_stop = sc->ht_addba_stop;
+		sc->ic.ic_ampdu_rx_start = sc->ht_ampdu_rx_start;
+		sc->ic.ic_ampdu_rx_stop = sc->ht_ampdu_rx_stop;
+		sc->ht_addba_response = NULL;
+		sc->ht_addba_stop = NULL;
+		sc->ht_ampdu_rx_start = NULL;
+		sc->ht_ampdu_rx_stop = NULL;
+	}
 	ieee80211_ifdetach(&sc->ic);
 	sc->net80211_attached = 0;
 }
