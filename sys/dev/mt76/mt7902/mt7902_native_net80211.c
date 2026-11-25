@@ -1436,15 +1436,80 @@ mt7902_wme_update(struct ieee80211com *ic)
 	    &req, sizeof(req), false));
 }
 
+
+static int
+mt7902_radio_stop(struct mt7902_softc *sc)
+{
+	struct {
+		uint8_t enable;
+		uint8_t band;
+		uint8_t reserved[2];
+	} __packed req;
+	bool started;
+	int error;
+
+	mtx_lock(&sc->mtx);
+	started = sc->radio_enabled;
+	mtx_unlock(&sc->mtx);
+	if (!started)
+		return (0);
+
+	bzero(&req, sizeof(req));
+	req.enable = 0;
+	req.band = 0;
+	error = mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_EXT_CMD(MT7902_MCU_EXT_MAC_INIT_CTRL),
+	    &req, sizeof(req), true);
+	mtx_lock(&sc->mtx);
+	sc->radio_enabled = false;
+	mtx_unlock(&sc->mtx);
+	if (error != 0)
+		device_printf(sc->dev, "radio stop: MAC_INIT_CTRL disable failed: %d\\n",
+		    error);
+	else
+		device_printf(sc->dev, "radio stopped: MAC disabled\\n");
+	return (error);
+}
+
+/*
+ * net80211 calls ic_parent when the first VAP is brought up and when the
+ * last VAP is stopped.  Firmware/WFDMA are loaded at PCI attach, but the
+ * radio MAC must be started here, before ieee80211_start_all() advances the
+ * station state machine into scanning.
+ */
 static void
 mt7902_parent(struct ieee80211com *ic)
 {
 	struct mt7902_softc *sc = ic->ic_softc;
+	struct ieee80211vap *vap;
+	int error;
 
-	if (!sc->hw_started && ic->ic_nrunning != 0)
+	if (ic->ic_nrunning == 0) {
+		(void)mt7902_radio_stop(sc);
+		return;
+	}
+	if (!sc->hw_started) {
 		device_printf(sc->dev,
-		    "Wi-Fi firmware is stopped; set dev.mt7902_native.%d.hw_start=1\n",
+		    "cannot start radio: firmware is stopped; set dev.mt7902_native.%d.hw_start=1\\n",
 		    device_get_unit(sc->dev));
+		error = ENETDOWN;
+	} else if (ic->ic_curchan == NULL) {
+		device_printf(sc->dev,
+		    "cannot start radio: net80211 has no current channel\\n");
+		error = EINVAL;
+	} else {
+		error = mt7902_set_channel(sc, ic->ic_curchan);
+	}
+	if (error != 0) {
+		device_printf(sc->dev, "radio startup failed: %d; stopping VAPs\\n",
+		    error);
+		IEEE80211_LOCK(ic);
+		TAILQ_FOREACH(vap, &ic->ic_vaps, iv_next)
+			ieee80211_stop_locked(vap);
+		IEEE80211_UNLOCK(ic);
+		return;
+	}
+	ieee80211_start_all(ic);
 }
 
 static int
