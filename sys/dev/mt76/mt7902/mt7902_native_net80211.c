@@ -51,9 +51,14 @@
 #define MT7902_UNI_BSS_INFO_QBSS	15
 #define MT7902_STA_REC_STATE	7
 #define MT7902_STA_REC_RA		1
+#define MT7902_STA_REC_HT		9
+#define MT7902_STA_REC_VHT		10
 #define MT7902_PHY_TYPE_HR_DSSS	(1U << 0)
 #define MT7902_PHY_TYPE_ERP		(1U << 1)
 #define MT7902_PHY_TYPE_OFDM		(1U << 3)
+#define MT7902_PHY_TYPE_HT		(1U << 4)
+#define MT7902_PHY_TYPE_VHT		(1U << 5)
+#define MT7902_VHT_OPMODE_RX_NSS_SHIFT	4
 #define MT7902_BSS_PHY_A		(1U << 0)
 #define MT7902_BSS_PHY_B		(1U << 1)
 #define MT7902_BSS_PHY_G		(1U << 2)
@@ -116,6 +121,23 @@ struct mt7902_sta_rec_state {
 	uint8_t reserved;
 } __packed;
 
+struct mt7902_sta_rec_ht {
+	uint16_t tag;
+	uint16_t len;
+	uint16_t ht_cap;
+	uint16_t reserved;
+} __packed;
+
+struct mt7902_sta_rec_vht {
+	uint16_t tag;
+	uint16_t len;
+	uint32_t vht_cap;
+	uint16_t vht_rx_mcs_map;
+	uint16_t vht_tx_mcs_map;
+	uint8_t rts_bw_sig;
+	uint8_t reserved[3];
+} __packed;
+
 struct mt7902_mcu_tlv_hdr {
 	uint16_t tag;
 	uint16_t len;
@@ -151,6 +173,26 @@ struct mt7902_wtbl_rx {
 	uint8_t rca1;
 	uint8_t rca2;
 	uint8_t rv;
+	uint8_t reserved[4];
+} __packed;
+
+struct mt7902_wtbl_ht {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t ht;
+	uint8_t ldpc;
+	uint8_t ampdu_factor;
+	uint8_t ampdu_density;
+	uint8_t reserved[4];
+} __packed;
+
+struct mt7902_wtbl_vht {
+	uint16_t tag;
+	uint16_t len;
+	uint8_t ldpc;
+	uint8_t dyn_bw;
+	uint8_t vht;
+	uint8_t txop_ps;
 	uint8_t reserved[4];
 } __packed;
 
@@ -192,6 +234,10 @@ struct mt7902_sta_rec_ra {
 
 CTASSERT(sizeof(struct mt7902_sta_rec_phy) == 12);
 CTASSERT(sizeof(struct mt7902_sta_rec_ra) == 16);
+CTASSERT(sizeof(struct mt7902_sta_rec_ht) == 8);
+CTASSERT(sizeof(struct mt7902_sta_rec_vht) == 16);
+CTASSERT(sizeof(struct mt7902_wtbl_ht) == 12);
+CTASSERT(sizeof(struct mt7902_wtbl_vht) == 12);
 
 CTASSERT(sizeof(struct mt7902_mcu_tlv_hdr) == 4);
 CTASSERT(sizeof(struct mt7902_wtbl_req_hdr) == 8);
@@ -422,20 +468,47 @@ static void
 mt7902_getradiocaps(struct ieee80211com *ic, int maxchans, int *nchans,
 	struct ieee80211_channel chans[])
 {
+	struct mt7902_softc *sc;
 	uint8_t bands2[IEEE80211_MODE_BYTES], bands5[IEEE80211_MODE_BYTES];
-	int count, i;
+	int count, i, cbw2, cbw5;
+	bool ht2, ht5, vht5;
 
-	(void)ic;
+	sc = ic->ic_softc;
+	ht2 = sc->nic_caps.has_2ghz && sc->nic_caps.phy.ht;
+	ht5 = sc->nic_caps.has_5ghz && sc->nic_caps.phy.ht;
+	vht5 = ht5 && sc->nic_caps.phy.vht;
+
 	bzero(bands2, sizeof(bands2));
 	bzero(bands5, sizeof(bands5));
 	setbit(bands2, IEEE80211_MODE_11B);
 	setbit(bands2, IEEE80211_MODE_11G);
 	setbit(bands5, IEEE80211_MODE_11A);
+	cbw2 = 0;
+	cbw5 = 0;
+	if (ht2) {
+		setbit(bands2, IEEE80211_MODE_11NG);
+		if ((ic->ic_htcaps & IEEE80211_HTCAP_CHWIDTH40) != 0)
+			cbw2 |= NET80211_CBW_FLAG_HT40;
+	}
+	if (ht5) {
+		setbit(bands5, IEEE80211_MODE_11NA);
+		if ((ic->ic_htcaps & IEEE80211_HTCAP_CHWIDTH40) != 0)
+			cbw5 |= NET80211_CBW_FLAG_HT40;
+	}
+	if (vht5) {
+		setbit(bands5, IEEE80211_MODE_VHT_5GHZ);
+		if ((ic->ic_htcaps & IEEE80211_HTCAP_CHWIDTH40) != 0)
+			cbw5 |= NET80211_CBW_FLAG_VHT80;
+	}
+
 	count = 0;
-	(void)ieee80211_add_channels_default_2ghz(chans, maxchans, &count,
-	    bands2, 0);
-	(void)ieee80211_add_channel_list_5ghz(chans, maxchans, &count,
-	    mt7902_5ghz_channels, nitems(mt7902_5ghz_channels), bands5, 0);
+	if (sc->nic_caps.has_2ghz)
+		(void)ieee80211_add_channels_default_2ghz(chans, maxchans,
+		    &count, bands2, cbw2);
+	if (sc->nic_caps.has_5ghz)
+		(void)ieee80211_add_channel_list_5ghz(chans, maxchans, &count,
+		    mt7902_5ghz_channels, nitems(mt7902_5ghz_channels),
+		    bands5, cbw5);
 	for (i = 0; i < count; i++) {
 		if (IEEE80211_IS_CHAN_5GHZ(&chans[i])) {
 			chans[i].ic_flags |= IEEE80211_CHAN_PASSIVE;
@@ -986,7 +1059,15 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	struct mt7902_sta_rec_state state;
 	struct mt7902_sta_rec_phy phy;
 	struct mt7902_sta_rec_ra ra;
-	struct mt7902_sta_wtbl wtbl;
+	struct mt7902_sta_rec_ht ht;
+	struct mt7902_sta_rec_vht vht;
+	struct mt7902_mcu_tlv_hdr wtbl_tlv;
+	struct mt7902_wtbl_req_hdr wtbl_req;
+	struct mt7902_wtbl_generic wtbl_generic;
+	struct mt7902_wtbl_rx wtbl_rx;
+	struct mt7902_wtbl_ht wtbl_ht;
+	struct mt7902_wtbl_vht wtbl_vht;
+	struct mt7902_wtbl_hdr_trans wtbl_hdr_trans;
 	static const uint8_t legacy_rates[] = {
 		2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108
 	};
@@ -996,9 +1077,11 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	uint8_t peer[IEEE80211_ADDR_LEN], rate, phy_type, peer_channel;
 	uint16_t aid, supp_rates, basic_rates, legacy, beacon_interval;
 	uint8_t dtim_period;
-	bool band2, rate_basic, qos;
+	bool band2, rate_basic, qos, peer_ht, peer_vht;
 	struct ieee80211_channel *chan;
 	int i, j, error;
+	uint16_t vht_rx_map, vht_tx_map;
+	uint8_t peer_rx_nss, mcs;
 
 	peer_channel = 0;
 	if (ni != NULL) {
@@ -1039,6 +1122,10 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	} else {
 		band2 = peer_channel <= 14;
 	}
+	peer_ht = (ni->ni_flags & IEEE80211_NODE_HT) != 0;
+	peer_vht = !band2 && (ni->ni_flags & IEEE80211_NODE_VHT) != 0;
+	/* An 802.11ac peer is also an HT peer. */
+	peer_ht = peer_ht || peer_vht;
 	aid = linked ? IEEE80211_NODE_AID(ni) : mvp->peer_aid;
 	bzero(&bss, sizeof(bss));
 	bss.bss_idx = MT7902_BSS_IDX;
@@ -1066,7 +1153,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
 	bss.basic.bcn_interval = htole16(beacon_interval);
 	bss.basic.dtim_period = dtim_period;
-	bss.basic.phymode = 0x07; /* 2.4-GHz 11b/g plus 5-GHz 11a legacy */
+	bss.basic.phymode = 0x07 | (peer_ht ? MT7902_PHY_TYPE_HT : 0) |
+	    (peer_vht ? MT7902_PHY_TYPE_VHT : 0);
 	bss.basic.sta_idx = htole16(MT7902_BSS_WCID);
 	error = mt7902_mcu_send_response(sc,
 	    MT7902_MCU_UNI_CMD(0x02) /* UNI_BSS_INFO_UPDATE */,
@@ -1145,11 +1233,7 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	IEEE80211_ADDR_COPY(basic.peer_addr, peer);
 	basic.extra_info = htole16(3); /* version + newly created */
 	memset(&state, 0, sizeof(state));
-	/*
-	 * Build Connac2's legacy CCK/OFDM rate bitmap from the negotiated
-	 * FreeBSD node rateset.  HT/VHT/HE masks stay zero because this
-	 * interface advertises legacy modes only.
-	 */
+	/* Build the Connac2 legacy CCK/OFDM mask from the negotiated rates. */
 	supp_rates = 0;
 	basic_rates = 0;
 	for (i = 0; i < ni->ni_rates.rs_nrates; i++) {
@@ -1175,6 +1259,11 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		    (((supp_rates >> 4) & 0xffU) << 6);
 	else
 		legacy = (supp_rates & 0xffU) << 6;
+
+	if (peer_ht)
+		phy_type |= MT7902_PHY_TYPE_HT;
+	if (peer_vht)
+		phy_type |= MT7902_PHY_TYPE_VHT;
 
 	/*
 	 * Pick the first AP-advertised basic rate for management/multicast
@@ -1207,66 +1296,165 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	phy.len = htole16(sizeof(phy));
 	phy.basic_rate = htole16(basic_rates);
 	phy.phy_type = phy_type;
+	if (peer_ht)
+		phy.ampdu = ni->ni_htparam;
 
 	bzero(&ra, sizeof(ra));
 	ra.tag = htole16(MT7902_STA_REC_RA);
 	ra.len = htole16(sizeof(ra));
 	ra.legacy = htole16(legacy);
+	if (peer_ht) {
+		for (i = 0; i < ni->ni_htrates.rs_nrates; i++) {
+			mcs = ni->ni_htrates.rs_rates[i] & 0x7f;
+			if (mcs < sizeof(ra.rx_mcs_bitmask) * NBBY)
+				ra.rx_mcs_bitmask[mcs / NBBY] |=
+				    (uint8_t)(1U << (mcs % NBBY));
+		}
+	}
+
+	bzero(&ht, sizeof(ht));
+	if (peer_ht) {
+		ht.tag = htole16(MT7902_STA_REC_HT);
+		ht.len = htole16(sizeof(ht));
+		ht.ht_cap = htole16(ni->ni_htcap);
+	}
+	bzero(&vht, sizeof(vht));
+	vht_rx_map = vht_tx_map = 0xffff;
+	peer_rx_nss = 1;
+	if (peer_vht) {
+		vht.tag = htole16(MT7902_STA_REC_VHT);
+		vht.len = htole16(sizeof(vht));
+		vht.vht_cap = htole32(ni->ni_vhtcap);
+		vht_rx_map = ni->ni_vht_mcsinfo.rx_mcs_map;
+		vht_tx_map = ni->ni_vht_mcsinfo.tx_mcs_map;
+		vht.vht_rx_mcs_map = htole16(vht_rx_map);
+		vht.vht_tx_mcs_map = htole16(vht_tx_map);
+		peer_rx_nss = 0;
+		for (i = 0; i < MT7902_VHT_MAX_NSS; i++) {
+			if (((vht_tx_map >> (2 * i)) & 0x3) ==
+			    MT7902_VHT_MCS_NONE)
+				break;
+			peer_rx_nss++;
+		}
+		if (peer_rx_nss == 0)
+			peer_rx_nss = 1;
+	}
 
 	bzero(&state, sizeof(state));
 	state.tag = htole16(MT7902_STA_REC_STATE);
 	state.len = htole16(sizeof(state));
 	state.state = MT7902_STA_STATE_ASSOC;
+	if (peer_vht) {
+		state.vht_opmode = (uint8_t)ni->ni_chw |
+		    ((uint8_t)(MIN(peer_rx_nss, MT7902_VHT_MAX_NSS) - 1) <<
+		    MT7902_VHT_OPMODE_RX_NSS_SHIFT);
+	}
 
 	/*
-	 * Connac2 requires a WTBL record alongside STA_REC.  These are the
-	 * minimum station-mode records used by mt76: GENERIC, RX and HDR_TRANS.
-	 * Keep receive header translation disabled because the native FreeBSD
-	 * RX path consumes ordinary 802.11 MAC headers.
+	 * Connac2 requires a WTBL record alongside STA_REC. Include negotiated
+	 * HT/VHT entries only for peers that support those PHY modes. Receive
+	 * header translation remains disabled for FreeBSD's native 802.11 path.
 	 */
-	bzero(&wtbl, sizeof(wtbl));
-	wtbl.tlv.tag = htole16(13); /* STA_REC_WTBL */
-	wtbl.tlv.len = htole16(sizeof(wtbl));
-	wtbl.request.wlan_idx_lo = MT7902_PEER_WCID;
-	wtbl.request.operation = 1; /* WTBL_RESET_AND_SET */
-	wtbl.request.tlv_num = htole16(3);
-	wtbl.generic.tag = htole16(0); /* WTBL_GENERIC */
-	wtbl.generic.len = htole16(sizeof(wtbl.generic));
-	IEEE80211_ADDR_COPY(wtbl.generic.peer_addr, peer);
-	wtbl.generic.muar_idx = 0;
-	wtbl.generic.qos = qos;
-	wtbl.generic.partial_aid = htole16(aid);
-	wtbl.rx.tag = htole16(1); /* WTBL_RX */
-	wtbl.rx.len = htole16(sizeof(wtbl.rx));
-	wtbl.rx.rca1 = 1; /* station interface */
-	wtbl.rx.rca2 = 1;
-	wtbl.rx.rv = 1;
-	wtbl.hdr_trans.tag = htole16(6); /* WTBL_HDR_TRANS */
-	wtbl.hdr_trans.len = htole16(sizeof(wtbl.hdr_trans));
-	wtbl.hdr_trans.to_ds = 1;
-	wtbl.hdr_trans.from_ds = 0;
-	wtbl.hdr_trans.no_rx_trans = 1;
+	bzero(&wtbl_tlv, sizeof(wtbl_tlv));
+	bzero(&wtbl_req, sizeof(wtbl_req));
+	bzero(&wtbl_generic, sizeof(wtbl_generic));
+	bzero(&wtbl_rx, sizeof(wtbl_rx));
+	bzero(&wtbl_ht, sizeof(wtbl_ht));
+	bzero(&wtbl_vht, sizeof(wtbl_vht));
+	bzero(&wtbl_hdr_trans, sizeof(wtbl_hdr_trans));
+	wtbl_tlv.tag = htole16(13); /* STA_REC_WTBL */
+	wtbl_req.wlan_idx_lo = MT7902_PEER_WCID;
+	wtbl_req.operation = 1; /* WTBL_RESET_AND_SET */
+	wtbl_req.tlv_num = htole16(3 + (peer_ht ? 1 : 0) +
+	    (peer_vht ? 1 : 0));
+	wtbl_generic.tag = htole16(0); /* WTBL_GENERIC */
+	wtbl_generic.len = htole16(sizeof(wtbl_generic));
+	IEEE80211_ADDR_COPY(wtbl_generic.peer_addr, peer);
+	wtbl_generic.muar_idx = 0;
+	wtbl_generic.qos = qos;
+	wtbl_generic.partial_aid = htole16(aid);
+	wtbl_rx.tag = htole16(1); /* WTBL_RX */
+	wtbl_rx.len = htole16(sizeof(wtbl_rx));
+	wtbl_rx.rca1 = 1; /* station interface */
+	wtbl_rx.rca2 = 1;
+	wtbl_rx.rv = 1;
+	if (peer_ht) {
+		wtbl_ht.tag = htole16(2); /* WTBL_HT */
+		wtbl_ht.len = htole16(sizeof(wtbl_ht));
+		wtbl_ht.ht = 1;
+		wtbl_ht.ldpc = (ni->ni_htcap & IEEE80211_HTCAP_LDPC) != 0;
+		wtbl_ht.ampdu_factor = ni->ni_htparam & 0x03;
+		wtbl_ht.ampdu_density = (ni->ni_htparam >> 2) & 0x07;
+	}
+	if (peer_vht) {
+		wtbl_vht.tag = htole16(3); /* WTBL_VHT */
+		wtbl_vht.len = htole16(sizeof(wtbl_vht));
+		wtbl_vht.ldpc = (ni->ni_vhtcap & IEEE80211_VHTCAP_RXLDPC) != 0;
+		wtbl_vht.vht = 1;
+		wtbl_ht.ampdu_factor = MAX(wtbl_ht.ampdu_factor,
+		    (ni->ni_vhtcap & IEEE80211_VHTCAP_MAX_A_MPDU_LENGTH_EXPONENT_MASK) >>
+		    IEEE80211_VHTCAP_MAX_A_MPDU_LENGTH_EXPONENT_MASK_S);
+	}
+	wtbl_hdr_trans.tag = htole16(6); /* WTBL_HDR_TRANS */
+	wtbl_hdr_trans.len = htole16(sizeof(wtbl_hdr_trans));
+	wtbl_hdr_trans.to_ds = 1;
+	wtbl_hdr_trans.from_ds = 0;
+	wtbl_hdr_trans.no_rx_trans = 1;
+	wtbl_tlv.len = htole16(sizeof(wtbl_tlv) + sizeof(wtbl_req) +
+	    sizeof(wtbl_generic) + sizeof(wtbl_rx) +
+	    (peer_ht ? sizeof(wtbl_ht) : 0) +
+	    (peer_vht ? sizeof(wtbl_vht) : 0) + sizeof(wtbl_hdr_trans));
 
 	{
 		uint8_t request[sizeof(hdr) + sizeof(basic) + sizeof(phy) +
-		    sizeof(ra) + sizeof(state) + sizeof(wtbl)];
+		    sizeof(ra) + sizeof(state) + sizeof(ht) + sizeof(vht) +
+		    sizeof(wtbl_tlv) + sizeof(wtbl_req) + sizeof(wtbl_generic) +
+		    sizeof(wtbl_rx) + sizeof(wtbl_ht) + sizeof(wtbl_vht) +
+		    sizeof(wtbl_hdr_trans)];
 		size_t offset;
 
+		hdr.tlv_num = htole16(5 + (peer_ht ? 1 : 0) +
+		    (peer_vht ? 1 : 0));
 		offset = 0;
 		memcpy(request + offset, &hdr, sizeof(hdr));
 		offset += sizeof(hdr);
 		memcpy(request + offset, &basic, sizeof(basic));
 		offset += sizeof(basic);
+		if (peer_ht) {
+			memcpy(request + offset, &ht, sizeof(ht));
+			offset += sizeof(ht);
+		}
+		if (peer_vht) {
+			memcpy(request + offset, &vht, sizeof(vht));
+			offset += sizeof(vht);
+		}
 		memcpy(request + offset, &phy, sizeof(phy));
 		offset += sizeof(phy);
 		memcpy(request + offset, &ra, sizeof(ra));
 		offset += sizeof(ra);
 		memcpy(request + offset, &state, sizeof(state));
 		offset += sizeof(state);
-		memcpy(request + offset, &wtbl, sizeof(wtbl));
+		memcpy(request + offset, &wtbl_tlv, sizeof(wtbl_tlv));
+		offset += sizeof(wtbl_tlv);
+		memcpy(request + offset, &wtbl_req, sizeof(wtbl_req));
+		offset += sizeof(wtbl_req);
+		memcpy(request + offset, &wtbl_generic, sizeof(wtbl_generic));
+		offset += sizeof(wtbl_generic);
+		memcpy(request + offset, &wtbl_rx, sizeof(wtbl_rx));
+		offset += sizeof(wtbl_rx);
+		if (peer_ht) {
+			memcpy(request + offset, &wtbl_ht, sizeof(wtbl_ht));
+			offset += sizeof(wtbl_ht);
+		}
+		if (peer_vht) {
+			memcpy(request + offset, &wtbl_vht, sizeof(wtbl_vht));
+			offset += sizeof(wtbl_vht);
+		}
+		memcpy(request + offset, &wtbl_hdr_trans, sizeof(wtbl_hdr_trans));
+		offset += sizeof(wtbl_hdr_trans);
 		error = mt7902_mcu_send_response(sc,
 		    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_STA_REC_UPDATE),
-		    request, sizeof(request), NULL, &(size_t){0});
+		    request, offset, NULL, &(size_t){0});
 	}
 	if (error == 0) {
 		mvp->linked = true;
@@ -2044,6 +2232,55 @@ mt7902_net80211_attach(struct mt7902_softc *sc)
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11B);
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11G);
 	setbit(ic->ic_modecaps, IEEE80211_MODE_11A);
+	ic->ic_txstream = MIN(sc->nic_caps.phy.nss, 4);
+	ic->ic_rxstream = MIN(sc->nic_caps.phy.nss, 4);
+
+	/*
+	 * Advertise HT/VHT only when reported by firmware. Keep AMPDU-TX and
+	 * A-MSDU-TX software capability bits clear until the complete
+	 * aggregation/Block Ack data path is integrated.
+	 */
+	if (sc->nic_caps.phy.ht &&
+	    (sc->nic_caps.has_2ghz || sc->nic_caps.has_5ghz)) {
+		ic->ic_htcaps = IEEE80211_HTC_HT |
+		    IEEE80211_HTCAP_SMPS_OFF |
+		    IEEE80211_HTCAP_SHORTGI20 |
+		    IEEE80211_HTCAP_MAXAMSDU_3839;
+		if (sc->nic_caps.phy.max_bw >= 1)
+			ic->ic_htcaps |= IEEE80211_HTCAP_CHWIDTH40 |
+			    IEEE80211_HTCAP_SHORTGI40;
+		if (sc->nic_caps.phy.rx_ldpc)
+			ic->ic_htcaps |= IEEE80211_HTCAP_LDPC;
+		if (sc->nic_caps.phy.tx_ldpc)
+			ic->ic_htcaps |= IEEE80211_HTC_TXLDPC;
+		if (sc->nic_caps.phy.tx_stbc)
+			ic->ic_htcaps |= IEEE80211_HTCAP_TXSTBC;
+		if (sc->nic_caps.phy.rx_stbc)
+			ic->ic_htcaps |= IEEE80211_HTCAP_RXSTBC_1STREAM;
+		if (sc->nic_caps.has_2ghz)
+			setbit(ic->ic_modecaps, IEEE80211_MODE_11NG);
+		if (sc->nic_caps.has_5ghz)
+			setbit(ic->ic_modecaps, IEEE80211_MODE_11NA);
+	}
+
+	if (sc->nic_caps.phy.vht && sc->nic_caps.has_5ghz &&
+	    sc->nic_caps.phy.ht) {
+		uint16_t mcs_map;
+
+		ic->ic_flags_ext |= IEEE80211_FEXT_VHT;
+		ic->ic_vht_cap.vht_cap_info = IEEE80211_VHTCAP_SHORT_GI_80;
+		if (sc->nic_caps.phy.rx_ldpc)
+			ic->ic_vht_cap.vht_cap_info |= IEEE80211_VHTCAP_RXLDPC;
+		if (sc->nic_caps.phy.tx_stbc)
+			ic->ic_vht_cap.vht_cap_info |= IEEE80211_VHTCAP_TXSTBC;
+		if (sc->nic_caps.phy.rx_stbc)
+			ic->ic_vht_cap.vht_cap_info |= IEEE80211_VHTCAP_RXSTBC_1;
+		mcs_map = mt7902_vht_mcs_map(sc->nic_caps.phy.nss);
+		ic->ic_vht_cap.supp_mcs.rx_mcs_map = htole16(mcs_map);
+		ic->ic_vht_cap.supp_mcs.tx_mcs_map = htole16(mcs_map);
+		setbit(ic->ic_modecaps, IEEE80211_MODE_VHT_5GHZ);
+	}
+
 	mt7902_getradiocaps(ic, IEEE80211_CHAN_MAX, &ic->ic_nchans,
 	    ic->ic_channels);
 	if (ic->ic_nchans == 0)
