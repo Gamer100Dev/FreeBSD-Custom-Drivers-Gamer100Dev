@@ -25,16 +25,17 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
 * Firmware startup and WFSYS recovery, with process-context `hw_start`
   retry/stop controls. WFDMA shutdown waits for TX/RX idle; if the engines do
   not quiesce, PCI bus mastering is disabled before ring memory is released.
-* Native net80211 STA/monitor registration, 2.4/5 GHz legacy channels,
-  software scanning, acknowledged channel-switch requests, and station/BSS
-  association. Scan-end diagnostics report ring-0 packet types/TXS details,
-  TX_FREE completions, monitor-only ICV errors, ring-2 descriptor consumption,
-  IRQ status, WFDMA producer indices, and descriptor ownership at each receive
-  tail. Association sends the Connac2 BSS basic/QBSS TLVs, SET_BSS_ABORT /
-  SET_BSS_CONNECTED commands, STA_REC BASIC/PHY/RA/STATE records, and the
-  minimal WTBL GENERIC/RX/HDR_TRANS records. Disconnect removes the station
-  and resets its WTBL entry. AP BSSID/AID/DTIM/QoS state is cached so teardown
-  still identifies the peer when net80211 has already dropped the BSS node.
+* Native net80211 STA/monitor registration, 2.4/5 GHz legacy plus firmware-
+  gated 802.11n/ac channel modes, software scanning, acknowledged channel
+  changes, and station/BSS association. HT/VHT interface capabilities, NSS,
+  MCS maps and channel widths are derived from firmware capability data.
+  Association sends Connac2 BSS basic/QBSS and SET_BSS_ABORT /
+  SET_BSS_CONNECTED commands, plus per-peer STA_REC BASIC/HT/VHT/PHY/RA/STATE
+  and WTBL GENERIC/RX/HT/VHT/HDR_TRANS records. Legacy and HT MCS masks and
+  VHT RX/TX maps are taken from the negotiated FreeBSD node. Disconnect removes
+  the station and resets its WTBL entry. AP BSSID/AID/DTIM/QoS state is cached
+  so teardown still identifies the peer when net80211 has already dropped the
+  BSS node. HE and 6 GHz are intentionally disabled for this Wi-Fi 5 port.
 * Negotiated legacy CCK/OFDM rate masks and AP basic rates are passed to the
   firmware. Fixed-rate management/multicast TX chooses the lowest AP basic
   rate when associated, with 1 Mbps CCK / 6 Mbps OFDM defaults for
@@ -145,9 +146,10 @@ acknowledgement; ring-0 TXS notifications are recognized, and ring 2 is polled
 on shared ring-0 interrupts as well as its own data interrupt. Hardware
 beacon reception and scan results still require confirmation on the device.
 Dedicated firmware hardware scan, scheduled scan, scan cancellation offload,
-complete regulatory-domain handling, and 6 GHz operation are not implemented. The advertised channel/mode set remains
-conservative (2.4/5 GHz legacy modes); HT/VHT/HE capabilities are not
-advertised.
+and complete regulatory-domain handling remain outstanding. Firmware-gated
+HT/VHT mode/channel capabilities and peer MCS negotiation are now connected
+to net80211, but end-to-end 802.11n/ac traffic still requires hardware testing.
+HE and 6 GHz remain deliberately disabled.
 
 The PCI suspend/resume hooks are implemented but have not been tested on
 physical MT7902 hardware. Runtime power management, WoWLAN, thermal/SAR
@@ -192,7 +194,9 @@ The current four-ring layout is retained as a FreeBSD implementation choice
 until the descriptor/queue mapping is changed and validated on the device.
 
 Other outstanding feature differences include the first-stage RX decoder
-(no A-MSDU deaggregation or AMPDU reorder), legacy-only rate/capability
-advertisement, no full mt76 rate-control feedback, incomplete SAR/regulatory
-handling, and no validated runtime power management. These are intentionally
-not advertised as implemented.
+(no translated-frame reverse path, A-MSDU deaggregation or AMPDU reorder), no
+complete firmware Block Ack / aggregation integration, no full mt76 rate-
+control feedback, incomplete SAR/regulatory handling, and no validated runtime
+power management. HT/VHT capabilities are configured from firmware and peer
+negotiation data, but that is not yet proof of full Wi-Fi 5 throughput or
+aggregation support.
