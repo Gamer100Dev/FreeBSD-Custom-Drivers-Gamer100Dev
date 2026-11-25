@@ -19,7 +19,7 @@ BUILD_ID="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo so
 if ! git -C "$REPO_ROOT" diff --quiet -- \
     sys/dev/rtw88_native sys/modules/rtw88_native \
     sys/dev/mt76/mt7902 sys/modules/mt7902_native \
-    tools/build-native-module.sh; then
+    sys/modules/ng_ubt_mt7902 tools/build-native-module.sh; then
     BUILD_ID="${BUILD_ID}-dirty"
 fi
 
@@ -31,7 +31,7 @@ install -d "$SRCROOT/sys/dev/rtw88_native" \
 cp -R "$REPO_ROOT/sys/dev/rtw88_native/." "$SRCROOT/sys/dev/rtw88_native/"
 cp -R "$REPO_ROOT/sys/modules/rtw88_native/." "$SRCROOT/sys/modules/rtw88_native/"
 cp -R "$REPO_ROOT/sys/dev/mt76/mt7902/." "$SRCROOT/sys/dev/mt76/mt7902/"
-cp -R "$REPO_ROOT/sys/modules/mt7902_native/." "$SRCROOT/sys/modules/mt7902_native/" \
+cp -R "$REPO_ROOT/sys/modules/mt7902_native/." "$SRCROOT/sys/modules/mt7902_native/"
 cp -R "$REPO_ROOT/sys/modules/ng_ubt_mt7902/." "$SRCROOT/sys/modules/ng_ubt_mt7902/"
 
 # Stamp the exact repository revision into RTW88 so dmesg makes stale
