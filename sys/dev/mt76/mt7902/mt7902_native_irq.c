@@ -24,6 +24,7 @@
 #include <net80211/ieee80211_freebsd.h>
 #include <net80211/ieee80211_proto.h>
 #include <net80211/ieee80211_ratectl.h>
+#include <net80211/ieee80211_ht.h>
 
 #define MT7902_RXD_SIZE	36
 #define MT7902_RX_BATCH	64
@@ -355,17 +356,22 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 		goto drop;
 	}
-	if (rx_amsdu.present) {
-		/* The firmware reports one native-header A-MSDU subframe per RXD. */
+	qos_control = 0;
+	qos_offset = 0;
+	if (qos_data) {
+		/* QoS control follows Addr4 on four-address data frames. */
 		qos_offset = sizeof(struct ieee80211_frame);
 		if ((fc & 0x0300) == 0x0300)
 			qos_offset += IEEE80211_ADDR_LEN;
 		if (frame_len < qos_offset + sizeof(qos_control)) {
-			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
+			drop_reason = MT7902_RX_DROP_BAD_HEADER;
 			goto drop;
 		}
 		qos_control = le16dec(data + offset + qos_offset);
-		if ((qos_control & IEEE80211_QOS_AMSDU) == 0) {
+	}
+	if (rx_amsdu.present) {
+		/* The firmware reports one native-header A-MSDU subframe per RXD. */
+		if (!qos_data || (qos_control & IEEE80211_QOS_AMSDU) == 0) {
 			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 			goto drop;
 		}
@@ -536,10 +542,16 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	}
 	/* FreeBSD net80211 performs software BA reordering for HT peers. */
 	if (qos_data) {
+		uint8_t tid;
+
+		tid = qos_control & 0x0f;
 		ni = ieee80211_find_rxnode(&sc->ic,
 		    (const struct ieee80211_frame_min *)mtod(m, const void *));
 		if (ni != NULL) {
-			if (ni->ni_flags & IEEE80211_NODE_HT)
+			/* Only frames covered by a negotiated RX BA session reorder. */
+			if ((ni->ni_flags & IEEE80211_NODE_HT) != 0 &&
+			    (ni->ni_rx_ampdu[tid].rxa_flags &
+			    IEEE80211_AGGR_RUNNING) != 0)
 				m->m_flags |= M_AMPDU;
 			ieee80211_free_node(ni);
 		}
