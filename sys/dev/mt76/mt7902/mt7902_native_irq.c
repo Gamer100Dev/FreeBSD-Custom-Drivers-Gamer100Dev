@@ -878,6 +878,10 @@ mt7902_intr(void *arg)
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_STA, status);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_EN, 0);
 	mtx_lock(&sc->mtx);
+	if (sc->irq_quiescing) {
+		mtx_unlock(&sc->mtx);
+		return;
+	}
 	sc->irq_status |= status;
 	sc->irq_last_status = status;
 	sc->irq_count++;
@@ -919,6 +923,9 @@ mt7902_irq_setup(struct mt7902_softc *sc)
 		sc->msi_count = 0;
 		return (error);
 	}
+	mtx_lock(&sc->mtx);
+	sc->irq_quiescing = false;
+	mtx_unlock(&sc->mtx);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_STA, 0xffffffff);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
 	    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
@@ -928,6 +935,9 @@ mt7902_irq_setup(struct mt7902_softc *sc)
 void
 mt7902_irq_teardown(struct mt7902_softc *sc)
 {
+	mtx_lock(&sc->mtx);
+	sc->irq_quiescing = true;
+	mtx_unlock(&sc->mtx);
 	if (sc->mem != NULL) {
 		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN, 0);
 		/* Keep the PCIe MAC forwarding gate symmetric with DMA startup. */
@@ -966,6 +976,11 @@ mt7902_irq_task(void *arg, int pending __unused)
 
 	sc = arg;
 	mtx_lock(&sc->mtx);
+	if (sc->irq_quiescing) {
+		sc->irq_status = 0;
+		mtx_unlock(&sc->mtx);
+		return;
+	}
 	status = sc->irq_status;
 	sc->irq_status = 0;
 	debug = sc->rx_debug;
@@ -1008,8 +1023,11 @@ mt7902_irq_task(void *arg, int pending __unused)
 	}
 	if (status & (MT7902_INT_RX_DONE_DATA | MT7902_INT_RX_DONE_WM))
 		taskqueue_enqueue(sc->tq, &sc->rx_task);
-	mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
-	    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
+	mtx_lock(&sc->mtx);
+	if (!sc->irq_quiescing)
+		mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
+		    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
+	mtx_unlock(&sc->mtx);
 }
 
 void
