@@ -498,7 +498,7 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	    &mac_req, sizeof(mac_req), true);
 	if (error != 0) {
 		device_printf(sc->dev,
-		    "radio start: MAC_INIT_CTRL enable failed: %d\\n", error);
+		    "radio start: MAC_INIT_CTRL enable failed: %d\n", error);
 		return (error);
 	}
 
@@ -515,7 +515,7 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	    &path_req, sizeof(path_req), true);
 	if (error != 0) {
 		device_printf(sc->dev,
-		    "radio start: SET_RX_PATH failed on channel %u: %d\\n",
+		    "radio start: SET_RX_PATH failed on channel %u: %d\n",
 		    c->ic_ieee, error);
 		return (error);
 	}
@@ -524,7 +524,7 @@ mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	sc->radio_enabled = true;
 	mtx_unlock(&sc->mtx);
 	device_printf(sc->dev,
-	    "radio start complete: MAC enabled, RX path configured (channel=%u band=%u RX mask=0x%02x)\\n",
+	    "radio start complete: MAC enabled, RX path configured (channel=%u band=%u RX mask=0x%02x)\n",
 	    c->ic_ieee, path_req.channel_band, path_req.rx_streams);
 	return (0);
 }
