@@ -2138,9 +2138,15 @@ mt7902_tx_task(void *arg, int pending __unused)
 	struct mt7902_softc *sc = arg;
 	struct ieee80211_node *ni;
 	struct mbuf *m;
-	int error;
+	int error, budget;
+	bool more;
 
-	for (;;) {
+	/*
+	 * TX shares the system taskqueue with IRQ/RX/MCU work. Bound each
+	 * invocation so a continuously busy transmit queue cannot monopolize
+	 * the worker and delay receive processing or firmware responses.
+	 */
+	for (budget = 0; budget < 64; budget++) {
 		mtx_lock(&sc->mtx);
 		m = mbufq_dequeue(&sc->txq);
 		mtx_unlock(&sc->mtx);
@@ -2156,5 +2162,11 @@ mt7902_tx_task(void *arg, int pending __unused)
 				m_freem(m);
 		}
 	}
+
+	mtx_lock(&sc->mtx);
+	more = !mbufq_empty(&sc->txq);
+	mtx_unlock(&sc->mtx);
+	if (more)
+		taskqueue_enqueue(taskqueue_thread, &sc->tx_task);
 }
 
