@@ -867,6 +867,23 @@ mt7902_mcu_set_channel_domain(struct mt7902_softc *sc)
 }
 
 /*
+ * Sample both Connac2 RMAC receive-filter banks.  These are direct MAC
+ * registers, not the host-side MCU TX descriptor state.  The 1 ms settling
+ * interval at each call site is diagnostic only; it is not an MCU ack.
+ */
+static void
+mt7902_rxfilter_readback(struct mt7902_softc *sc, const char *stage)
+{
+	device_printf(sc->dev,
+	    "RX RFCR readback stage=%s band0=%08x/%08x band1=%08x/%08x\n",
+	    stage,
+	    mt7902_read(sc, MT7902_REG_WF_RFCR(0)),
+	    mt7902_read(sc, MT7902_REG_WF_RFCR1(0)),
+	    mt7902_read(sc, MT7902_REG_WF_RFCR(1)),
+	    mt7902_read(sc, MT7902_REG_WF_RFCR1(1)));
+}
+
+/*
  * Configure the Connac2 receive filter before exposing the net80211 VAP.
  * This is the same SET_RX_FILTER command used by mt7921_configure_filter():
  * mode 1 replaces the filter flags, while bit_op/bit_map are reserved for
@@ -906,6 +923,9 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 		    "RX filter: cmd=%s mode=%u flags=%08x bit_map=%08x error=%d (host TX submission status only; upstream does not request an MCU response)\n",
 		    error == 0 ? "submitted" : "failed", req.mode,
 		    flags, le32toh(req.bit_map), error);
+	DELAY(1000);
+	if (debug > 0 || scanning)
+		mt7902_rxfilter_readback(sc, "after-flags");
 	if (error != 0)
 		return (error);
 
@@ -933,6 +953,9 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 		    "RX filter bitmap: cmd=%s mode=%u bit_op=clear(%u) bit_map=%08x error=%d (host TX submission status only; upstream does not request an MCU response)\n",
 		    bitmap_error == 0 ? "submitted" : "failed", req.mode,
 		    req.bit_op, le32toh(req.bit_map), bitmap_error);
+	DELAY(1000);
+	if (debug > 0 || scanning)
+		mt7902_rxfilter_readback(sc, "after-beacon-bitmap-clear");
 
 	return (bitmap_error);
 }
