@@ -11,6 +11,7 @@ test_base_layout(void)
 	struct mt7902_rxdesc_layout layout;
 
 	assert(mt7902_rxdesc_get_layout(0, 0, 80, &layout) == 0);
+	assert(layout.group4_offset == 0);
 	assert(layout.group2_offset == 0);
 	assert(layout.group3_offset == 0);
 	assert(layout.group5_rcpi_offset == 0);
@@ -28,6 +29,7 @@ test_all_optional_groups(void)
 	    MT7902_RXD1_GROUP_5;
 	assert(mt7902_rxdesc_get_layout(groups, 2U << 14, 160,
 	    &layout) == 0);
+	assert(layout.group4_offset == 24);
 	assert(layout.group2_offset == 56);
 	assert(layout.group3_offset == 64);
 	assert(layout.group5_rcpi_offset == 96);
@@ -119,6 +121,19 @@ test_amsdu_descriptor_metadata(void)
 }
 
 static void
+test_group4_offset_and_truncation(void)
+{
+	struct mt7902_rxdesc_layout layout;
+
+	assert(mt7902_rxdesc_get_layout(MT7902_RXD1_GROUP_4, 0, 64,
+	    &layout) == 0);
+	assert(layout.group4_offset == 24);
+	assert(layout.frame_offset == 40);
+	assert(mt7902_rxdesc_get_layout(MT7902_RXD1_GROUP_4, 0, 39,
+	    &layout) != 0);
+}
+
+static void
 test_header_offset_bounds(void)
 {
 	struct mt7902_rxdesc_layout layout;
@@ -145,6 +160,7 @@ main(void)
 	test_all_optional_groups();
 	test_truncated_groups();
 	test_group2_offset_and_truncation();
+	test_group4_offset_and_truncation();
 	test_wifi5_prxv_decode();
 	test_amsdu_descriptor_metadata();
 	test_header_offset_bounds();
