@@ -197,11 +197,13 @@ mt7902_rx_80211_hdrlen(uint16_t fc)
 }
 
 /*
- * Connac2 normal RXD parser.  The six-word base RXD is followed by optional
+ * Connac2 normal RXD parser. The six-word base RXD is followed by optional
  * groups in the order used by mt7921_mac_fill_rx(): GROUP_4, GROUP_1,
- * GROUP_2, GROUP_3 and (inside GROUP_3) GROUP_5.  Header-translated frames
- * are deliberately rejected for now because net80211 expects native 802.11
- * headers; the management frames needed for scanning are not translated.
+ * GROUP_2, GROUP_3 and (inside GROUP_3) GROUP_5. Native 802.11 frames are
+ * passed directly to net80211. The supported unicast translated-data subset
+ * is reconstructed from GROUP_4; translated fallback frames marked with
+ * HDR_TRANS_ERROR remain rejected until their embedded length field is
+ * handled by the reverse translator.
  */
 static void
 mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
