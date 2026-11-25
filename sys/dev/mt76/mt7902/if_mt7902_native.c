@@ -268,9 +268,24 @@ mt7902_attach(device_t dev)
 		error = ENXIO;
 		goto fail;
 	}
+	/*
+	 * A private fast-enqueue queue gives this device a dedicated worker.
+	 * IRQ work is highest priority, RX follows, and bounded TX batches run
+	 * last so sustained transmit load cannot starve receive processing.
+	 */
+	sc->tq = taskqueue_create_fast("mt7902_native", M_WAITOK,
+	    taskqueue_thread_enqueue, &sc->tq);
+	error = taskqueue_start_threads(&sc->tq, 1, PI_NET, "%s taskq",
+	    device_get_nameunit(dev));
+	if (error != 0) {
+		device_printf(dev, "could not start private taskqueue: %d\n", error);
+		taskqueue_free(sc->tq);
+		sc->tq = NULL;
+		goto fail;
+	}
 	TASK_INIT(&sc->irq_task, 0, mt7902_irq_task, sc);
-	TASK_INIT(&sc->rx_task, 0, mt7902_rx_task, sc);
-	TASK_INIT(&sc->tx_task, 0, mt7902_tx_task, sc);
+	TASK_INIT(&sc->rx_task, 1, mt7902_rx_task, sc);
+	TASK_INIT(&sc->tx_task, 2, mt7902_tx_task, sc);
 	if (rman_get_size(sc->mem) < MT7902_REG_BAR_MIN) {
 		device_printf(dev, "BAR0 is too small (%ju bytes)\n",
 		    (uintmax_t)rman_get_size(sc->mem));
@@ -331,10 +346,16 @@ mt7902_detach(device_t dev)
 		sc->dying = 1;
 		mtx_unlock(&sc->mtx);
 	}
-	if (sc->hw_started) {
+	if (sc->irq_cookie != NULL || sc->irq != NULL || sc->hw_started)
 		mt7902_irq_teardown(sc);
+	if (sc->hw_started) {
 		mt7902_dma_stop(sc);
 		sc->hw_started = 0;
+	}
+	if (sc->tq != NULL) {
+		taskqueue_drain_all(sc->tq);
+		taskqueue_free(sc->tq);
+		sc->tq = NULL;
 	}
 	if (sc->net80211_attached)
 		mt7902_net80211_detach(sc);
@@ -359,6 +380,10 @@ mt7902_detach(device_t dev)
 }
 
 /*
+ * Runtime power management is deliberately not implemented. Only the bus
+ * suspend/resume callbacks below are supported; do not add idle runtime-PM
+ * transitions until firmware, DMA ownership, and wake signalling are proven.
+ *
  * Suspend all net80211 VAPs before stopping firmware and WFDMA.  The
  * net80211 core remembers which VAPs were running and resume_all() restores
  * their states only after the firmware and DMA rings are ready again.
