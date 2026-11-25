@@ -49,6 +49,11 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -I sys/dev/mt76/mt7902 \
             tests/mt7902_ba_test.c -o /tmp/mt7902_ba_test
           /tmp/mt7902_ba_test
+      - name: Test translated MT7902 RX reverse decoder
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -I sys/dev/mt76/mt7902 \
+            tests/mt7902_rxtrans_test.c -o /tmp/mt7902_rxtrans_test
+          /tmp/mt7902_rxtrans_test
       - uses: vmactions/freebsd-vm@v1
         with:
           release: "15.1"
