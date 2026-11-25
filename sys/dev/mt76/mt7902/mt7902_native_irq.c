@@ -943,6 +943,7 @@ mt7902_irq_teardown(struct mt7902_softc *sc)
 	 */
 	if (sc->tq != NULL) {
 		taskqueue_drain(sc->tq, &sc->irq_task);
+		taskqueue_drain(sc->tq, &sc->event_task);
 		taskqueue_drain(sc->tq, &sc->rx_task);
 		taskqueue_drain(sc->tq, &sc->tx_task);
 	}
