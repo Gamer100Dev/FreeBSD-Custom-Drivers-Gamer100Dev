@@ -108,6 +108,9 @@ test_invalid_frames(void)
 	    local, peer, bssid, &out) != 0);
 	assert(mt7902_rxtrans_decode(eth, sizeof(eth), 0x0000, 0, 0, 0,
 	    local, peer, bssid, &out) != 0);
+	assert(mt7902_rxtrans_decode(eth, sizeof(eth),
+	    MT7902_RXTRANS_FC_TYPE_DATA | MT7902_RXTRANS_FC_PROTECTED,
+	    0, 0, 0, local, peer, bssid, &out) != 0);
 	assert(mt7902_rxtrans_decode(NULL, sizeof(eth), 0x0008, 0, 0, 0,
 	    local, peer, bssid, &out) != 0);
 	assert(mt7902_rxtrans_decode(eth, sizeof(eth), 0x0008, 0, 0, 0,
