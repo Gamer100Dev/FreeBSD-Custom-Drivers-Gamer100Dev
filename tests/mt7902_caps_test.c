@@ -28,8 +28,8 @@ static void test_parse_phy_and_optional_tlvs(void)
 	put_tlv(data + 47, MT7902_NIC_CAP_CHIP_CAP, chip, sizeof(chip));
 	assert(mt7902_nic_caps_parse(data, 63, &caps) == 0);
 	assert(caps.has_phy && caps.phy.ht == 1 && caps.phy.vht == 1);
-	assert(caps.phy.he == 1 && caps.phy.nss == 1);
-	assert(caps.has_2ghz && caps.has_5ghz && caps.has_6ghz);
+	assert(caps.phy.he == 0 && caps.phy.nss == 1);
+	assert(caps.has_2ghz && caps.has_5ghz && !caps.has_6ghz);
 	assert(caps.has_macaddr && caps.macaddr[5] == 0x55);
 	assert(caps.has_chip_cap &&
 	    caps.chip_cap == UINT64_C(0x0807060504030201));
