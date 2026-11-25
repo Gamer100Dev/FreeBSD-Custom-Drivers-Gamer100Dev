@@ -117,6 +117,7 @@ mt7902_rxdesc_decode_amsdu(uint32_t rxd4, int qos_data, size_t frame_len,
 }
 
 struct mt7902_rxdesc_layout {
+	size_t group4_offset;
 	size_t group2_offset;
 	size_t group3_offset;
 	size_t group5_rcpi_offset;
@@ -142,6 +143,7 @@ mt7902_rxdesc_get_layout(uint32_t rxd1, uint32_t rxd2, size_t dma_len,
 	if (layout == NULL || dma_len < MT7902_RXD_BASE_SIZE)
 		return (-1);
 
+	layout->group4_offset = 0;
 	layout->group2_offset = 0;
 	layout->group3_offset = 0;
 	layout->group5_rcpi_offset = 0;
@@ -150,6 +152,7 @@ mt7902_rxdesc_get_layout(uint32_t rxd1, uint32_t rxd2, size_t dma_len,
 	if ((rxd1 & MT7902_RXD1_GROUP_4) != 0) {
 		if (dma_len - offset < 16)
 			return (-1);
+		layout->group4_offset = offset;
 		offset += 16;
 	}
 	if ((rxd1 & MT7902_RXD1_GROUP_1) != 0) {
