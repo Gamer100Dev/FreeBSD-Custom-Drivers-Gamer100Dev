@@ -355,7 +355,6 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 		goto drop;
 	}
-	payload_format = rx_amsdu.format;
 	if (rx_amsdu.present) {
 		/* The firmware reports one native-header A-MSDU subframe per RXD. */
 		qos_offset = sizeof(struct ieee80211_frame);
