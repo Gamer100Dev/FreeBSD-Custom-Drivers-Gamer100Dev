@@ -136,6 +136,7 @@ enum mt7902_rx_drop_reason {
 #define MT7902_MCU_CMD_NIC_POWER	0x04
 #define MT7902_MCU_CMD_PATCH_SEM	0x10
 #define MT7902_MCU_CE_SET_RX_FILTER	0x0a
+#define MT7902_MCU_CE_SET_BSS_ABORT	0x17
 #define MT7902_MCU_CE_SET_EDCA_PARMS	0x1d
 #define MT7902_MCU_CMD_WAKE_RX_PCIE	(1U << 0)
 
@@ -452,6 +453,7 @@ int mt7902_mcu_send_response(struct mt7902_softc *, uint32_t,
 int mt7902_mcu_init(struct mt7902_softc *);
 int mt7902_mcu_read_mac(struct mt7902_softc *);
 int mt7902_mcu_set_rxfilter(struct mt7902_softc *, uint32_t);
+int mt7902_mcu_abort_bss(struct mt7902_softc *);
 int mt7902_mcu_set_channel_domain(struct mt7902_softc *);
 int mt7902_mac_rx_route_init(struct mt7902_softc *);
 void mt7902_irq_task(void *, int);
