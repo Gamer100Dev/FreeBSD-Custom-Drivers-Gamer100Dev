@@ -145,6 +145,11 @@ enum mt7902_rx_drop_reason {
 /* Connac2 RMAC receive-filter registers (mt792x_regs.h). */
 #define MT7902_REG_WF_RFCR(_band)	((_band) ? 0x820f5000 : 0x820e5000)
 #define MT7902_REG_WF_RFCR1(_band)	(MT7902_REG_WF_RFCR(_band) + 0x004)
+/* Connac2 band MIB counters used by mt792x_mac_update_mib_stats(). */
+#define MT7902_REG_MIB_SDR3(_band)	((_band) ? 0x820fd698 : 0x820ed698)
+#define MT7902_REG_MIB_SDR5(_band)	((_band) ? 0x820fd780 : 0x820ed780)
+#define MT7902_MIB_SDR3_FCS_ERR_SHIFT	16
+#define MT7902_MIB_SDR3_FCS_ERR_MASK	0xffff0000U
 #define MT7902_MCU_CMD_QUERY	0x01
 #define MT7902_MCU_SEQ_MAX	15
 #define MT7902_MCU_EXT_CID		0xed
