@@ -744,7 +744,11 @@ mt7902_mac_init(struct mt7902_softc *sc)
 	 * implement hardware-deaggregated A-MSDUs.  Match mt7921_mac_init():
 	 * disable both DAMSDU and RX header translation.
 	 */
-	value &= ~((1U << 15) | (1U << 19));
+	/* Match upstream mt7921_mac_init(): enable de-aggregation and RX
+	 * header translation.  The station WTBL entry separately controls
+	 * no_rx_trans for the native 802.11 station RX path.
+	 */
+	value |= (1U << 15) | (1U << 19);
 	mt7902_write(sc, 0x820cd000, value);
 
 	for (band = 0; band < nitems(dma_dcr0); band++) {
