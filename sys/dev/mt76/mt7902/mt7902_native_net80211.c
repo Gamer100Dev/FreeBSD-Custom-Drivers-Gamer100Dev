@@ -44,6 +44,8 @@
 #define MT7902_STA_REC_BASIC	0
 #define MT7902_MCU_UNI_DEV_INFO_UPDATE	0x01
 #define MT7902_MCU_UNI_BSS_INFO_UPDATE	0x02
+#define MT7902_MCU_EXT_MAC_INIT_CTRL	0x46
+#define MT7902_MCU_EXT_SET_RX_PATH	0x4e
 #define MT7902_UNI_DEV_INFO_ACTIVE	0
 #define MT7902_UNI_BSS_INFO_BASIC	0
 #define MT7902_UNI_BSS_INFO_QBSS	15
@@ -443,30 +445,101 @@ mt7902_getradiocaps(struct ieee80211com *ic, int maxchans, int *nchans,
 	*nchans = count;
 }
 
+struct mt7902_chan_info {
+	uint8_t control_ch;
+	uint8_t center_ch;
+	uint8_t bw;
+	uint8_t tx_streams;
+	uint8_t rx_streams;
+	uint8_t switch_reason;
+	uint8_t band_idx;
+	uint8_t center_ch2;
+	uint16_t cac_case;
+	uint8_t channel_band;
+	uint8_t reserved0;
+	uint32_t outband_freq;
+	uint8_t txpower_drop;
+	uint8_t ap_bw;
+	uint8_t ap_center_ch;
+	uint8_t reserved1[57];
+} __packed;
+
+CTASSERT(sizeof(struct mt7902_chan_info) == 76);
+
+/*
+ * Linux mt7921_start() enables the firmware MAC and selects the RX path
+ * before the first CHANNEL_SWITCH.  Firmware boot and BSS registration alone
+ * do not start the radio: without MAC_INIT_CTRL the MCU will acknowledge
+ * channel changes and TX resource releases while the data RX ring stays idle.
+ */
+static int
+mt7902_radio_start(struct mt7902_softc *sc, struct ieee80211_channel *c)
+{
+	struct {
+		uint8_t enable;
+		uint8_t band;
+		uint8_t reserved[2];
+	} __packed mac_req;
+	struct mt7902_chan_info path_req;
+	bool started;
+	int error;
+
+	mtx_lock(&sc->mtx);
+	started = sc->radio_enabled;
+	mtx_unlock(&sc->mtx);
+	if (started)
+		return (0);
+
+	bzero(&mac_req, sizeof(mac_req));
+	mac_req.enable = 1;
+	mac_req.band = 0;
+	error = mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_EXT_CMD(MT7902_MCU_EXT_MAC_INIT_CTRL),
+	    &mac_req, sizeof(mac_req), true);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "radio start: MAC_INIT_CTRL enable failed: %d\\n", error);
+		return (error);
+	}
+
+	bzero(&path_req, sizeof(path_req));
+	path_req.control_ch = c->ic_ieee;
+	path_req.center_ch = c->ic_ieee;
+	path_req.tx_streams = 1;
+	path_req.rx_streams = 1;
+	path_req.switch_reason = 0; /* CH_SWITCH_NORMAL */
+	path_req.band_idx = 0;
+	path_req.channel_band = IEEE80211_IS_CHAN_2GHZ(c) ? 0 : 1;
+	error = mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_EXT_CMD(MT7902_MCU_EXT_SET_RX_PATH),
+	    &path_req, sizeof(path_req), true);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "radio start: SET_RX_PATH failed on channel %u: %d\\n",
+		    c->ic_ieee, error);
+		return (error);
+	}
+
+	mtx_lock(&sc->mtx);
+	sc->radio_enabled = true;
+	mtx_unlock(&sc->mtx);
+	device_printf(sc->dev,
+	    "radio start complete: MAC enabled, RX path configured (channel=%u band=%u RX mask=0x%02x)\\n",
+	    c->ic_ieee, path_req.channel_band, path_req.rx_streams);
+	return (0);
+}
+
 int
 mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 {
-	struct {
-		uint8_t control_ch;
-		uint8_t center_ch;
-		uint8_t bw;
-		uint8_t tx_streams;
-		uint8_t rx_streams;
-		uint8_t switch_reason;
-		uint8_t band_idx;
-		uint8_t center_ch2;
-		uint16_t cac_case;
-		uint8_t channel_band;
-		uint8_t reserved0;
-		uint32_t outband_freq;
-		uint8_t txpower_drop;
-		uint8_t ap_bw;
-		uint8_t ap_center_ch;
-		uint8_t reserved1[57];
-	} __packed req;
+	struct mt7902_chan_info req;
+	int error;
 
 	if (sc == NULL || c == NULL || !sc->hw_started)
 		return (ENETDOWN);
+	error = mt7902_radio_start(sc, c);
+	if (error != 0)
+		return (error);
 	bzero(&req, sizeof(req));
 	req.control_ch = c->ic_ieee;
 	req.center_ch = c->ic_ieee;
