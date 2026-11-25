@@ -139,8 +139,13 @@ mt7902_ring_alloc(struct mt7902_softc *sc, struct mt7902_ring *ring,
 			goto fail;
 		if (is_rx) {
 			ring->desc[i].buf0 = htole32((uint32_t)buf->paddr);
-			/* RX uses one empty slot to distinguish a full ring. */
-			ctl = i == ndesc - 1 ? 0 :
+			/*
+			 * Keep the reserved RX slot host-owned.  mt76 initializes
+			 * unused RX descriptors with DMA_DONE and clears it only
+			 * when a buffer is handed to WFDMA.  Leaving this slot at
+			 * zero makes it look device-owned to the prefetch engine.
+			 */
+			ctl = i == ndesc - 1 ? MT7902_DMA_DESC_DONE :
 			    (((uint32_t)buf_size & MT7902_DMA_LEN_MASK) <<
 			    MT7902_DMA_LEN_SHIFT);
 			ring->desc[i].control = htole32(ctl);
