@@ -352,9 +352,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
 		/* The firmware reports one native-header A-MSDU subframe per RXD. */
 		qos_offset = sizeof(struct ieee80211_frame);
-		if ((fc & (IEEE80211_FC1_DIR_TODS |
-		    IEEE80211_FC1_DIR_FROMDS)) ==
-		    (IEEE80211_FC1_DIR_TODS | IEEE80211_FC1_DIR_FROMDS))
+		if ((fc & 0x0300) == 0x0300)
 			qos_offset += IEEE80211_ADDR_LEN;
 		if (!qos_data || frame_len < qos_offset + sizeof(qos_control)) {
 			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
