@@ -55,6 +55,8 @@ remove local BA constants#define MT7902_MCU_UNI_DEV_INFO_UPDATE	0x01
 #define MT7902_STA_REC_RA		1
 #define MT7902_STA_REC_HT		9
 #define MT7902_STA_REC_VHT		10
+#define MT7902_STA_REC_WTBL		13
+#define MT7902_WTBL_SET		2
 #define MT7902_PHY_TYPE_HR_DSSS	(1U << 0)
 #define MT7902_PHY_TYPE_ERP		(1U << 1)
 #define MT7902_PHY_TYPE_OFDM		(1U << 3)
