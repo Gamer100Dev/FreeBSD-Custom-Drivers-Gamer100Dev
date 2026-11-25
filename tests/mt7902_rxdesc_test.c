@@ -63,6 +63,35 @@ test_group2_offset_and_truncation(void)
 }
 
 static void
+test_wifi5_prxv_decode(void)
+{
+	struct mt7902_rx_phy phy;
+	uint32_t word;
+
+	word = 7U | (1U << 7) | (2U << 12) | (1U << 15) |
+	    MT7902_PRXV_LDPC | (MT7902_PHY_VHT << 24);
+	assert(mt7902_rxdesc_decode_phy(word, &phy) == 0);
+	assert(phy.rate_idx == 7 && phy.nss == 2);
+	assert(phy.mode == MT7902_PHY_VHT && phy.bandwidth == 2);
+	assert(phy.gi == 1 && phy.ldpc && phy.stbc == 0);
+
+	word = 9U | (3U << 7) | (1U << 22) |
+	    (MT7902_PHY_HT << 24);
+	assert(mt7902_rxdesc_decode_phy(word, &phy) == 0);
+	assert(phy.rate_idx == 9 && phy.nss == 2);
+	assert(phy.mode == MT7902_PHY_HT && phy.bandwidth == 0);
+	assert(phy.stbc == 1);
+
+	word = (3U << 12) | (MT7902_PHY_VHT << 24);
+	assert(mt7902_rxdesc_decode_phy(word, &phy) != 0);
+	word = (10U << 0) | (MT7902_PHY_VHT << 24);
+	assert(mt7902_rxdesc_decode_phy(word, &phy) != 0);
+	word = (5U << 24);
+	assert(mt7902_rxdesc_decode_phy(word, &phy) != 0);
+	assert(mt7902_rxdesc_decode_phy(0, NULL) != 0);
+}
+
+static void
 test_header_offset_bounds(void)
 {
 	struct mt7902_rxdesc_layout layout;
@@ -89,6 +118,7 @@ main(void)
 	test_all_optional_groups();
 	test_truncated_groups();
 	test_group2_offset_and_truncation();
+	test_wifi5_prxv_decode();
 	test_header_offset_bounds();
 	test_descriptor_bit_semantics();
 	puts("MT7902 RX descriptor layout tests: PASS");
