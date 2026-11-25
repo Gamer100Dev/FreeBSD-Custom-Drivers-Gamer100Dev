@@ -9,10 +9,6 @@
 #ifndef _MT7902_NATIVE_RXTRANS_H_
 #define _MT7902_NATIVE_RXTRANS_H_
 
-#ifndef _KERNEL
-#include <stddef.h>
-#include <stdint.h>
-#endif
 
 #define MT7902_RXTRANS_ETH_HDR_LEN 14U
 #define MT7902_RXTRANS_HDR_MAX     36U
