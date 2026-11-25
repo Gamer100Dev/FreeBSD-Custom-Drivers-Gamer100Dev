@@ -208,6 +208,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	const struct ieee80211_frame_min *wh;
 	struct ieee80211_node *ni;
 	struct mt7902_rx_phy rxphy;
+	struct mt7902_rx_amsdu rx_amsdu;
 	struct mbuf *m;
 	uint32_t rxd0, rxd1, rxd2, rxd3, rxd4, rcpi_word, sec_mode;
 	uint16_t fc;
@@ -223,6 +224,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 
 	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
 	bzero(&rxphy, sizeof(rxphy));
+	bzero(&rx_amsdu, sizeof(rx_amsdu));
 	phy_valid = false;
 	payload_format = 0;
 	qos_control = 0;
@@ -349,23 +351,27 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	subtype = (fc >> 4) & 0x0f;
 	frame_type = (fc >> 2) & 0x3;
 	qos_data = frame_type == 2 && (subtype & 0x08) != 0;
-	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
+	if (mt7902_rxdesc_decode_amsdu(rxd4, qos_data, frame_len, hdr_len,
+	    &rx_amsdu) != 0) {
+		drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
+		goto drop;
+	}
+	payload_format = rx_amsdu.format;
+	if (rx_amsdu.present) {
 		/* The firmware reports one native-header A-MSDU subframe per RXD. */
 		qos_offset = sizeof(struct ieee80211_frame);
 		if ((fc & 0x0300) == 0x0300)
 			qos_offset += IEEE80211_ADDR_LEN;
-		if (!qos_data || frame_len < qos_offset + sizeof(qos_control)) {
+		if (frame_len < qos_offset + sizeof(qos_control)) {
 			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 			goto drop;
 		}
 		qos_control = le16dec(data + offset + qos_offset);
-		if ((qos_control & IEEE80211_QOS_AMSDU) == 0 ||
-		    frame_len < hdr_len + 2) {
+		if ((qos_control & IEEE80211_QOS_AMSDU) == 0) {
 			drop_reason = MT7902_RX_DROP_PAYLOAD_FORMAT;
 			goto drop;
 		}
-		/* Connac2 leaves a two-byte gap after native A-MSDU headers. */
-		frame_len -= 2;
+		frame_len = rx_amsdu.frame_len;
 	}
 	mtx_lock(&sc->mtx);
 	sc->rx_last_rxd4 = rxd4;
@@ -409,7 +415,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	}
 	m->m_len = (int)frame_len;
 	m->m_pkthdr.len = (int)frame_len;
-	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
+	if (rx_amsdu.present) {
 		memcpy(mtod(m, void *), data + offset, hdr_len);
 		memcpy((uint8_t *)mtod(m, void *) + hdr_len,
 		    data + offset + hdr_len + 2, frame_len - hdr_len);
@@ -427,9 +433,9 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_FCSCRC;
 	if (rxd1 & (1U << 26))
 		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_MMIC;
-	if (payload_format != MT7902_RXD4_PAYLOAD_NONE) {
+	if (rx_amsdu.present) {
 		rxs.c_pktflags |= IEEE80211_RX_F_AMSDU;
-		if (payload_format != MT7902_RXD4_PAYLOAD_AMSDU_LAST)
+		if (rx_amsdu.more)
 			rxs.c_pktflags |= IEEE80211_RX_F_AMSDU_MORE;
 	}
 	if ((rxd1 & MT7902_RXD1_GROUP_2) != 0) {
