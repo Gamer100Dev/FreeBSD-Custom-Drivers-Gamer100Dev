@@ -773,9 +773,9 @@ mt7902_mac_init(struct mt7902_softc *sc)
 
 	for (band = 0; band < nitems(dma_dcr0); band++) {
 		/*
-		 * Linux mt7921_mac_init_band() routes these classes to HIF.
-		 * Leaving the reset/default routing in place can send management
-		 * frames to WM, so host RX sees data but no beacons/probe responses.
+		 * The Connac2 routing fields encode MT_MDP_TO_HIF as zero.
+		 * Explicitly select host delivery for management/control and
+		 * hardware-dropped frames consumed by the net80211 receive path.
 		 */
 		value = mt7902_read(sc, mdp_bnrcfr0[band]);
 		value &= ~bnrcfr0_route_mask;
