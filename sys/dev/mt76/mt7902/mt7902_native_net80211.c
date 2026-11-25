@@ -568,6 +568,29 @@ mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	    sizeof(req), true));
 }
 
+/*
+ * Read the same RX MIB counters accumulated by mt792x_mac_update_mib_stats:
+ * SDR5 counts successfully received MPDUs; SDR3[31:16] counts FCS errors.
+ * Sampling immediately before each channel change attributes the completed
+ * dwell interval to the channel that was active before the switch.
+ */
+static void
+mt7902_rx_mib_sample(struct mt7902_softc *sc, const char *stage,
+    uint8_t channel, uint8_t band)
+{
+	uint32_t mpdu, fcs;
+	unsigned int mib_band;
+
+	mib_band = band == 5 ? 1 : 0;
+	mpdu = mt7902_read(sc, MT7902_REG_MIB_SDR5(mib_band));
+	fcs = mt7902_read(sc, MT7902_REG_MIB_SDR3(mib_band));
+	device_printf(sc->dev,
+	    "RX MIB stage=%s channel=%u band=%u mpdu=%u fcs_error=%u raw_sdr3=%08x raw_sdr5=%08x\n",
+	    stage, channel, band, mpdu,
+	    (fcs & MT7902_MIB_SDR3_FCS_ERR_MASK) >>
+	    MT7902_MIB_SDR3_FCS_ERR_SHIFT, fcs, mpdu);
+}
+
 static void
 mt7902_set_channel_cb(struct ieee80211com *ic)
 {
@@ -576,10 +599,21 @@ mt7902_set_channel_cb(struct ieee80211com *ic)
 	bool scanning;
 	int error, debug;
 
+	uint8_t previous_channel, previous_band;
+	bool scanning;
+
 	sc = ic->ic_softc;
 	c = ic->ic_curchan;
 	if (c == NULL)
 		return;
+	mtx_lock(&sc->mtx);
+	scanning = sc->scan_active;
+	previous_channel = sc->current_channel;
+	previous_band = sc->current_band;
+	mtx_unlock(&sc->mtx);
+	if (scanning && previous_channel != 0)
+		mt7902_rx_mib_sample(sc, "dwell-end", previous_channel,
+		    previous_band);
 	error = mt7902_set_channel(sc, c);
 	mtx_lock(&sc->mtx);
 	sc->chan_switch_count++;
@@ -715,6 +749,9 @@ mt7902_scan_start(struct ieee80211com *ic)
 			    "scan-start RX filter refresh failed: %d\n",
 			    filter_error);
 	}
+	/* Drain pre-scan hardware counters before the first channel dwell. */
+	mt7902_rx_mib_sample(sc, "scan-baseline", 0, 0);
+	mt7902_rx_mib_sample(sc, "scan-baseline", 0, 5);
 	device_printf(sc->dev,
 	    "net80211 %s scan started: flags=%08x channels=%d active-capable=%d passive-marked=%d rx_filter=%08x rx_debug=%d\n",
 	    active ? "active" : "passive", scan_flags, ic->ic_nchans,
@@ -840,6 +877,8 @@ mt7902_scan_end(struct ieee80211com *ic)
 	chan_last_result = sc->chan_last_result;
 	chan_last_scan = sc->chan_last_scan;
 	mtx_unlock(&sc->mtx);
+	mt7902_rx_mib_sample(sc, "scan-end", sc->current_channel,
+	    sc->current_band);
 	data_hw_idx = mt7902_read(sc, sc->rx_data.reg_base + 0x0c);
 	event_hw_idx = mt7902_read(sc, sc->rx_event.reg_base + 0x0c);
 	data_tail_ctl = sc->rx_data.desc != NULL ?
