@@ -507,10 +507,11 @@ mt7902_getradiocaps(struct ieee80211com *ic, int maxchans, int *nchans,
 		    mt7902_5ghz_channels, nitems(mt7902_5ghz_channels),
 		    bands5, cbw5);
 	for (i = 0; i < count; i++) {
-		if (IEEE80211_IS_CHAN_5GHZ(&chans[i])) {
-			chans[i].ic_flags |= IEEE80211_CHAN_PASSIVE;
-			if (chans[i].ic_ieee >= 52 && chans[i].ic_ieee <= 144)
-				chans[i].ic_flags |= IEEE80211_CHAN_DFS;
+		if (IEEE80211_IS_CHAN_5GHZ(&chans[i]) &&
+		    chans[i].ic_ieee >= 52 && chans[i].ic_ieee <= 144) {
+			/* DFS channels are passive until CAC/radar policy permits TX. */
+			chans[i].ic_flags |= IEEE80211_CHAN_DFS |
+			    IEEE80211_CHAN_PASSIVE;
 		}
 	}
 	*nchans = count;
