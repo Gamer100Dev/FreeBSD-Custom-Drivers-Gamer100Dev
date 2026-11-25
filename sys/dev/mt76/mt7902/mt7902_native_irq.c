@@ -880,7 +880,7 @@ mt7902_intr(void *arg)
 		if ((status & (1U << bit)) != 0)
 			sc->irq_bit_count[bit]++;
 	mtx_unlock(&sc->mtx);
-	taskqueue_enqueue(taskqueue_thread, &sc->irq_task);
+	taskqueue_enqueue(sc->tq, &sc->irq_task);
 }
 
 int
@@ -936,9 +936,11 @@ mt7902_irq_teardown(struct mt7902_softc *sc)
 	 * after the interrupt source is detached, and before the caller frees
 	 * ring memory.
 	 */
-	taskqueue_drain(taskqueue_thread, &sc->irq_task);
-	taskqueue_drain(taskqueue_thread, &sc->rx_task);
-	taskqueue_drain(taskqueue_thread, &sc->tx_task);
+	if (sc->tq != NULL) {
+		taskqueue_drain(sc->tq, &sc->irq_task);
+		taskqueue_drain(sc->tq, &sc->rx_task);
+		taskqueue_drain(sc->tq, &sc->tx_task);
+	}
 	if (sc->irq != NULL) {
 		bus_release_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
 		sc->irq = NULL;
@@ -999,7 +1001,7 @@ mt7902_irq_task(void *arg, int pending __unused)
 		mtx_unlock(&sc->mtx);
 	}
 	if (status & (MT7902_INT_RX_DONE_DATA | MT7902_INT_RX_DONE_WM))
-		taskqueue_enqueue(taskqueue_thread, &sc->rx_task);
+		taskqueue_enqueue(sc->tq, &sc->rx_task);
 	mt7902_write(sc, MT7902_REG_WFDMA_INT_EN,
 	    MT7902_INT_MASK | MT7902_INT_MCU_CMD);
 }
