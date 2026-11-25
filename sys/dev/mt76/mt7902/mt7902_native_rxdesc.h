@@ -82,6 +82,40 @@ mt7902_rxdesc_decode_phy(uint32_t rxv0, struct mt7902_rx_phy *phy)
 	return (0);
 }
 
+struct mt7902_rx_amsdu {
+	size_t frame_len;
+	uint8_t present;
+	uint8_t more;
+	uint8_t format;
+};
+
+/*
+ * Decode Connac2's per-RXD A-MSDU subframe marker. The hardware inserts a
+ * two-byte gap after the native QoS header; remove it before net80211's
+ * software reorder/deaggregation path sees the subframe.
+ */
+static inline int
+mt7902_rxdesc_decode_amsdu(uint32_t rxd4, int qos_data, size_t frame_len,
+    size_t hdr_len, struct mt7902_rx_amsdu *amsdu)
+{
+	uint8_t format;
+
+	if (amsdu == NULL || frame_len < hdr_len)
+		return (-1);
+	format = rxd4 & MT7902_RXD4_PAYLOAD_FORMAT;
+	amsdu->frame_len = frame_len;
+	amsdu->format = format;
+	amsdu->present = format != MT7902_RXD4_PAYLOAD_NONE;
+	amsdu->more = format == MT7902_RXD4_PAYLOAD_AMSDU_FIRST ||
+	    format == MT7902_RXD4_PAYLOAD_AMSDU_MIDDLE;
+	if (amsdu->present) {
+		if (!qos_data || frame_len - hdr_len < 2)
+			return (-1);
+		amsdu->frame_len -= 2;
+	}
+	return (0);
+}
+
 struct mt7902_rxdesc_layout {
 	size_t group2_offset;
 	size_t group3_offset;
