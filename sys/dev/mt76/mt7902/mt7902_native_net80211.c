@@ -1577,7 +1577,7 @@ mt7902_tx_enqueue(struct mt7902_softc *sc, struct mbuf *m)
 		error = mbufq_enqueue(&sc->txq, m);
 	mtx_unlock(&sc->mtx);
 	if (error == 0)
-		taskqueue_enqueue(taskqueue_thread, &sc->tx_task);
+		taskqueue_enqueue(sc->tq, &sc->tx_task);
 	return (error);
 }
 
@@ -2167,6 +2167,6 @@ mt7902_tx_task(void *arg, int pending __unused)
 	more = !mbufq_empty(&sc->txq);
 	mtx_unlock(&sc->mtx);
 	if (more)
-		taskqueue_enqueue(taskqueue_thread, &sc->tx_task);
+		taskqueue_enqueue(sc->tq, &sc->tx_task);
 }
 
