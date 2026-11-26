@@ -26,7 +26,7 @@ test_section_bounds(void)
 	assert(!mt7902_bt_fw_section_valid(4096, 256, 4097, 1));
 	assert(!mt7902_bt_fw_section_valid(4096, 256, 4000, 97));
 	assert(!mt7902_bt_fw_section_valid(4096, 256, SIZE_MAX, 2));
-	assert(!mt7902_bt_fw_section_valid(4096, 256, 512, 0) == 0);
+	assert(mt7902_bt_fw_section_valid(4096, 256, 512, 0));
 }
 
 static void
