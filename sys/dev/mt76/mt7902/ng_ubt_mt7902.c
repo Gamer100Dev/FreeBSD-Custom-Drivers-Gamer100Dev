@@ -144,9 +144,8 @@ mt7902_bt_wmt(struct usb_device *udev, uint8_t op, uint8_t flag,
 			return (error);
 		if (actual == 0)
 			continue;
-		if (actual < 7 || evt.len < 5 ||
-		    (size_t)evt.len + 2 > actual ||
-		    evt.event != MTK_WMT_EVENT || evt.op != op || evt.dir != 2)
+		if (!mt7902_bt_wmt_event_valid((const uint8_t *)&evt,
+		    actual, op) || evt.dir != 2)
 			continue;
 		if (result != NULL)
 			*result = evt.flag;
@@ -191,8 +190,8 @@ mt7902_bt_fw_download(struct usb_device *udev)
 		size = le32toh(map->spec[1]); /* bin_info_spec.dlsize */
 		if (size == 0)
 			continue;
-		if (offset < maps_end || offset > fw->datasize ||
-		    size > fw->datasize - offset)
+		if (!mt7902_bt_fw_section_valid(fw->datasize, maps_end,
+		    offset, size))
 			goto out;
 		/* Ask ROM to accept the section map entry before sending bytes. */
 		init[0] = 0;
