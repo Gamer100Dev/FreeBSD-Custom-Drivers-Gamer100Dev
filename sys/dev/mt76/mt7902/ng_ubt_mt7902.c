@@ -23,6 +23,8 @@
 #include <dev/usb/usb_ioctl.h>
 #include "usbdevs.h"
 
+#include "mt7902_bt_fw.h"
+
 #include <netgraph/ng_message.h>
 #include <netgraph/netgraph.h>
 #include <netgraph/ng_parse.h>
@@ -142,8 +144,9 @@ mt7902_bt_wmt(struct usb_device *udev, uint8_t op, uint8_t flag,
 			return (error);
 		if (actual == 0)
 			continue;
-		if (actual < 7 || evt.event != MTK_WMT_EVENT ||
-		    evt.op != op || evt.dir != 2)
+		if (actual < 7 || evt.len < 5 ||
+		    (size_t)evt.len + 2 > actual ||
+		    evt.event != MTK_WMT_EVENT || evt.op != op || evt.dir != 2)
 			continue;
 		if (result != NULL)
 			*result = evt.flag;
@@ -188,7 +191,8 @@ mt7902_bt_fw_download(struct usb_device *udev)
 		size = le32toh(map->spec[1]); /* bin_info_spec.dlsize */
 		if (size == 0)
 			continue;
-		if (offset > fw->datasize || size > fw->datasize - offset)
+		if (offset < maps_end || offset > fw->datasize ||
+		    size > fw->datasize - offset)
 			goto out;
 		/* Ask ROM to accept the section map entry before sending bytes. */
 		init[0] = 0;
@@ -219,8 +223,7 @@ mt7902_bt_fw_download(struct usb_device *udev)
 		left = size;
 		while (left != 0) {
 			chunk = MIN(left, MTK_BT_CHUNK);
-			status = left <= chunk ? MTK_WMT_END :
-			    (left == size ? MTK_WMT_START : MTK_WMT_CONTINUE);
+			status = mt7902_bt_download_flag(left == size, left, chunk);
 			if (mt7902_bt_wmt(udev, MTK_WMT_PATCH_DOWNLOAD,
 			    status, data, chunk, &status) != USB_ERR_NORMAL_COMPLETION ||
 			    status == MTK_WMT_PATCH_PROGRESS) {
