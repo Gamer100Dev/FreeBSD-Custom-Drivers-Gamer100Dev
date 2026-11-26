@@ -11,7 +11,9 @@ is in `sys/dev/mt76/mt7902/`, with a module Makefile in
 Linux mt76 repository is cloned under `vendor/mt76/` as reference source.
 The current module only matches the PCI function and sets up MMIO/DMA
 resources; firmware boot, radio queues, net80211, scanning, association,
-packet I/O, and MediaTek Bluetooth firmware setup are not implemented yet.
+packet I/O. An optional `ng_ubt_mt7902` USB subclass also performs the
+MediaTek Bluetooth WMT firmware patch download before FreeBSD's generic
+`ng_ubt` HCI/ACL/SCO and Netgraph implementation attaches.
 See `sys/dev/mt76/mt7902/README.md` for scope and build instructions, and
 `firmware/mediatek/` for licensed firmware payloads.
 
