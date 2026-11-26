@@ -56,6 +56,11 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -I sys/dev/mt76/mt7902 \
             tests/mt7902_rxtrans_test.c -o /tmp/mt7902_rxtrans_test
           /tmp/mt7902_rxtrans_test
+      - name: Test MT7902 Bluetooth firmware chunk sequencing
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror \
+            tests/mt7902_bt_fw_test.c -o /tmp/mt7902_bt_fw_test
+          /tmp/mt7902_bt_fw_test
       - uses: vmactions/freebsd-vm@v1
         with:
           release: "15.1"

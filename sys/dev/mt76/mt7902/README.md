@@ -124,7 +124,7 @@ Firmware boot and net80211 registration have been observed on MT7902 hardware.
 That confirms PCI/MMIO, firmware transfer, MCU response handling, and the
 firmware-ready handshake. The recent code also builds in FreeBSD 15.1 CI.
 Neither result proves that scanning, association, traffic, suspend/resume, or
-Bluetooth operation works reliably over the air/on the device.
+Bluetooth operation works reliably on the device.
 
 The RX implementation is not yet a complete replacement for all mt76 RX
 features. It accepts native 802.11 frames and reconstructs associated unicast
@@ -166,9 +166,15 @@ physical MT7902 hardware. Runtime power management, WoWLAN, thermal/SAR
 control, advanced statistics, autonomous firmware recovery, and complete
 device reset sequencing still need work.
 
-The Bluetooth WMT patch transfer is implemented, but firmware activation,
-subsequent generic HCI setup, suspend/resume, and the Netgraph data path have
-not been validated on MT7902 hardware.
+The Bluetooth bootstrap now validates section payloads against the complete
+firmware section-map area, validates WMT response framing, retries section-map
+acceptance, and uses the MediaTek START/CONTINUE/END sequence (including a
+single-chunk section starting with START). A regression test covers the chunk
+sequence. FreeBSD `ng_ubt` supplies the standard USB HCI command, event, ACL,
+SCO and Netgraph plumbing; the subclass does not reimplement those generic
+services. Firmware activation, subsequent HCI initialization, USB detach/
+reattach, suspend/resume and end-to-end Netgraph traffic still require
+physical-device validation.
 
 A successful module build is necessary but not sufficient. Validate scan
 results, authentication/association, DHCP and sustained traffic, protected

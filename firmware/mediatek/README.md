@@ -4,8 +4,10 @@ Files here are from the `mediatek/` directory of the Linux firmware project,
 retrieved from its upstream repository. The two Wi-Fi images are requested by
 the upstream mt76 MT7921-family driver for MT7902. The native FreeBSD port
 does not load the Wi-Fi images yet. The Bluetooth image is retained
-for the separate MT7902 USB Bluetooth function; the current FreeBSD `ubt`
-transport does not yet implement MediaTek's firmware initialization sequence.
+for the separate MT7902 USB Bluetooth function. The optional native
+`ng_ubt_mt7902` subclass implements the MediaTek 79xx WMT patch-download
+bootstrap before the inherited FreeBSD `ng_ubt` driver attaches. Bluetooth
+firmware activation and end-to-end operation still require hardware validation.
 
 Redistribution terms are in `LICENCE.mediatek`. Linux-firmware's WHENCE
 metadata marks these files as redistributable for MediaTek chipset devices.
