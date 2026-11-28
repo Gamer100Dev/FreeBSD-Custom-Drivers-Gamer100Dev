@@ -26,6 +26,7 @@
 #include <net80211/ieee80211_ht.h>
 
 #define MT7902_TXWI_LEN		32
+#define MT7902_TX_BATCH_SIZE	8
 #define MT7902_TXP_LEN		32
 #define MT7902_TXD_LEN		(MT7902_TXWI_LEN + MT7902_TXP_LEN)
 #define MT7902_TXD_QIDX_SHIFT	25
@@ -2825,12 +2826,13 @@ mt7902_tx_task(void *arg, int pending __unused)
 	struct ieee80211_node *ni;
 	struct mbuf *m;
 	uint32_t kick_mask;
-	int error, budget;
+	int error, budget, batch_count;
 	bool blocked, more;
 
 	/* Keep each invocation bounded while feeding the WFDMA rings asynchronously. */
 	blocked = false;
 	kick_mask = 0;
+	batch_count = 0;
 	for (budget = 0; budget < 64; budget++) {
 		mtx_lock(&sc->mtx);
 		if (sc->dying || sc->irq_quiescing || !sc->hw_started) {
@@ -2844,7 +2846,22 @@ mt7902_tx_task(void *arg, int pending __unused)
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
 		error = mt7902_tx_one(sc, &m, ni, &kick_mask);
+		if (error == 0 && ++batch_count >= MT7902_TX_BATCH_SIZE) {
+			/* Bound burst queuing so latency does not grow with the full budget. */
+			mt7902_tx_kick_queues(sc, kick_mask);
+			kick_mask = 0;
+			batch_count = 0;
+		}
 		if (error == EBUSY) {
+			/*
+			 * Publish any other AC descriptors before waiting for this
+			 * full ring; the completion interrupt will retry its queue.
+			 */
+			if (kick_mask != 0) {
+				mt7902_tx_kick_queues(sc, kick_mask);
+				kick_mask = 0;
+				batch_count = 0;
+			}
 			/* Preserve the packet; DMA/TX_FREE events will retry the queue. */
 			m->m_pkthdr.rcvif = (void *)ni;
 			mtx_lock(&sc->mtx);

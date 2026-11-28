@@ -70,9 +70,10 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   DMA-done bit is visible, and TX-done/TX_FREE events resume a queue that hits
   backpressure. This avoids serially waiting for every descriptor before
   submitting the next packet. TX producer-index doorbells are coalesced once
-  per worker batch, while each RX poll pass batches its ring producer-index
-  update after recycling completed buffers. RX buffers use receive-direction
-  DMA synchronization only. TX has a separate taskqueue thread, while IRQ,
+  in bounded groups of up to eight submitted packets, and are flushed
+  immediately on ring backpressure. Each RX poll pass batches its ring
+  producer-index update after recycling completed buffers. RX buffers use
+  receive-direction DMA synchronization only. TX has a separate taskqueue thread, while IRQ,
   RX, and MCU event processing remain on their worker. Linux mt76 batches RX
   buffer refill in `dma.c` and uses a TX NAPI poller to reclaim completed
   descriptors independently of RX (`mt792x_dma.c`); the FreeBSD implementation
