@@ -21,6 +21,7 @@
 #include "mt7902_native_ba.h"
 
 #include <net80211/ieee80211_freebsd.h>
+#include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_proto.h>
 #include <net80211/ieee80211_ht.h>
 
@@ -2035,8 +2036,60 @@ mt7902_80211_hdrlen(uint16_t fc)
 	return (len);
 }
 
+/*
+ * FreeBSD's software CCMP encoder expects the complete 802.11 header in the
+ * first mbuf and calls M_PREPEND() for its eight-byte IV.  A packet handed to
+ * a driver's asynchronous TX queue may instead start with a short mbuf, or
+ * have no prepend room.  In that case CCMP's header-length subtraction goes
+ * negative and its cross-mbuf block code can walk before the block buffer.
+ *
+ * Build a writable, packet-header mbuf containing the whole 802.11 header
+ * with the CCMP IV space reserved in front.  Allocate before moving the
+ * packet header so an allocation failure leaves the original packet intact.
+ */
+#define MT7902_TX_CRYPTO_HEADROOM 8
+
 static int
-mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
+mt7902_tx_prepare_crypto_header(struct mbuf **mp, int hdrlen)
+{
+	struct mbuf *m, *head;
+
+	m = *mp;
+	if (m == NULL || (m->m_flags & M_PKTHDR) == 0)
+		return (EINVAL);
+	if (hdrlen <= 0 || hdrlen > m->m_pkthdr.len)
+		return (EMSGSIZE);
+
+	if (m->m_len >= hdrlen &&
+	    M_LEADINGSPACE(m) >= MT7902_TX_CRYPTO_HEADROOM)
+		return (0);
+	if (hdrlen > MHLEN - MT7902_TX_CRYPTO_HEADROOM)
+		return (EMSGSIZE);
+
+	head = m_gethdr(M_NOWAIT, m->m_type);
+	if (head == NULL)
+		return (ENOBUFS);
+
+	/*
+	 * m_move_pkthdr() clears M_PKTHDR from the old head.  Do this only
+	 * after allocation succeeds; then place the copied header after the
+	 * reserved IV area and remove the duplicate bytes from the old chain.
+	 */
+	m_move_pkthdr(head, m);
+	head->m_data += MT7902_TX_CRYPTO_HEADROOM;
+	m_copydata(m, 0, hdrlen, mtod(head, caddr_t));
+	head->m_len = hdrlen;
+
+	m_adj(m, hdrlen);
+	while (m != NULL && m->m_len == 0)
+		m = m_free(m);
+	head->m_next = m;
+	*mp = head;
+	return (0);
+}
+
+static int
+mt7902_tx_one(struct mt7902_softc *sc, struct mbuf **mp,
     struct ieee80211_node *ni)
 {
 	struct mt7902_ring *ring;
@@ -2047,12 +2100,13 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	struct ieee80211_frame_min whmin;
 	struct ieee80211_key *key;
 	struct ieee80211_bpf_params tx_params;
+	struct mbuf *m;
 	uint8_t tx_dump[64];
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen, qos_offset;
 	uint16_t tx_basic_rate, qos_control, seq_control, msdu_id;
 	uint8_t current_band, current_channel, tid, frag_idx;
-	int idx, queue, i, debug;
+	int idx, queue, i, debug, crypto_hdrlen, error;
 	bool fixed_rate, station_linked, more_frag, has_tx_params, noack;
 	bool scanning;
 	static const uint8_t raw_rates[] = {
@@ -2062,6 +2116,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 		10, 20, 55, 110, 11, 15, 10, 14, 9, 13, 8, 12
 	};
 
+	m = *mp;
 	has_tx_params = ieee80211_get_xmit_params(m, &tx_params) == 0;
 	noack = has_tx_params &&
 	    (tx_params.ibp_flags & IEEE80211_BPF_NOACK) != 0;
@@ -2165,6 +2220,16 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	if (ni != NULL && m->m_pkthdr.len >= sizeof(whmin)) {
 		m_copydata(m, 0, sizeof(whmin), (caddr_t)&whmin);
 		if ((whmin.i_fc[1] & IEEE80211_FC1_PROTECTED) != 0) {
+			/*
+			 * Use the same padded header length as net80211's CCMP
+			 * implementation; the driver-specific TXWI length does not
+			 * include IEEE80211_F_DATAPAD padding.
+			 */
+			crypto_hdrlen = ieee80211_hdrspace(ni->ni_ic, &wh);
+			error = mt7902_tx_prepare_crypto_header(mp, crypto_hdrlen);
+			if (error != 0)
+				return (error);
+			m = *mp;
 			key = ieee80211_crypto_encap(ni, m);
 			if (key == NULL)
 				return (ENOBUFS);
@@ -2748,7 +2813,7 @@ mt7902_tx_task(void *arg, int pending __unused)
 			break;
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
-		error = mt7902_tx_one(sc, m, ni);
+		error = mt7902_tx_one(sc, &m, ni);
 		if (error == EBUSY) {
 			/* Preserve the packet; DMA/TX_FREE events will retry the queue. */
 			m->m_pkthdr.rcvif = (void *)ni;
