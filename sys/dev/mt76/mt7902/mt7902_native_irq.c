@@ -138,7 +138,7 @@ mt7902_rx_drop(struct mt7902_softc *sc,
     size_t offset, uint16_t fc)
 {
 	int debug;
-	bool scanning;
+	bool scanning, linked;
 
 	mtx_lock(&sc->mtx);
 	sc->rx_drop_count++;
@@ -153,8 +153,9 @@ mt7902_rx_drop(struct mt7902_softc *sc,
 	sc->rx_last_drop_rxd[4] = rxd4;
 	debug = sc->rx_debug;
 	scanning = sc->scan_active;
+	linked = sc->station_linked != 0;
 	mtx_unlock(&sc->mtx);
-	if (debug > 0 && scanning)
+	if (debug > 0 && (scanning || linked))
 		device_printf(sc->dev,
 		    "RX DROP reason=%s(%u) len=%ju off=%ju fc=%04x RXD=%08x/%08x/%08x/%08x/%08x\n",
 		    mt7902_rx_drop_name(reason), reason, (uintmax_t)dma_len,
@@ -226,6 +227,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	enum mt7902_rx_drop_reason drop_reason;
 	bool is_mgmt, monitor_active, rcpi_valid, monitor_only;
 	bool hdr_trans, scanning, attached, phy_valid, qos_data;
+	bool station_linked;
 	struct mt7902_rxdesc_layout rx_layout;
 
 	rxd0 = rxd1 = rxd2 = rxd3 = rxd4 = rcpi_word = sec_mode = 0;
@@ -265,6 +267,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	sc->rx_last_rxd[2] = rxd2;
 	sc->rx_last_rxd[3] = rxd3;
 	monitor_active = sc->monitor_active;
+	station_linked = sc->station_linked != 0;
 	mtx_unlock(&sc->mtx);
 
 	/*
@@ -463,7 +466,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	noise = -95;
 	rssi = rcpi_valid ? MAX(-110, MIN(0, ((int)rcpi - 220) / 2)) :
 	    noise;
-	if (debug > 0 && scanning)
+	if (debug > 0 && (scanning || (station_linked && frame_type == 2)))
 		device_printf(sc->dev,
 		    "RX FRAME ch=%u band=%s type=%u subtype=%u fc=%04x len=%ju hdr=%ju off=%ju rssi=%d rcpi=%u valid=%u addr_type=%u payload=%u sec=%u flags=%08x RXD=%08x/%08x/%08x/%08x/%08x\n",
 		    channel, channel <= 14 ? "2g" : "5g", frame_type, subtype, fc,
@@ -498,7 +501,14 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 	rxs.c_nf = noise;
 	if (rcpi_valid) {
 		rxs.r_flags |= IEEE80211_R_RSSI;
-		rxs.c_rssi = (int8_t)(rssi - noise);
+		/*
+		 * net80211 RX RSSI values use half-dB units.  Keep c_nf in dBm;
+		 * c_rssi carries the signal-to-noise delta used by scan-result
+		 * conversion, so scale that delta before handing it to net80211.
+		 * Without the factor of two scan RSSI is understated by about 15 dB
+		 * on typical 5 GHz signals, which can distort BSS selection.
+		 */
+		rxs.c_rssi = (int8_t)MIN((rssi - noise) * 2, INT8_MAX);
 	}
 	if (rxd1 & (1U << 27))
 		rxs.c_pktflags |= IEEE80211_RX_F_FAIL_FCSCRC;
@@ -642,7 +652,7 @@ mt7902_rx_data_frame(struct mt7902_softc *sc, const uint8_t *data,
 		drop_reason = MT7902_RX_DROP_NOT_ATTACHED;
 		goto drop;
 	}
-	if (debug > 0 && scanning)
+	if (debug > 0 && (scanning || (station_linked && frame_type == 2)))
 		device_printf(sc->dev,
 		    "RX DELIVER ch=%u fc=%04x subtype=%u len=%ju flags=%08x\n",
 		    channel, fc, subtype, (uintmax_t)frame_len, rxs.c_pktflags);
@@ -674,8 +684,12 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		control = le32toh(desc->control);
-		if ((control & MT7902_DMA_DESC_DONE) == 0)
+		if ((control & MT7902_DMA_DESC_DONE) == 0) {
+			/* RX DMA still owns this ring; restore device access. */
+			bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+			    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 			break;
+		}
 		buf = &ring->buf[idx];
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
 		mtx_lock(&sc->mtx);
@@ -815,6 +829,8 @@ mt7902_rx_tx_free(struct mt7902_softc *sc, const uint8_t *data, size_t len)
 	sc->tx_free_unknown += unknown;
 	sc->tx_free_pairs += pairs;
 	mtx_unlock(&sc->mtx);
+	if (records != 0 && sc->tx_tq != NULL)
+		taskqueue_enqueue(sc->tx_tq, &sc->tx_task);
 }
 
 #define MT7902_TXS0_ACK_ERROR_MASK (7U << 16)
@@ -952,8 +968,12 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
 		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		control = le32toh(desc->control);
-		if ((control & MT7902_DMA_DESC_DONE) == 0)
+		if ((control & MT7902_DMA_DESC_DONE) == 0) {
+			/* RX DMA still owns this ring; restore device access. */
+			bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+			    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 			break;
+		}
 		buf = &ring->buf[idx];
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
 		data = buf->vaddr;
@@ -1221,8 +1241,9 @@ mt7902_irq_teardown(struct mt7902_softc *sc)
 		taskqueue_drain(sc->tq, &sc->irq_task);
 		taskqueue_drain(sc->tq, &sc->event_task);
 		taskqueue_drain(sc->tq, &sc->rx_task);
-		taskqueue_drain(sc->tq, &sc->tx_task);
 	}
+	if (sc->tx_tq != NULL)
+		taskqueue_drain(sc->tx_tq, &sc->tx_task);
 	if (sc->irq != NULL) {
 		bus_release_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, sc->irq);
 		sc->irq = NULL;
@@ -1251,6 +1272,9 @@ mt7902_irq_task(void *arg, int pending __unused)
 	sc->irq_status = 0;
 	debug = sc->rx_debug;
 	mtx_unlock(&sc->mtx);
+	if ((status & MT7902_INT_TX_DONE_DATA_MASK) != 0 &&
+	    sc->tx_tq != NULL)
+		taskqueue_enqueue(sc->tx_tq, &sc->tx_task);
 	if (debug >= 3)
 		device_printf(sc->dev,
 		    "IRQ TASK status=%08x int_sta=%08x int_en=%08x mcu_cmd=%08x rx_data_idx=%08x rx_event_idx=%08x\n",

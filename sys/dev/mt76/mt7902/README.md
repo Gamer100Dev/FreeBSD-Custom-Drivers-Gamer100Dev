@@ -66,8 +66,13 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   native WME update callback that programs per-AC EDCA contention parameters
   through CE `SET_EDCA_PARMS`. The 32-byte hardware TXP carries the payload
   DMA pointer and 12-bit frame length separately from the 32-byte TXWI.
-  Descriptor ownership is polled in process context; DMA sync state is kept
-  across timeouts so an outstanding device DMA is not reused prematurely.
+  TX submissions are asynchronous: the driver reclaims a slot only after its
+  DMA-done bit is visible, and TX-done/TX_FREE events resume a queue that hits
+  backpressure. This avoids serially waiting for every descriptor before
+  submitting the next packet. TX has a separate taskqueue thread, while IRQ,
+  RX, and MCU event processing remain on their worker. Linux mt76 uses a TX
+  NAPI poller to reclaim completed descriptors independently of RX
+  (`mt792x_dma.c`); this follows the same scheduling model in FreeBSD.
   TXS final-rate and retry/ACK feedback is fed into FreeBSD net80211 rate
   control for the associated peer; firmware RA still selects per-packet rates.
 * Native FreeBSD PCI `device_suspend`/`device_resume` methods. The driver

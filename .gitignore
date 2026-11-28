@@ -4,6 +4,7 @@
 *.kld
 *.symbols
 *.d
+!etc/rc.d/mt7902_native
 
 # Generated kmod dependency and interface files in the MT7902 source directory
 /sys/dev/mt76/mt7902/.depend*

@@ -15,6 +15,7 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/taskqueue.h>
+#include <sys/sx.h>
 #include <machine/bus.h>
 
 #include <net/if.h>
@@ -180,6 +181,7 @@ enum mt7902_rx_drop_reason {
 #define MT7902_MCU_EXT_EFUSE_ACCESS	0x01
 #define MT7902_MCU_UNI_STA_REC_UPDATE	0x03
 #define MT7902_MCU_UNI_SCAN_REQ	0x16
+#define MT7902_MCU_UNI_SNIFFER	0x24
 
 struct mt7902_reg_window {
 	uint32_t	phys;
@@ -281,7 +283,8 @@ struct mt7902_softc {
 	device_t		dev;
 	struct mtx		mtx;
 	struct mtx		reg_mtx;
-	struct mtx		mcu_mtx;
+	struct sx		mcu_sx;
+	bool			mcu_sx_initialized;
 	struct resource		*mem;
 	int			mem_rid;
 	struct resource		*irq;
@@ -312,6 +315,8 @@ struct mt7902_softc {
 	struct task		tx_task;
 	/* Dedicated worker thread; do not share the global taskqueue_thread. */
 	struct taskqueue	*tq;
+	/* TX descriptor polling must not stall IRQ, RX, or MCU event work. */
+	struct taskqueue	*tx_tq;
 	struct mtx		irq_mtx;
 	struct cv		mcu_cv;
 	struct mt7902_ring	tx_data[MT7902_TX_DATA_QUEUES];
@@ -332,7 +337,7 @@ struct mt7902_softc {
 	uint64_t		tx_free_unknown;
 	uint64_t		tx_free_pairs;
 	uint64_t		tx_free_bad;
-	uint64_t		tx_dma_timeouts;
+	uint64_t		tx_dma_busy;
 	struct mt7902_fw_image	fw_wm;
 	struct mt7902_fw_image	fw_patch;
 	struct mbufq		txq;
@@ -460,6 +465,8 @@ int mt7902_mcu_init(struct mt7902_softc *);
 int mt7902_mcu_read_mac(struct mt7902_softc *);
 int mt7902_mcu_set_rxfilter(struct mt7902_softc *, uint32_t);
 int mt7902_mcu_abort_bss(struct mt7902_softc *);
+int mt7902_mcu_set_sniffer(struct mt7902_softc *, bool);
+int mt7902_mcu_config_sniffer(struct mt7902_softc *, struct ieee80211_channel *);
 int mt7902_mcu_set_channel_domain(struct mt7902_softc *);
 int mt7902_mac_rx_route_init(struct mt7902_softc *);
 int mt7902_mac_wtbl_update(struct mt7902_softc *, unsigned int, uint32_t);

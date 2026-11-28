@@ -153,7 +153,8 @@ mt7902_tx_submit(struct mt7902_softc *sc, struct mt7902_ring *ring,
 	desc->info = 0;
 	desc->control = htole32(((uint32_t)len << MT7902_DMA_LEN_SHIFT) |
 	    MT7902_DMA_DESC_LAST);
-	bus_dmamap_sync(ring->desc_tag, ring->desc_map, BUS_DMASYNC_PREWRITE);
+	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 	ring->head = next;
 	ring->queued++;
 	mt7902_write(sc, ring->reg_base + 0x8, next);
@@ -165,6 +166,9 @@ mt7902_tx_submit(struct mt7902_softc *sc, struct mt7902_ring *ring,
 		control = le32toh(desc->control);
 		if (control & MT7902_DMA_DESC_DONE)
 			break;
+		/* The descriptor is still device-owned; rearm before polling again. */
+		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 		DELAY(10);
 	}
 	if (retry == 10000) {
@@ -184,7 +188,8 @@ mt7902_tx_submit(struct mt7902_softc *sc, struct mt7902_ring *ring,
 	    BUS_DMASYNC_POSTWRITE | BUS_DMASYNC_PREREAD);
 	mtx_lock(&sc->mtx);
 	desc->control = htole32(MT7902_DMA_DESC_DONE);
-	bus_dmamap_sync(ring->desc_tag, ring->desc_map, BUS_DMASYNC_PREWRITE);
+	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+	    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
 	ring->tail = (idx + 1) % ring->ndesc;
 	if (ring->queued > 0)
 		ring->queued--;
@@ -225,7 +230,7 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 	txd = (uint32_t *)packet;
 	/* The firmware has one response mailbox; serialize response waiters. */
 	if (wait_response)
-		mtx_lock(&sc->mcu_mtx);
+		sx_xlock(&sc->mcu_sx);
 	mtx_lock(&sc->mtx);
 	seq = (++sc->mcu_seq) & 0x0f;
 	if (seq == 0)
@@ -284,7 +289,7 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 			mtx_lock(&sc->mtx);
 			sc->mcu_waiting = 0;
 			mtx_unlock(&sc->mtx);
-			mtx_unlock(&sc->mcu_mtx);
+			sx_xunlock(&sc->mcu_sx);
 		}
 		return (error);
 	}
@@ -336,7 +341,7 @@ mt7902_mcu_send_core(struct mt7902_softc *sc, uint32_t command,
 	    le32dec(sc->mcu_response + 4) != 0))
 		error = EIO;
 	mtx_unlock(&sc->mtx);
-	mtx_unlock(&sc->mcu_mtx);
+	sx_xunlock(&sc->mcu_sx);
 	return (error);
 }
 
@@ -1048,6 +1053,73 @@ mt7902_mcu_abort_bss(struct mt7902_softc *sc)
 	    req, sizeof(req), false));
 }
 
+/* Connac2 UNI sniffer commands used by mt7921_mcu_set_sniffer(). */
+int
+mt7902_mcu_set_sniffer(struct mt7902_softc *sc, bool enable)
+{
+	struct {
+		uint8_t band_idx;
+		uint8_t pad[3];
+		uint16_t tag;
+		uint16_t len;
+		uint8_t enable;
+		uint8_t reserved[3];
+	} __packed req;
+
+	bzero(&req, sizeof(req));
+	req.tag = htole16(0);
+	req.len = htole16(8);
+	req.enable = enable;
+	return (mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_SNIFFER), &req,
+	    sizeof(req), true));
+}
+
+/* Configure the firmware sniffer to follow the current scan channel. */
+int
+mt7902_mcu_config_sniffer(struct mt7902_softc *sc,
+	struct ieee80211_channel *c)
+{
+	struct {
+		uint8_t band_idx;
+		uint8_t pad[3];
+		uint16_t tag;
+		uint16_t len;
+		uint16_t aid;
+		uint8_t ch_band;
+		uint8_t bw;
+		uint8_t control_ch;
+		uint8_t sco;
+		uint8_t center_ch;
+		uint8_t center_ch2;
+		uint8_t drop_err;
+		uint8_t reserved[3];
+	} __packed req;
+	uint32_t center_freq;
+
+	if (sc == NULL || c == NULL)
+		return (EINVAL);
+	center_freq = ieee80211_get_channel_center_freq1(c);
+	if (center_freq == 0)
+		center_freq = c->ic_freq;
+	bzero(&req, sizeof(req));
+	req.tag = htole16(1);
+	req.len = htole16(sizeof(req) - 4);
+	req.ch_band = IEEE80211_IS_CHAN_2GHZ(c) ? 1 : 2;
+	req.bw = IEEE80211_IS_CHAN_VHT80(c) ? 1 : 0;
+	req.control_ch = c->ic_ieee;
+	req.center_ch = ieee80211_mhz2ieee(center_freq,
+	    IEEE80211_IS_CHAN_2GHZ(c) ? IEEE80211_CHAN_2GHZ :
+	    IEEE80211_CHAN_5GHZ);
+	req.sco = req.control_ch < req.center_ch ? 1 :
+	    (req.control_ch > req.center_ch ? 3 : 0);
+	/* Keep errored frames available to net80211 during passive scanning. */
+	req.drop_err = 0;
+	return (mt7902_mcu_send_cmd(sc,
+	    MT7902_MCU_UNI_CMD(MT7902_MCU_UNI_SNIFFER), &req,
+	    sizeof(req), true));
+}
+
 /*
  * Configure the Connac2 receive filter before exposing the net80211 VAP.
  * This is the same SET_RX_FILTER command used by mt7921_configure_filter():
@@ -1067,6 +1139,7 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 		uint8_t pad[51];
 	} __packed req;
 
+	uint32_t rfcr;
 	int error, bitmap_error, debug;
 	bool scanning;
 
@@ -1114,6 +1187,17 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 	bitmap_error = mt7902_mcu_send_cmd(sc,
 	    MT7902_MCU_CE_CMD(MT7902_MCU_CE_SET_RX_FILTER),
 	    &req, sizeof(req), false);
+	/* Let firmware apply its update before enforcing the RMAC bit. */
+	DELAY(1000);
+	/*
+	 * The asynchronous firmware filter update may leave the RMAC
+	 * DROP_OTHER_BEACON bit set on this device.  Keep the MCU update for
+	 * firmware state and clear the hardware bit too.
+	 */
+	rfcr = mt7902_read(sc, MT7902_REG_WF_RFCR(0));
+	mt7902_write(sc, MT7902_REG_WF_RFCR(0),
+	    rfcr & ~MT7902_RFCR_DROP_OTHER_BEACON);
+	rfcr = mt7902_read(sc, MT7902_REG_WF_RFCR(0));
 	mtx_lock(&sc->mtx);
 	sc->rx_filter_bitmap_count++;
 	sc->rx_filter_bitmap = MT7902_RFCR_DROP_OTHER_BEACON;
@@ -1122,10 +1206,13 @@ mt7902_mcu_set_rxfilter(struct mt7902_softc *sc, uint32_t flags)
 	mtx_unlock(&sc->mtx);
 	if (debug > 0 || scanning)
 		device_printf(sc->dev,
-		    "RX filter bitmap: cmd=%s mode=%u bit_op=clear(%u) bit_map=%08x error=%d (host TX submission status only; upstream does not request an MCU response)\n",
+	    "RX filter bitmap: cmd=%s mode=%u bit_op=clear(%u) bit_map=%08x error=%d RFCR=%08x drop_other_beacon=%u\n",
 		    bitmap_error == 0 ? "submitted" : "failed", req.mode,
-		    req.bit_op, le32toh(req.bit_map), bitmap_error);
-	DELAY(1000);
+		    req.bit_op, le32toh(req.bit_map), bitmap_error, rfcr,
+		    (unsigned int)((rfcr & MT7902_RFCR_DROP_OTHER_BEACON) != 0));
+	if ((rfcr & MT7902_RFCR_DROP_OTHER_BEACON) != 0)
+		device_printf(sc->dev,
+		    "could not clear RFCR DROP_OTHER_BEACON: %08x\n", rfcr);
 	if (debug > 0 || scanning)
 		mt7902_rxfilter_readback(sc, "after-beacon-bitmap-clear");
 

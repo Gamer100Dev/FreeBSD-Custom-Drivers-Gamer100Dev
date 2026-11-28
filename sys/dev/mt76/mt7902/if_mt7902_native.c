@@ -238,13 +238,13 @@ mt7902_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
-	/* Keep scan-time RX trace enabled until the first hardware diagnosis. */
-	sc->rx_debug = 2;
+	/* Keep packet-level logging disabled on the normal traffic path. */
+	sc->rx_debug = 0;
 	mtx_init(&sc->mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK,
 	    MTX_DEF);
 	mtx_init(&sc->reg_mtx, "mt7902 register remap", NULL, MTX_DEF);
-	mtx_init(&sc->mcu_mtx, "mt7902 MCU command serialization", NULL,
-	    MTX_DEF);
+	sx_init(&sc->mcu_sx, "mt7902 MCU command serialization");
+	sc->mcu_sx_initialized = true;
 	cv_init(&sc->mcu_cv, "mt7902 MCU response");
 
 	/* Enable memory decoding and bus mastering before mapping the BAR. */
@@ -269,11 +269,7 @@ mt7902_attach(device_t dev)
 		error = ENXIO;
 		goto fail;
 	}
-	/*
-	 * A private fast-enqueue queue gives this device a dedicated worker.
-	 * IRQ work is highest priority, RX follows, and bounded TX batches run
-	 * last so sustained transmit load cannot starve receive processing.
-	 */
+	/* Keep IRQ, RX, and MCU event work on a dedicated non-global worker. */
 	sc->tq = taskqueue_create_fast("mt7902_native", M_WAITOK,
 	    taskqueue_thread_enqueue, &sc->tq);
 	error = taskqueue_start_threads(&sc->tq, 1, PI_NET, "%s taskq",
@@ -288,6 +284,16 @@ mt7902_attach(device_t dev)
 	TASK_INIT(&sc->event_task, 1, mt7902_event_task, sc);
 	TASK_INIT(&sc->rx_task, 2, mt7902_rx_task, sc);
 	TASK_INIT(&sc->tx_task, 3, mt7902_tx_task, sc);
+	sc->tx_tq = taskqueue_create_fast("mt7902_native_tx", M_WAITOK,
+	    taskqueue_thread_enqueue, &sc->tx_tq);
+	error = taskqueue_start_threads(&sc->tx_tq, 1, PI_NET,
+	    "%s txq", device_get_nameunit(dev));
+	if (error != 0) {
+		device_printf(dev, "could not start TX taskqueue: %d\n", error);
+		taskqueue_free(sc->tx_tq);
+		sc->tx_tq = NULL;
+		goto fail;
+	}
 	if (rman_get_size(sc->mem) < MT7902_REG_BAR_MIN) {
 		device_printf(dev, "BAR0 is too small (%ju bytes)\n",
 		    (uintmax_t)rman_get_size(sc->mem));
@@ -359,6 +365,11 @@ mt7902_detach(device_t dev)
 		taskqueue_free(sc->tq);
 		sc->tq = NULL;
 	}
+	if (sc->tx_tq != NULL) {
+		taskqueue_drain_all(sc->tx_tq);
+		taskqueue_free(sc->tx_tq);
+		sc->tx_tq = NULL;
+	}
 	if (sc->net80211_attached)
 		mt7902_net80211_detach(sc);
 	if (sc->irq_cookie != NULL)
@@ -373,8 +384,10 @@ mt7902_detach(device_t dev)
 		cv_destroy(&sc->mcu_cv);
 	if (mtx_initialized(&sc->mtx))
 		mtx_destroy(&sc->mtx);
-	if (mtx_initialized(&sc->mcu_mtx))
-		mtx_destroy(&sc->mcu_mtx);
+	if (sc->mcu_sx_initialized) {
+		sx_destroy(&sc->mcu_sx);
+		sc->mcu_sx_initialized = false;
+	}
 	if (mtx_initialized(&sc->reg_mtx))
 		mtx_destroy(&sc->reg_mtx);
 	sc->attached = false;

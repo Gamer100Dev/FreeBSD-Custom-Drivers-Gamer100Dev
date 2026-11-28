@@ -396,8 +396,8 @@ mt7902_vap_fw_update(struct mt7902_softc *sc, struct ieee80211vap *vap,
 	bss_req.basic.hw_bss_idx = 0;
 	bss_req.basic.band_idx = 0;
 	bss_req.basic.conn_type = htole32(conn_type);
-	/* Match mt76_connac_mcu_uni_add_dev(): BSS conn_state starts CONNECT. */
-	bss_req.basic.conn_state = 1;
+	/* Register the OMAC/BSS active, but disconnected until STA association. */
+	bss_req.basic.conn_state = 0;
 	bss_req.basic.wmm_idx = 0;
 	bss_req.basic.bmc_tx_wlan_idx = htole16(MT7902_BSS_WCID);
 	bss_req.basic.sta_idx = htole16(MT7902_BSS_WCID);
@@ -678,7 +678,8 @@ int
 mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 {
 	struct mt7902_chan_info req;
-	int error;
+	bool scanning, linked;
+	int error, sniffer_error;
 
 	if (sc == NULL || c == NULL || !sc->hw_started)
 		return (ENETDOWN);
@@ -692,8 +693,20 @@ mt7902_set_channel(struct mt7902_softc *sc, struct ieee80211_channel *c)
 	/* Match mt7921_mcu_set_chan_info(): wait for the firmware's channel
 	 * switch acknowledgement before the software scanner advances.
 	 */
-	return (mt7902_mcu_send_cmd(sc, MT7902_MCU_EXT_CMD(0x08), &req,
-	    sizeof(req), true));
+	error = mt7902_mcu_send_cmd(sc, MT7902_MCU_EXT_CMD(0x08), &req,
+	    sizeof(req), true);
+	mtx_lock(&sc->mtx);
+	scanning = sc->scan_active;
+	linked = sc->station_linked != 0;
+	mtx_unlock(&sc->mtx);
+	if (error == 0 && scanning && !linked) {
+		sniffer_error = mt7902_mcu_config_sniffer(sc, c);
+		if (sniffer_error != 0)
+			device_printf(sc->dev,
+			    "scan sniffer channel config failed ch=%u: %d\n",
+			    c->ic_ieee, sniffer_error);
+	}
+	return (error);
 }
 
 /*
@@ -770,6 +783,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 	struct mt7902_softc *sc = ic->ic_softc;
 	bool active, linked;
 	int i, passive, active_channels, debug, filter_error, abort_error;
+	int sniffer_error;
 	uint32_t scan_flags, filter_flags;
 
 	active = ic->ic_scan != NULL &&
@@ -818,7 +832,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 	sc->tx_raw_enqueue_errors = 0;
 	sc->tx_submit_count = 0;
 	sc->tx_dma_done_count = 0;
-	sc->tx_dma_timeouts = 0;
+	sc->tx_dma_busy = 0;
 	sc->rx_event_short_count = 0;
 	sc->rx_event_unknown_count = 0;
 	sc->rx_last_len = 0;
@@ -869,12 +883,7 @@ mt7902_scan_start(struct ieee80211com *ic)
 		    MT7902_RX_FILTER_FCSFAIL;
 	mtx_unlock(&sc->mtx);
 	if (sc->hw_started && !linked) {
-		/*
-		 * An unassociated STA must leave any stale firmware BSS/beacon
-		 * filtering state before it can receive other-BSS beacons.
-		 * SET_BSS_ABORT is the host-side equivalent of the upstream
-		 * set_bss_pm(false) call used when beacon filtering is disabled.
-		 */
+		/* Clear stale firmware BSS state before an unassociated scan. */
 		abort_error = mt7902_mcu_abort_bss(sc);
 		device_printf(sc->dev,
 		    "scan-start SET_BSS_ABORT %s (host TX submission status=%d)\n",
@@ -886,6 +895,12 @@ mt7902_scan_start(struct ieee80211com *ic)
 			device_printf(sc->dev,
 			    "scan-start RX filter refresh failed: %d\n",
 			    filter_error);
+	}
+	if (sc->hw_started && !linked) {
+		sniffer_error = mt7902_mcu_set_sniffer(sc, true);
+		device_printf(sc->dev,
+		    "scan-start firmware sniffer enable %s: %d\n",
+		    sniffer_error == 0 ? "complete" : "failed", sniffer_error);
 	}
 	/* Drain pre-scan hardware counters before the first channel dwell. */
 	mt7902_rx_mib_sample(sc, "scan-baseline", 0, 0);
@@ -905,7 +920,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint64_t txs_failures, txs_ack_timeouts, txs_rts_timeouts;
 	uint64_t txs_queue_timeouts, txs_retries, txs_bytes;
 	uint64_t tx_free_records, tx_free_failures, tx_free_retries;
-	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_timeouts;
+	uint64_t tx_free_unknown, tx_free_pairs, tx_free_bad, tx_dma_busy;
 	uint64_t tx_pending_count, irq_count;
 	uint64_t tx_raw, tx_raw_reject, tx_raw_enqueue_errors;
 	uint64_t tx_submit, tx_dma_done;
@@ -927,9 +942,11 @@ mt7902_scan_end(struct ieee80211com *ic)
 	uint8_t rx_filter_bit_op, chan_last_request, chan_last_band;
 	int rx_filter_error, rx_filter_bitmap_error, rx_debug, chan_last_result;
 	bool chan_last_scan;
+	bool linked;
 	int rx_head, rx_tail, rx_queued, i;
 
 	mtx_lock(&sc->mtx);
+	linked = sc->station_linked != 0;
 	sc->scan_active = false;
 	rx = sc->rx_data_count;
 	rx_desc = sc->rx_data_desc_count;
@@ -960,7 +977,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	tx_free_unknown = sc->tx_free_unknown;
 	tx_free_pairs = sc->tx_free_pairs;
 	tx_free_bad = sc->tx_free_bad;
-	tx_dma_timeouts = sc->tx_dma_timeouts;
+	tx_dma_busy = sc->tx_dma_busy;
 	tx_pending_count = sc->tx_pending_count;
 	tx_raw = sc->tx_raw_count;
 	tx_raw_reject = sc->tx_raw_reject_count;
@@ -1017,6 +1034,14 @@ mt7902_scan_end(struct ieee80211com *ic)
 	mib_channel = sc->current_channel;
 	mib_band = sc->current_band;
 	mtx_unlock(&sc->mtx);
+	if (sc->hw_started && !linked) {
+		int sniffer_error;
+
+		sniffer_error = mt7902_mcu_set_sniffer(sc, false);
+		device_printf(sc->dev,
+		    "scan-end firmware sniffer disable %s: %d\n",
+		    sniffer_error == 0 ? "complete" : "failed", sniffer_error);
+	}
 	mt7902_rx_mib_sample(sc, "scan-end", mib_channel, mib_band);
 	data_hw_idx = mt7902_read(sc, sc->rx_data.reg_base + 0x0c);
 	event_hw_idx = mt7902_read(sc, sc->rx_event.reg_base + 0x0c);
@@ -1025,7 +1050,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	event_tail_ctl = sc->rx_event.desc != NULL ?
 	    le32toh(sc->rx_event.desc[sc->rx_event.tail].control) : 0;
 	device_printf(sc->dev,
-	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_timeout=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju bytes=%ju last_txs=%u/%u/%u/%u/%u/%u last_frame=%u:%u/%u/%u fc=%04x hdr=%u rxd4=%08x addr=%u payload=%u tx_path=%ju/%ju/%ju/%ju/%ju\n",
+	    "net80211 scan ended: rx=%ju data_desc=%ju fallback_polls=%ju dropped=%ju mgmt=%ju beacon/probe=%ju monitor_errors=%ju events=%ju txs=%ju/%ju tx_free=%ju records=%ju fail=%ju retries=%ju pending=%ju unknown=%ju pairs=%ju bad=%ju dma_busy=%ju short=%ju unknown_rx=%ju irq=%ju last_irq=%08x ring2=%d/%d/%d hwidx=%x/%x tailctl=%08x/%08x last_evt=%u/%u/%08x last_rx=%u:%08x/%08x/%08x/%08x txs_detail=%ju/%ju/%ju/%ju/%ju bytes=%ju last_txs=%u/%u/%u/%u/%u/%u last_frame=%u:%u/%u/%u fc=%04x hdr=%u rxd4=%08x addr=%u payload=%u tx_path=%ju/%ju/%ju/%ju/%ju\n",
 	    (uintmax_t)rx, (uintmax_t)rx_desc, (uintmax_t)rx_fallback,
 	    (uintmax_t)dropped, (uintmax_t)mgmt, (uintmax_t)beacon,
 	    (uintmax_t)monitor_errors, (uintmax_t)events,
@@ -1033,7 +1058,7 @@ mt7902_scan_end(struct ieee80211com *ic)
 	    (uintmax_t)tx_free_records, (uintmax_t)tx_free_failures,
 	    (uintmax_t)tx_free_retries, (uintmax_t)tx_pending_count,
 	    (uintmax_t)tx_free_unknown, (uintmax_t)tx_free_pairs,
-	    (uintmax_t)tx_free_bad, (uintmax_t)tx_dma_timeouts,
+	    (uintmax_t)tx_free_bad, (uintmax_t)tx_dma_busy,
 	    (uintmax_t)short_events, (uintmax_t)unknown,
 	    (uintmax_t)irq_count, last_irq, rx_head, rx_tail, rx_queued,
 	    data_hw_idx, event_hw_idx, data_tail_ctl, event_tail_ctl,
@@ -1145,12 +1170,13 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	uint8_t peer[IEEE80211_ADDR_LEN], rate, phy_type, peer_channel;
 	uint16_t aid, supp_rates, basic_rates, legacy, beacon_interval;
 	uint8_t dtim_period;
-	bool band2, rate_basic, qos, peer_ht, peer_vht;
+	bool band2, rate_basic, qos, peer_ht, peer_vht, was_linked;
 	struct ieee80211_channel *chan;
 	int i, j, error;
 	uint16_t vht_rx_map, vht_tx_map;
 	uint8_t peer_rx_nss, mcs;
 
+	was_linked = mvp->linked;
 	peer_channel = 0;
 	if (ni != NULL) {
 		IEEE80211_ADDR_COPY(peer, ni->ni_bssid);
@@ -1210,7 +1236,11 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 	bss.basic.conn_type = htole32(MT7902_CONN_INFRA_STA);
 	bss.basic.conn_state = 0; /* BSS stays DISCONNECT; SET_BSS_CONNECTED carries link state. */
 	bss.basic.wmm_idx = 0;
-	IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
+	/* An unassociated STA has no BSSID; using our own MAC here makes
+	 * firmware treat the interface as connected to a fictitious BSS.
+	 */
+	if (linked)
+		IEEE80211_ADDR_COPY(bss.basic.bssid, peer);
 	phy_type = band2 ?
 	    (MT7902_PHY_TYPE_HR_DSSS | MT7902_PHY_TYPE_ERP) :
 	    MT7902_PHY_TYPE_OFDM;
@@ -1255,7 +1285,8 @@ mt7902_link_update(struct ieee80211vap *vap, struct ieee80211_node *ni,
 		mtx_unlock(&sc->mtx);
 		if (old_ni != NULL)
 			ieee80211_free_node(old_ni);
-		error = mt7902_sta_disconnect(sc, peer, aid, qos);
+		/* Initial VAP registration has no peer record to remove. */
+		error = was_linked ? mt7902_sta_disconnect(sc, peer, aid, qos) : 0;
 		bzero(mvp->peer_bssid, sizeof(mvp->peer_bssid));
 		mvp->peer_aid = 0;
 		mvp->peer_beacon_interval = 0;
@@ -1570,6 +1601,9 @@ mt7902_vap_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate,
 
 	if (mvp->newstate == NULL)
 		return (EINVAL);
+	/* Monitor VAPs have no station BSS node or association state to program. */
+	if (vap->iv_opmode != IEEE80211_M_STA)
+		return (mvp->newstate(vap, nstate, arg));
 	linked = nstate == IEEE80211_S_RUN;
 	if (linked != mvp->linked) {
 		if (vap->iv_bss != NULL)
@@ -1850,7 +1884,7 @@ mt7902_tx_enqueue(struct mt7902_softc *sc, struct mbuf *m)
 		error = mbufq_enqueue(&sc->txq, m);
 	mtx_unlock(&sc->mtx);
 	if (error == 0)
-		taskqueue_enqueue(sc->tq, &sc->tx_task);
+		taskqueue_enqueue(sc->tx_tq, &sc->tx_task);
 	return (error);
 }
 
@@ -2010,13 +2044,15 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	struct mt7902_dma_buffer *buf;
 	struct mt7902_txp *txp;
 	struct ieee80211_frame wh;
+	struct ieee80211_frame_min whmin;
+	struct ieee80211_key *key;
 	struct ieee80211_bpf_params tx_params;
 	uint8_t tx_dump[64];
 	uint32_t *txwi, fc, val, control, rate;
 	size_t len, total, hdrlen, qos_offset;
 	uint16_t tx_basic_rate, qos_control, seq_control, msdu_id;
 	uint8_t current_band, current_channel, tid, frag_idx;
-	int idx, retry, error, queue, i, debug;
+	int idx, queue, i, debug;
 	bool fixed_rate, station_linked, more_frag, has_tx_params, noack;
 	bool scanning;
 	static const uint8_t raw_rates[] = {
@@ -2101,20 +2137,49 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	mtx_unlock(&sc->mtx);
 
 	/*
-	 * A previous transmission can outlive its software timeout.  Wait in
-	 * process context for this descriptor to return to the host before
-	 * touching its DMA buffer; never hold the device mutex while polling.
+	 * Reclaim only descriptors the device has already returned.  TX is
+	 * asynchronous: waiting here would serialize submissions and hold up the
+	 * queue worker.  TX-done interrupts and TX_FREE events restart the worker
+	 * when a ring slot or firmware token becomes available.
 	 */
-	for (retry = 0; retry < 10000; retry++) {
+	bus_dmamap_sync(ring->desc_tag, ring->desc_map,
+	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+	control = le32toh(desc->control);
+	if ((control & MT7902_DMA_DESC_DONE) == 0) {
+		/* WFDMA still owns this descriptor; return it to device access. */
 		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
-		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-		control = le32toh(desc->control);
-		if ((control & MT7902_DMA_DESC_DONE) != 0)
-			break;
-		DELAY(10);
-	}
-	if (retry == 10000)
+		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+		mtx_lock(&sc->mtx);
+		sc->tx_dma_busy++;
+		mtx_unlock(&sc->mtx);
 		return (EBUSY);
+	}
+
+	/*
+	 * Check for a reusable WFDMA slot before changing the packet. In
+	 * particular, crypto_encap() expands a protected frame in place. If it
+	 * ran before the descriptor-busy check, returning EBUSY would put that
+	 * already-encrypted mbuf back on txq; the next attempt would encapsulate
+	 * it again and corrupt its CCMP mbuf layout under load.
+	 */
+	if (ni != NULL && m->m_pkthdr.len >= sizeof(whmin)) {
+		m_copydata(m, 0, sizeof(whmin), (caddr_t)&whmin);
+		if ((whmin.i_fc[1] & IEEE80211_FC1_PROTECTED) != 0) {
+			key = ieee80211_crypto_encap(ni, m);
+			if (key == NULL)
+				return (ENOBUFS);
+			if ((key->wk_flags & IEEE80211_KEY_SWCRYPT) == 0) {
+				device_printf(sc->dev,
+				    "Protected TX frame selected a non-software key; refusing unencrypted transmit\\n");
+				return (EOPNOTSUPP);
+			}
+		}
+	}
+	len = m->m_pkthdr.len;
+	total = MT7902_TXD_LEN + len;
+	if (len < sizeof(struct ieee80211_frame_cts) ||
+	    total > buf->len || len > MT7902_TXP_LEN_MASK)
+		return (EMSGSIZE);
 
 	mtx_lock(&sc->mtx);
 	if (ring->head != idx) {
@@ -2125,6 +2190,8 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTWRITE);
 		buf->dma_pending = false;
 	}
+	ring->tail = (idx + 1) % ring->ndesc;
+	sc->tx_dma_done_count++;
 	memset(buf->vaddr, 0, MT7902_TXD_LEN);
 	m_copydata(m, 0, len, (caddr_t)buf->vaddr + MT7902_TXD_LEN);
 	txwi = buf->vaddr;
@@ -2193,6 +2260,15 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	}
 	txwi[7] = htole32((((fc & 0x0c) >> 2) << 20) |
 	    (((fc & 0xf0) >> 4) << 16));
+	if (debug >= 2 && station_linked && (fc & 0x000c) == 0x0008)
+		device_printf(sc->dev,
+		    "TX STA DATA fc=%04x len=%ju queue=%d wcid=%u flags=%08x addr1=%6D addr2=%6D addr3=%6D txwi=%08x/%08x/%08x/%08x/%08x/%08x/%08x/%08x\n",
+		    (unsigned int)fc, (uintmax_t)len, queue,
+		    MT7902_PEER_WCID, (unsigned int)m->m_flags,
+		    wh.i_addr1, ":", wh.i_addr2, ":", wh.i_addr3, ":",
+		    le32toh(txwi[0]), le32toh(txwi[1]), le32toh(txwi[2]),
+		    le32toh(txwi[3]), le32toh(txwi[4]), le32toh(txwi[5]),
+		    le32toh(txwi[6]), le32toh(txwi[7]));
 
 	/*
 	 * A successful TX_FREE only proves that firmware released the token;
@@ -2253,37 +2329,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf *m,
 	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	mtx_unlock(&sc->mtx);
 
-	for (retry = 0; retry < 10000; retry++) {
-		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
-		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-		if (le32toh(desc->control) & MT7902_DMA_DESC_DONE)
-			break;
-		DELAY(10);
-	}
-	error = retry == 10000 ? ETIMEDOUT : 0;
-	if (error == 0) {
-		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTWRITE);
-		buf->dma_pending = false;
-		mtx_lock(&sc->mtx);
-		desc->control = htole32(MT7902_DMA_DESC_DONE);
-		bus_dmamap_sync(ring->desc_tag, ring->desc_map,
-		    BUS_DMASYNC_PREWRITE | BUS_DMASYNC_PREREAD);
-		ring->tail = (idx + 1) % ring->ndesc;
-		sc->tx_dma_done_count++;
-		mtx_unlock(&sc->mtx);
-	} else {
-		/*
-		 * DMA ownership is retained and the packet remains pending until
-		 * firmware reports TX_FREE. Do not complete the mbuf on a host-side
-		 * poll timeout; the copied descriptor may still be in flight.
-		 */
-		mtx_lock(&sc->mtx);
-		sc->tx_dma_timeouts++;
-		mtx_unlock(&sc->mtx);
-		device_printf(sc->dev,
-		    "TX queue %d descriptor %d DMA wait timed out; awaiting TX_FREE\n",
-		    queue, idx);
-	}
+	/* The DMA buffer remains device-owned until its descriptor-done event. */
 	return (0);
 }
 
@@ -2686,15 +2732,16 @@ mt7902_tx_task(void *arg, int pending __unused)
 	struct ieee80211_node *ni;
 	struct mbuf *m;
 	int error, budget;
-	bool more;
+	bool blocked, more;
 
-	/*
-	 * TX shares the system taskqueue with IRQ/RX/MCU work. Bound each
-	 * invocation so a continuously busy transmit queue cannot monopolize
-	 * the worker and delay receive processing or firmware responses.
-	 */
+	/* Keep each invocation bounded while feeding the WFDMA rings asynchronously. */
+	blocked = false;
 	for (budget = 0; budget < 64; budget++) {
 		mtx_lock(&sc->mtx);
+		if (sc->dying || sc->irq_quiescing || !sc->hw_started) {
+			mtx_unlock(&sc->mtx);
+			return;
+		}
 		m = mbufq_dequeue(&sc->txq);
 		mtx_unlock(&sc->mtx);
 		if (m == NULL)
@@ -2702,6 +2749,15 @@ mt7902_tx_task(void *arg, int pending __unused)
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
 		error = mt7902_tx_one(sc, m, ni);
+		if (error == EBUSY) {
+			/* Preserve the packet; DMA/TX_FREE events will retry the queue. */
+			m->m_pkthdr.rcvif = (void *)ni;
+			mtx_lock(&sc->mtx);
+			mbufq_enqueue(&sc->txq, m);
+			mtx_unlock(&sc->mtx);
+			blocked = true;
+			continue;
+		}
 		if (error != 0) {
 			if (ni != NULL)
 				ieee80211_tx_complete(ni, m, 1);
@@ -2712,8 +2768,9 @@ mt7902_tx_task(void *arg, int pending __unused)
 
 	mtx_lock(&sc->mtx);
 	more = !mbufq_empty(&sc->txq);
+	more = more && !sc->dying && !sc->irq_quiescing && sc->hw_started;
 	mtx_unlock(&sc->mtx);
-	if (more)
-		taskqueue_enqueue(sc->tq, &sc->tx_task);
+	if (more && !blocked)
+		taskqueue_enqueue(sc->tx_tq, &sc->tx_task);
 }
 
