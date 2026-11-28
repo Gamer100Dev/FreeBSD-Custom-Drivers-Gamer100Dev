@@ -2090,7 +2090,7 @@ mt7902_tx_prepare_crypto_header(struct mbuf **mp, int hdrlen)
 
 static int
 mt7902_tx_one(struct mt7902_softc *sc, struct mbuf **mp,
-    struct ieee80211_node *ni)
+    struct ieee80211_node *ni, uint32_t *kick_mask)
 {
 	struct mt7902_ring *ring;
 	struct mt7902_dma_desc *desc;
@@ -2391,7 +2391,7 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf **mp,
 	sc->tx_pending_count++;
 	sc->tx_submit_count++;
 	ring->head = (idx + 1) % ring->ndesc;
-	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
+	*kick_mask |= 1U << queue;
 	mtx_unlock(&sc->mtx);
 
 	/* The DMA buffer remains device-owned until its descriptor-done event. */
@@ -2406,6 +2406,34 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf **mp,
  * processing. Submission errors are still propagated to the net80211
  * callback, but firmware acknowledgement is asynchronous.
  */
+/*
+ * Publish all data-queue producer indices after a TX worker batch. Descriptor
+ * contents and token ownership are committed by mt7902_tx_one() before the
+ * corresponding queue bit is set. One MMIO write per active AC queue is
+ * sufficient for the whole batch and avoids a PCIe register transaction for
+ * every packet. Keep the state check and head reads under sc->mtx so teardown
+ * cannot race a late queue kick.
+ */
+static void
+mt7902_tx_kick_queues(struct mt7902_softc *sc, uint32_t kick_mask)
+{
+	int queue;
+
+	if (kick_mask == 0)
+		return;
+
+	mtx_lock(&sc->mtx);
+	if (!sc->dying && !sc->irq_quiescing && sc->hw_started) {
+		for (queue = 0; queue < MT7902_TX_DATA_QUEUES; queue++) {
+			if ((kick_mask & (1U << queue)) == 0)
+				continue;
+			mt7902_write(sc, sc->tx_data[queue].reg_base + 0x8,
+			    sc->tx_data[queue].head);
+		}
+	}
+	mtx_unlock(&sc->mtx);
+}
+
 static int
 mt7902_wtbl_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
     uint8_t tid, uint16_t ssn, uint16_t winsize, bool tx, bool enable)
@@ -2796,11 +2824,13 @@ mt7902_tx_task(void *arg, int pending __unused)
 	struct mt7902_softc *sc = arg;
 	struct ieee80211_node *ni;
 	struct mbuf *m;
+	uint32_t kick_mask;
 	int error, budget;
 	bool blocked, more;
 
 	/* Keep each invocation bounded while feeding the WFDMA rings asynchronously. */
 	blocked = false;
+	kick_mask = 0;
 	for (budget = 0; budget < 64; budget++) {
 		mtx_lock(&sc->mtx);
 		if (sc->dying || sc->irq_quiescing || !sc->hw_started) {
@@ -2813,7 +2843,7 @@ mt7902_tx_task(void *arg, int pending __unused)
 			break;
 		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 		m->m_pkthdr.rcvif = NULL;
-		error = mt7902_tx_one(sc, &m, ni);
+		error = mt7902_tx_one(sc, &m, ni, &kick_mask);
 		if (error == EBUSY) {
 			/* Preserve the packet; DMA/TX_FREE events will retry the queue. */
 			m->m_pkthdr.rcvif = (void *)ni;
@@ -2830,6 +2860,9 @@ mt7902_tx_task(void *arg, int pending __unused)
 				m_freem(m);
 		}
 	}
+
+	/* Make all successfully prepared descriptors visible to WFDMA. */
+	mt7902_tx_kick_queues(sc, kick_mask);
 
 	mtx_lock(&sc->mtx);
 	more = !mbufq_empty(&sc->txq);

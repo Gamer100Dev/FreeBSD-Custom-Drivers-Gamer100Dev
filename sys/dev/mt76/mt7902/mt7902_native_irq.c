@@ -68,7 +68,7 @@
  * remains associated with the consumed descriptor until the ring wraps.
  */
 static int
-mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
+mt7902_rx_rearm(struct mt7902_ring *ring, int idx)
 {
 	struct mt7902_dma_buffer tmp, *buf;
 	struct mt7902_dma_desc *desc;
@@ -87,10 +87,9 @@ mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
 	buf = &ring->buf[refill_idx];
 	desc = &ring->desc[refill_idx];
 
-	bus_dmamap_sync(ring->buf_tag, buf->map,
-	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-	bus_dmamap_sync(ring->buf_tag, buf->map,
-	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
+	/* RX buffers are device-written only; do not sync the TX direction. */
+	bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
+	bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_PREREAD);
 	desc->buf0 = htole32((uint32_t)buf->paddr);
 	desc->buf1 = 0;
 	desc->info = 0;
@@ -102,7 +101,7 @@ mt7902_rx_rearm(struct mt7902_softc *sc, struct mt7902_ring *ring, int idx)
 	ring->tail = (idx + 1) % ring->ndesc;
 	ring->head = (refill_idx + 1) % ring->ndesc;
 	ring->queued++;
-	mt7902_write(sc, ring->reg_base + 0x8, ring->head);
+	/* The caller batches the hardware producer-index update per poll pass. */
 	return (0);
 }
 
@@ -673,9 +672,10 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 	uint32_t control;
 	size_t dma_len;
 	int idx, count, error, debug;
-	bool scanning;
+	bool scanning, rearmed;
 
 	ring = &sc->rx_data;
+	rearmed = false;
 	if (ring->desc == NULL)
 		return;
 	for (count = 0; count < MIN(ring->ndesc, MT7902_RX_BATCH); count++) {
@@ -694,12 +694,10 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 		bus_dmamap_sync(ring->buf_tag, buf->map, BUS_DMASYNC_POSTREAD);
 		mtx_lock(&sc->mtx);
 		sc->rx_data_desc_count++;
-		mtx_unlock(&sc->mtx);
-		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
-		mtx_lock(&sc->mtx);
 		debug = sc->rx_debug;
 		scanning = sc->scan_active;
 		mtx_unlock(&sc->mtx);
+		dma_len = (control >> MT7902_RX_LEN_SHIFT) & MT7902_RX_LEN_MASK;
 		if (debug >= 2 && scanning)
 			device_printf(sc->dev,
 			    "RX DATA DESC idx=%d control=%08x len=%ju buf_len=%ju head=%d tail=%d hwidx=%08x\n",
@@ -711,13 +709,16 @@ mt7902_rx_data_poll(struct mt7902_softc *sc)
 			    0, 0, 0, 0, 0, 0, 0);
 		else
 			mt7902_rx_data_frame(sc, buf->vaddr, dma_len);
-		error = mt7902_rx_rearm(sc, ring, idx);
+		error = mt7902_rx_rearm(ring, idx);
 		if (error != 0) {
 			device_printf(sc->dev,
 			    "RX data ring cursor collision at descriptor %d\n", idx);
 			break;
 		}
+		rearmed = true;
 	}
+	if (rearmed)
+		mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	if (count == MT7902_RX_BATCH)
 		taskqueue_enqueue(sc->tq, &sc->rx_task);
 }
@@ -958,8 +959,10 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 	uint8_t seq, eid, pkt_type, pkt_flag;
 	bool log_short, log_unknown, scanning;
 	int debug;
+	bool rearmed;
 
 	ring = &sc->rx_event;
+	rearmed = false;
 	if (ring->desc == NULL)
 		return;
 	for (count = 0; count < MIN(ring->ndesc, MT7902_RX_BATCH); count++) {
@@ -1139,13 +1142,16 @@ mt7902_rx_event_poll(struct mt7902_softc *sc)
 		}
 
 rearm:
-		error = mt7902_rx_rearm(sc, ring, idx);
+		error = mt7902_rx_rearm(ring, idx);
 		if (error != 0) {
 			device_printf(sc->dev,
 			    "RX event ring cursor collision at descriptor %d\n", idx);
 			break;
 		}
+		rearmed = true;
 	}
+	if (rearmed)
+		mt7902_write(sc, ring->reg_base + 0x8, ring->head);
 	if (count == MT7902_RX_BATCH)
 		taskqueue_enqueue(sc->tq, &sc->event_task);
 }
