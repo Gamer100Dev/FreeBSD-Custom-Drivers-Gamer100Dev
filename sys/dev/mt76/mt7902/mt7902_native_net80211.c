@@ -2399,14 +2399,6 @@ mt7902_tx_one(struct mt7902_softc *sc, struct mbuf **mp,
 }
 
 /*
- * Connac2 requires two ordered updates for a Block Ack session: the WTBL
- * BA entry first, then STA_REC_BA. These are submitted without waiting for
- * an MCU response because ADDBA/DELBA callbacks may execute on the driver's
- * only event/RX worker; a synchronous wait there would deadlock RX event
- * processing. Submission errors are still propagated to the net80211
- * callback, but firmware acknowledgement is asynchronous.
- */
-/*
  * Publish all data-queue producer indices after a TX worker batch. Descriptor
  * contents and token ownership are committed by mt7902_tx_one() before the
  * corresponding queue bit is set. One MMIO write per active AC queue is
@@ -2434,6 +2426,14 @@ mt7902_tx_kick_queues(struct mt7902_softc *sc, uint32_t kick_mask)
 	mtx_unlock(&sc->mtx);
 }
 
+/*
+ * Connac2 requires two ordered updates for a Block Ack session: the WTBL
+ * BA entry first, then STA_REC_BA. These are submitted without waiting for
+ * an MCU response because ADDBA/DELBA callbacks may execute on the driver's
+ * only event/RX worker; a synchronous wait there would deadlock RX event
+ * processing. Submission errors are still propagated to the net80211
+ * callback, but firmware acknowledgement is asynchronous.
+ */
 static int
 mt7902_wtbl_ba_update(struct mt7902_softc *sc, struct ieee80211_node *ni,
     uint8_t tid, uint16_t ssn, uint16_t winsize, bool tx, bool enable)

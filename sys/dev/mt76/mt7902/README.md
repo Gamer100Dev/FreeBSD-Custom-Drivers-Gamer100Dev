@@ -69,10 +69,14 @@ net80211 reference; Linux `mt76` is used as the hardware protocol reference.
   TX submissions are asynchronous: the driver reclaims a slot only after its
   DMA-done bit is visible, and TX-done/TX_FREE events resume a queue that hits
   backpressure. This avoids serially waiting for every descriptor before
-  submitting the next packet. TX has a separate taskqueue thread, while IRQ,
-  RX, and MCU event processing remain on their worker. Linux mt76 uses a TX
-  NAPI poller to reclaim completed descriptors independently of RX
-  (`mt792x_dma.c`); this follows the same scheduling model in FreeBSD.
+  submitting the next packet. TX producer-index doorbells are coalesced once
+  per worker batch, while each RX poll pass batches its ring producer-index
+  update after recycling completed buffers. RX buffers use receive-direction
+  DMA synchronization only. TX has a separate taskqueue thread, while IRQ,
+  RX, and MCU event processing remain on their worker. Linux mt76 batches RX
+  buffer refill in `dma.c` and uses a TX NAPI poller to reclaim completed
+  descriptors independently of RX (`mt792x_dma.c`); the FreeBSD implementation
+  follows the same queue-refill approach.
   TXS final-rate and retry/ACK feedback is fed into FreeBSD net80211 rate
   control for the associated peer; firmware RA still selects per-packet rates.
 * Native FreeBSD PCI `device_suspend`/`device_resume` methods. The driver
